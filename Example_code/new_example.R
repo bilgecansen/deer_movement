@@ -10,6 +10,7 @@ library(amt)
 library(terra)
 library(tidyverse)
 library(foreach)
+library(sf)
 
 
 # Load data --------------------------------------------------------------------
@@ -62,21 +63,15 @@ make_random_pt_extraction <- function(data, n_pts, env_list = env_rasters) {
         extract_covariates(water, where = "end")
 
       # Filter and select final random points
+      # Filter and select final random points
       res <- random_pts %>%
-        # operations requires a tibble
-        as_tibble() %>%
+        # Select points not on water
         filter(case_ == FALSE, Water == 0) %>%
-        group_by(step_id_) %>%
         # sample n_pts for each step
-        slice_sample(n = n_pts) %>%
+        slice_sample(n = 10, by = step_id_) %>%
         bind_rows(random_pts %>% filter(case_ == TRUE)) %>%
         ungroup() %>%
-        select(-Water) %>%
-        # go back to the previous structure
-        structure(
-          class = class(random_pts),
-          crs_ = attr(random_pts, "crs_")
-        )
+        select(-Water)
 
       # Warning if there are steps with less than random n_pts
       # + 1 is the original step
@@ -171,82 +166,13 @@ fit_mods <- function(ssf_data, formula) {
 #' @param data Dataframe with step variables
 #' @param var Column name containing step data
 #' @param formula Model formula
-Make_issf_Models <- function(data, var, formula) {
+fit_multi_mods <- function(data, var, formula) {
   data %>%
     mutate(
       iss = map(!!sym(var), ~ fit_mods(.x, formula)),
       tidy_res = map(iss, possibly(~ broom::tidy(.$model), otherwise = NA)),
       AIC = map(iss, possibly(~ AIC(.$model), otherwise = NA))
     )
-}
-
-#' Filter models with valid coefficients
-#' @param df Dataframe with model results
-#' @param season_test Season to filter
-#' @param sex_test Sex to filter
-#' @param mod_name Model name
-#' @param max_coeff Maximum acceptable coefficient
-#' @param max_se Maximum acceptable standard error
-Good_coefficients <- function(
-  df,
-  season_test,
-  sex_test,
-  mod_name,
-  max_coeff = 20,
-  max_se = 20
-) {
-  # Process coefficients
-  coeff_df <- df %>%
-    filter(
-      season == season_test,
-      sex == sex_test,
-      Formula == mod_name,
-      !is.na(Coeffs)
-    ) %>%
-    select(indicator, Coeffs) %>%
-    unnest(cols = Coeffs) %>%
-    filter(!is.na(estimate)) %>%
-    mutate(
-      Significant = as.numeric(p.value < 0.005),
-      Bad_mean = as.numeric(abs(estimate) > max_coeff | std.error > max_se)
-    )
-
-  # Identify good models
-  summary_stats <- coeff_df %>%
-    group_by(indicator) %>%
-    filter(sum(Bad_mean) == 0) %>%
-    ungroup() %>%
-    group_by(term) %>%
-    summarise(
-      Number_model = n(),
-      Coeff_mean = mean(estimate),
-      Coeff_sd = sd(estimate),
-      Se_mean = mean(std.error),
-      Se_sd = sd(std.error),
-      Num_significant = sum(Significant)
-    ) %>%
-    mutate(
-      Max_Coeff = Coeff_mean + 2 * Coeff_sd,
-      Min_Coeff = Coeff_mean - 2 * Coeff_sd,
-      Max_Se = Se_mean + 2 * Se_sd,
-      Min_Se = Se_mean - 2 * Se_sd
-    )
-
-  # Find valid models
-  valid_models <- coeff_df %>%
-    left_join(summary_stats, by = 'term') %>%
-    mutate(
-      Good_model = case_when(
-        estimate < Min_Coeff | estimate > Max_Coeff ~ 0,
-        std.error < Min_Se | std.error > Max_Se ~ 0,
-        TRUE ~ 1
-      )
-    ) %>%
-    filter(Good_model == 1) %>%
-    pull(indicator) %>%
-    unique()
-
-  return(list(coeff_df, valid_models))
 }
 
 #' Prepare environment for simulation day
@@ -262,83 +188,89 @@ prepare_env_for_day <- function(Env_crop, test_ndvi, date) {
   return(new_Env)
 }
 
-#' Simulate movement path
-#' @param GPS_test GPS data for validation
-#' @param Simulated_days Date sequence for simulation
-#' @param test_ndvi NDVI raster for test year
-#' @param nsims Number of simulations
-#' @param Env Environmental raster
+#' Simulate a single movement path
+#' @param deer_test Step data for testing sims
+#' @param env_test Environmental rasters for test data
 #' @param issf_train Fitted iSSF model
-#' @param y_test Test year
-#' @param y_train Training year
 #' @param formula_name Formula identifier
-Simulate_movement <- function(
-  GPS_test,
-  Simulated_days,
-  test_ndvi,
-  nsims,
-  Env,
+simulate_movement <- function(
+  deer_test,
+  env_test,
   issf_train,
-  y_test,
-  y_train,
   formula_name
 ) {
-  Env_crop <- crop(
-    Env,
-    st_buffer(st_as_sf(GPS_test, coords = c('x1_', 'y1_'), crs = 6610), 5000)
+  # Calcualte distance to home range center
+  median_pt <- terra::vect(
+    cbind(deer_test$x_median, deer_test$y_median),
+    crs = crs(env_test[[1]])
   )
 
-  Simulations <- map(1:nsims, function(sim) {
-    simu_i <- GPS_test[1, c('x1_', 'y1_', 't1_')]
-    names(simu_i) <- c('x_', 'y_', 't_')
+  env_test$HR <- NA
+  env_test$HR <- terra::distance(env_test$HR, median_pt) / 1000
 
-    for (d in seq.Date(
-      Simulated_days[1],
-      Simulated_days[length(Simulated_days)],
-      by = 1
-    )) {
-      new_Env <- prepare_env_for_day(Env_crop, test_ndvi, d)
+  env_crop <- crop(
+    env_test,
+    st_buffer(
+      st_as_sf(deer_test$stp[[1]], coords = c('x1_', 'y1_'), crs = 6610),
+      5000
+    )
+  )
 
-      start_pt_simu <- simu_i[nrow(simu_i), ] %>%
-        make_track(.x = x_, .y = y_, .t = t_) %>%
-        make_start() %>%
-        mutate(dt = hours(4))
+  sim_days <- unique(as.Date(deer_test$stp[[1]]$t1_, tz = 'CST6CDT'))
 
-      kernel <- redistribution_kernel(
-        issf_train,
-        map = new_Env,
-        fun = function(xy, map) extract_covariates(xy, map, where = "both"),
-        start = start_pt_simu,
-        landscape = "discrete",
-        as.rast = TRUE
-      )
+  sim_days_all <- seq.Date(
+    first(sim_days),
+    last(sim_days),
+    by = 1
+  )
 
-      Simu_result <- tryCatch(
-        list(simulate_path(kernel, n = 6), 'Work'),
-        warning = function(w) list(simulate_path(kernel, n = 6), 'Warning'),
-        error = function(err) list(NA, 'Error')
-      )
+  # Extract the first step to use as the initial step of the simulation
+  sim_i <- deer_test$stp[[1]][1, c('x1_', 'y1_', 't1_')]
+  names(sim_i) <- c('x_', 'y_', 't_')
 
-      if (!any(is.na(Simu_result[[1]]))) {
-        Simu_filtered <- Simu_result[[1]] %>%
-          filter(
-            as.Date(t_, tz = 'America/Chicago') ==
-              as.Date(d, origin = "1970-01-01")
-          )
-        simu_i <- bind_rows(simu_i, Simu_filtered[, -4])
-      }
+  # Simulate each day one by one. To do this, we simulate 6 steps at a time
+  # Because we are on a 4h time scale
+
+  for (d in sim_days_all) {
+    # Make the starting pts of the kernel and simulation
+    start_pt_sim <- sim_i[nrow(sim_i), ] |>
+      make_track(.x = x_, .y = y_, .t = t_) |>
+      make_start() |>
+      mutate(dt = hours(4))
+
+    # Make the redistribution kernel
+    kernel <- redistribution_kernel(
+      x = issf_train,
+      map = env_test$HR,
+      start = start_pt_sim,
+      landscape = "discrete",
+      as.rast = TRUE
+    )
+
+    # Simulate the mvt using the redistribution kernel and the starting pt
+    # if simulation fails, we have a NA
+
+    # CHANGE TIMING TO ENSURE WE SIMULATE ON THE RIGHT DATE AND TIME !!!
+    ## For each day, the 1st point should always be the begining of the day !
+    ### Ensure the sim dates are all on the same day, remove it if not
+
+    sim_result <- tryCatch(
+      list(simulate_path(kernel, n = 6), 'Work'),
+      warning = function(w) list(simulate_path(kernel, n = 6), 'Warning'),
+      error = function(err) list(NA, 'Error')
+    )
+
+    if (!any(is.na(sim_result[[1]]))) {
+      sim_filtered <- sim_result[[1]] %>%
+        filter(
+          as.Date(t_, tz = 'America/Chicago') ==
+            as.Date(d, origin = "1970-01-01")
+        )
+      sim_i <- bind_rows(sim_i, sim_filtered[, -4])
     }
+  }
 
-    simu_i[-1, ] %>%
-      mutate(
-        sim = sim,
-        y_train = y_train,
-        y_test = y_test,
-        Model = formula_name
-      )
-  })
-
-  return(list(Simulations, 'Complete'))
+  sim_i[-1, ]
 }
 
 # Main workflow ----------------------------------------------------------------
@@ -355,7 +287,7 @@ deer_with_random <- make_random_pt_extraction(
 ) %>%
   select(id, season, year, age.at.col1, sex, indicator, random.stp)
 
-# Join with original data
+## Join with original data
 deer_mvt_random <- deer_mvt %>%
   left_join(
     deer_with_random,
@@ -369,170 +301,269 @@ deer_mvt_var <-
 
 # Step 3: Fit models
 cat("Fitting models...\n")
-Formula_df <- data.frame(
-  formula = "case_ ~ log(sl_) + cos(ta_) + HR_end + Coarse_scale_end * ndvi_end",
-  name = 'Model_test'
+formula_df <- data.frame(
+  formula = c(
+    "case_ ~ log(sl_) + cos(ta_) + HR_end + strata(step_id_)",
+    "case_ ~ log(sl_) + cos(ta_) + HR_end + I(HR_end^2) + strata(step_id_)"
+  ),
+  name = c("null_model_lin", "null_model_quad")
 )
 
-Model_test <- Deer_mvt_random %>%
-  filter(sex == 'Female', season == 'fa') %>%
-  select(id, season, year, age.at.col1, sex, indicator, id_s, stp.var)
+## Fit models for each formula
+model_res <- foreach(i = 1:nrow(formula_df)) %do%
+  {
+    cat("Fitting formula", i, "\n")
 
-Model_res <- Model_test %>%
-  select(-stp.var) %>%
-  slice(rep(1:n(), times = nrow(Formula_df))) %>%
-  mutate(Formula = rep(Formula_df$name, each = nrow(Model_test)))
-
-# Fit models for each formula
-for (f in 1:nrow(Formula_df)) {
-  cat("Fitting formula", f, "\n")
-  formula_test <- paste0(Formula_df[f, ]$formula, ' + strata(step_id_)')
-
-  Model <- Make_issf_Models(
-    data = Model_test,
-    var = 'stp.var',
-    formula = formula_test
-  )
-
-  Model_res[Model_res$Formula == Formula_df[f, ]$name, ][['Model']] <- Model$iss
-  Model_res[Model_res$Formula == Formula_df[f, ]$name, ][[
-    'Coeffs'
-  ]] <- Model$tidy_res
-  Model_res[Model_res$Formula == Formula_df[f, ]$name, ][['AIC']] <- Model$AIC
-}
-
-# Step 4: Check coefficient quality
-cat("Checking coefficient quality...\n")
-GoodCoeff_results <- Good_coefficients(
-  df = Model_res,
-  sex_test = 'Female',
-  season_test = 'fa',
-  mod_name = Formula_df[1, 'name']
-)
-
-cat("Valid models:", GoodCoeff_results[[2]], "\n")
-
-# Step 5: Simulate movement
-cat("Simulating movement...\n")
-nsim <- 2
-All_sims <- data.frame()
-
-Simulation_deer <- Model_res %>%
-  mutate(train = 2017, test = 2018)
-
-for (index in 1:nrow(Simulation_deer)) {
-  set.seed(index)
-
-  row_data <- Simulation_deer[index, ]
-  Issf <- row_data$Model[[1]]
-
-  if (!any(Issf %in% c('Warning', 'Error'))) {
-    GPS_test <- raw_data %>%
-      filter(
-        id == row_data$id,
-        season == row_data$season,
-        year == row_data$test
-      )
-
-    if (nrow(GPS_test) > 0) {
-      # Prepare environment
-      Env_test <- Env_rasters[[paste0('Env_', row_data$test)]]
-      HR_center <- vect(st_as_sf(
-        GPS_test[, c('x_median', 'y_median')],
-        coords = c('x_median', 'y_median'),
-        crs = crs(Env_test)
-      ))
-      Env_test$HR <- distance(Env_test$HR, HR_center) / 1000
-
-      # Load NDVI
-      test_ndvi <- unwrap(readRDS(paste0(
-        "NDVI_Daily_MODIS_250M_",
-        row_data$test,
-        "_",
-        row_data$season,
-        ".Rdata"
-      )))
-      time(test_ndvi) <- as.Date(names(test_ndvi))
-
-      # Reconstruct model
-      name_map <- c(
-        "log(sl_)" = "log(sl_)",
-        "cos(ta_)" = "cos(ta_)",
-        "HR_end" = "HR_end",
-        "ndvi_end" = 'ndvi_end',
-        "Coarse_scale_endagriculture" = "Agriculture_end",
-        "Coarse_scale_endgrassland" = "Grassland_end",
-        "Coarse_scale_endother" = "Other_end",
-        "Coarse_scale_endagriculture:ndvi_end" = "Agriculture_end:ndvi_end",
-        "Coarse_scale_endgrassland:ndvi_end" = "Grassland_end:ndvi_end",
-        "Coarse_scale_endother:ndvi_end" = "Other_end:ndvi_end"
-      )
-
-      coefs <- setNames(
-        as.numeric(Issf$model$coefficients),
-        name_map[names(Issf$model$coefficients)]
-      )
-      coefs <- coefs[!is.na(coefs)]
-
-      Model_reconstructed <- make_issf_model(
-        coefs = coefs,
-        sl = Issf$sl_,
-        ta = Issf$ta_
-      )
-
-      # Simulate
-      Simulated_days <- unique(as.Date(GPS_test$stp[[1]]$t1_, tz = 'CST6CDT'))
-
-      Simulation <- Simulate_movement(
-        GPS_test$stp[[1]],
-        Simulated_days,
-        test_ndvi,
-        nsim,
-        Env_test,
-        Model_reconstructed,
-        row_data$test,
-        row_data$train,
-        row_data$Formula
-      )
-
-      Final_sim <- bind_rows(Simulation[[1]]) %>%
-        mutate(
-          id = row_data$id,
-          season = row_data$season,
-          Formula = row_data$Formula
-        ) %>%
-        nest(stp = c(x_, y_, t_))
-
-      All_sims <- bind_rows(All_sims, Final_sim)
-    }
-  }
-}
-
-# Visualize results
-cat("Creating visualization...\n")
-Mvt_5000_fa <- All_sims[1:2, ] %>%
-  select(sim, stp) %>%
-  unnest(stp)
-
-Real_mvt <- raw_data %>%
-  filter(id == 5000, season == 'fa', year == 2018) %>%
-  unnest(stp)
-
-ggplot() +
-  geom_spatraster(data = Env_rasters$Env_2018$Coarse_scale) +
-  xlim(min(Mvt_5000_fa$x_) - 1000, max(Mvt_5000_fa$x_) + 1000) +
-  ylim(min(Mvt_5000_fa$y_) - 1000, max(Mvt_5000_fa$y_) + 1000) +
-  geom_path(data = Real_mvt, aes(x = x1_, y = y1_), color = 'black') +
-  geom_path(data = Mvt_5000_fa, aes(x = x_, y = y_, color = as.factor(sim))) +
-  scale_fill_manual(
-    values = c(
-      'goldenrod2',
-      'forestgreen',
-      'lightgreen',
-      'grey',
-      'blue',
-      'white'
+    model <- fit_multi_mods(
+      data = deer_mvt_var,
+      var = 'stp.var',
+      formula = formula_df[i, 1]
     )
+
+    res <- list(
+      iss = model$iss,
+      coeff = model$tidy_res,
+      aic = unlist(model$AIC)
+    )
+
+    res
+  }
+
+# Step 4: Simulate movement
+cat("Simulating movement...\n")
+
+sim_res_hr <- foreach(i = 1:10) %do%
+  {
+    coefs <- model_res[[1]]$iss[[i]]$model$coefficients
+    coefs <- coefs[!is.na(coefs)]
+
+    model_sim <- make_issf_model(
+      coefs = coefs,
+      sl = model_res[[1]]$iss[[i]]$sl_,
+      ta = model_res[[1]]$iss[[i]]$ta_
+    )
+
+    foreach(h = 1:10, .combine = "rbind") %do%
+      {
+        res <- simulate_movement(
+          deer_mvt[i, ],
+          env_rasters[[1]],
+          model_sim,
+          formula_df[1, 1]
+        )
+
+        res$nsim <- h
+
+        res
+      }
+  }
+
+sim_res_hr_quad <- foreach(i = 1:10) %do%
+  {
+    coefs <- model_res[[2]]$iss[[i]]$model$coefficients
+    coefs <- coefs[!is.na(coefs)]
+
+    model_sim <- make_issf_model(
+      coefs = coefs,
+      sl = model_res[[2]]$iss[[i]]$sl_,
+      ta = model_res[[2]]$iss[[i]]$ta_
+    )
+
+    foreach(h = 1:10, .combine = "rbind") %do%
+      {
+        res <- simulate_movement(
+          deer_mvt[i, ],
+          env_rasters[[1]],
+          model_sim,
+          formula_df[2, 1]
+        )
+
+        res$nsim <- h
+
+        res
+      }
+  }
+
+## Visualize results
+cat("Creating visualization...\n")
+library(patchwork)
+
+plot_list <- foreach(i = 1:4) %do%
+  {
+    obs_data <- deer_mvt$stp[[i]]
+    sim_hr <- sim_res_hr[[i]]
+    sim_quad <- sim_res_hr_quad[[i]]
+
+    x_range_lin <- range(c(obs_data$x1_, sim_hr$x_))
+    y_range_lin <- range(c(obs_data$y1_, sim_hr$y_))
+
+    x_range_quad <- range(c(obs_data$x1_, sim_quad$x_))
+    y_range_quad <- range(c(obs_data$y1_, sim_quad$y_))
+
+    # Linear HR model
+    p_lin <- ggplot() +
+      geom_spatraster(data = env_rasters$env_2017$Coarse_scale) +
+      xlim(x_range_lin[1] - 1000, x_range_lin[2] + 1000) +
+      ylim(y_range_lin[1] - 1000, y_range_lin[2] + 1000) +
+      geom_path(
+        data = sim_hr,
+        aes(x = x_, y = y_, group = nsim),
+        color = "black",
+        linewidth = 0.3,
+        alpha = 0.3
+      ) +
+      geom_path(
+        data = obs_data,
+        aes(x = x1_, y = y1_),
+        color = 'white',
+        linewidth = 0.8,
+        alpha = 0.5
+      ) +
+      labs(title = paste0("Deer ", i, " — Linear HR")) +
+      theme_minimal() +
+      theme(
+        plot.title = element_text(size = 12, face = "bold"),
+        axis.title = element_blank(),
+        axis.text = element_blank(),
+        legend.position = "none"
+      )
+
+    # Quadratic HR model
+    p_quad <- ggplot() +
+      geom_spatraster(data = env_rasters$env_2017$Coarse_scale) +
+      xlim(x_range_quad[1] - 1000, x_range_quad[2] + 1000) +
+      ylim(y_range_quad[1] - 1000, y_range_quad[2] + 1000) +
+      geom_path(
+        data = sim_quad,
+        aes(x = x_, y = y_, group = nsim),
+        color = "black",
+        linewidth = 0.3,
+        alpha = 0.3
+      ) +
+      geom_path(
+        data = obs_data,
+        aes(x = x1_, y = y1_),
+        color = 'white',
+        linewidth = 0.8,
+        alpha = 0.5
+      ) +
+      labs(title = paste0("Deer ", i, " — Quadratic HR")) +
+      theme_minimal() +
+      theme(
+        plot.title = element_text(size = 12, face = "bold"),
+        axis.title = element_blank(),
+        axis.text = element_blank(),
+        legend.position = "none"
+      )
+
+    list(p_lin, p_quad)
+  }
+
+combined_plot <- wrap_plots(
+  unlist(plot_list, recursive = FALSE),
+  ncol = 2,
+  nrow = 4
+)
+
+ggsave(
+  "Example_code/deer_movement_comparison.png",
+  plot = combined_plot,
+  width = 10,
+  height = 16,
+  dpi = 300
+)
+
+# Single deer plot
+ggplot() +
+  geom_spatraster(data = env_rasters$env_2017$Coarse_scale) +
+  xlim(
+    min(sim_res_hr_quad[[3]]$x_) - 1000,
+    max(sim_res_hr_quad[[3]]$x_) + 1000
+  ) +
+  ylim(
+    min(sim_res_hr_quad[[3]]$y_) - 1000,
+    max(sim_res_hr_quad[[3]]$y_) + 1000
+  ) +
+  geom_path(
+    data = deer_mvt$stp[[3]],
+    aes(x = x1_, y = y1_),
+    color = 'black',
+    alpha = 0.5
+  ) +
+  geom_path(
+    data = sim_res_hr_quad[[3]],
+    aes(x = x_, y = y_, group = nsim),
+    color = "orange",
+    alpha = 0.1
   )
 
-cat("Analysis complete!\n")
+# Calculate overlap of utilization distributions
+
+overlap_ud <- function(data, sim, n_sim) {
+  z1 <- data |>
+    select("x1_", "y1_", "t1_") |>
+    st_as_sf(coords = c("x1_", "y1_"), crs = 6610) |>
+    st_transform(4326) |> # Transform to WGS84 lat/long
+    mutate(
+      longitude = st_coordinates(geometry)[, 1],
+      latitude = st_coordinates(geometry)[, 2],
+      timestamp = t1_
+    ) |>
+    st_drop_geometry() |>
+    as.data.frame() |>
+    as.telemetry()
+
+  z2 <- foreach(i = 1:n_sim) %do%
+    {
+      tel <- sim |>
+        filter(nsim == i) |>
+        select("x_", "y_", "t_") |>
+        st_as_sf(coords = c("x_", "y_"), crs = 6610) |>
+        st_transform(4326) |> # Transform to WGS84 lat/long
+        mutate(
+          longitude = st_coordinates(geometry)[, 1],
+          latitude = st_coordinates(geometry)[, 2],
+          timestamp = t_
+        ) |>
+        st_drop_geometry() |>
+        as.data.frame() |>
+        as.telemetry()
+
+      projection(tel) <- projection(z1)
+
+      tel
+    }
+
+  ms1 <- ctmm.select(z1, ctmm.guess(z1), verbose = TRUE, cores = 4)
+
+  ms2 <- foreach(i = 1:length(z2)) %do%
+    {
+      ctmm.select(z2[[i]], ctmm.guess(z2[[i]]), verbose = TRUE, cores = 4)
+    }
+
+  uds <- foreach(i = 1:length(z2)) %do%
+    {
+      akde(list(z1, z2[[i]]), list(ms1[[1]], ms2[[i]][[1]]))
+    }
+
+  bat <- map_dbl(uds, function(x) overlap(x)$CI[1, 2, 2])
+
+  list(
+    data = z1,
+    sim = z2,
+    ctmm_data = ms1,
+    ctmm_sim = ms2,
+    uds = uds,
+    bat_coeff = bat
+  )
+}
+
+res_ud_hr <- foreach(i = 1:10) %do%
+  {
+    overlap_ud(deer_mvt$stp[[i]], sim_res_hr[[i]], n_sim = 10)
+  }
+
+res_ud_hr_quad <- foreach(i = 1:10) %do%
+  {
+    overlap_ud(deer_mvt$stp[[i]], sim_res_hr_quad[[i]], n_sim = 10)
+  }
