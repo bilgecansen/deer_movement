@@ -152,8 +152,20 @@ res_ud_wisc <- foreach(
     overlap_ud(deer_mvt$stp[[i]], sim_res_wisc[[i]], n_sim = 10)
   }
 
+res_ud_wisc_ndvi <- foreach(
+  i = 1:10,
+  .packages = c("amt", "terra", "sf", "tidyverse", "foreach", "ctmm")
+) %dopar%
+  {
+    overlap_ud(deer_mvt$stp[[i]], sim_res_wisc_ndvi[[i]], n_sim = 10)
+  }
+
 # Step 6: Estimate proximity between observed vs simulated paths
 cat("Estimating proximity...\n")
+prox_hr <- foreach(i = 1:10, .combine = "rbind", .packages = "ctmm") %dopar%
+  {
+    prox_path(res_ud_hr[[i]], n_sim = 10)
+  }
 
 prox_ndvi <- foreach(i = 1:10, .combine = "rbind", .packages = "ctmm") %dopar%
   {
@@ -163,6 +175,15 @@ prox_ndvi <- foreach(i = 1:10, .combine = "rbind", .packages = "ctmm") %dopar%
 prox_wisc <- foreach(i = 1:10, .combine = "rbind", .packages = "ctmm") %dopar%
   {
     prox_path(res_ud_wisc[[i]], n_sim = 10)
+  }
+
+prox_wisc_ndvi <- foreach(
+  i = 1:10,
+  .combine = "rbind",
+  .packages = "ctmm"
+) %dopar%
+  {
+    prox_path(res_ud_wisc_ndvi[[i]], n_sim = 10)
   }
 
 stopCluster(cl)

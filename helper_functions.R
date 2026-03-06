@@ -313,6 +313,20 @@ run_simulations <- function(
       names(coefs) <- rename_landcover_coefs(names(coefs))
       coefs <- coefs[!is.na(coefs)]
 
+      # Fix interaction order to match model.matrix behavior:
+      # when a variable in an interaction has no main effect,
+      # model.matrix puts the variable WITH a main effect first
+      coef_names <- names(coefs)
+      main_effects <- coef_names[!grepl(":", coef_names)]
+      interactions <- grep(":", coef_names)
+      for (idx in interactions) {
+        parts <- strsplit(coef_names[idx], ":")[[1]]
+        if (!(parts[1] %in% main_effects) && (parts[2] %in% main_effects)) {
+          coef_names[idx] <- paste(parts[2], parts[1], sep = ":")
+        }
+      }
+      names(coefs) <- coef_names
+
       model_sim <- make_issf_model(
         coefs = coefs,
         sl = model_results$iss[[i]]$sl_,
