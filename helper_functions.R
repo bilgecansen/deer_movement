@@ -105,6 +105,12 @@ extract_step_variables <- function(
         mutate(
           wiscland_start = factor(wiscland_start, levels = lc_levels),
           wiscland_end = factor(wiscland_end, levels = lc_levels)
+        ) %>%
+        amt::time_of_day(include.crepuscule = F) %>%
+        mutate(
+          tod_end_day = as.integer(tod_end_ == "day"),
+          tod_end_night = as.integer(tod_end_ == "night"),
+          days = lubridate::yday(t2_) - min(lubridate::yday(t2_)) + 1
         )
       data_ssf
     }
@@ -190,7 +196,7 @@ simulate_movement <- function(
 
     # Make the starting pts of the kernel and simulation
     start_pt_sim <- sim_i[nrow(sim_i), ] |>
-      amt::make_track(.x = x_, .y = y_, .t = t_) |>
+      amt::make_track(.x = x_, .y = y_, .t = t_, crs = crs(env_test)) |>
       amt::make_start() |>
       amt::mutate(dt = hours(4))
 
@@ -199,7 +205,14 @@ simulate_movement <- function(
       x = issf_train,
       map = env_test,
       fun = function(xy, map) {
-        amt::extract_covariates(xy, map, where = "both")
+        xy %>%
+          amt::extract_covariates(map, where = "both") %>%
+          amt::time_of_day(include.crepuscule = FALSE) %>%
+          mutate(
+            tod_end_day = as.integer(tod_end_ == "day"),
+            tod_end_night = as.integer(tod_end_ == "night"),
+            days = lubridate::yday(t2_) - min(lubridate::yday(t2_)) + 1
+          )
       },
       start = start_pt_sim,
       landscape = "discrete",
@@ -313,19 +326,34 @@ run_simulations <- function(
       names(coefs) <- rename_landcover_coefs(names(coefs))
       coefs <- coefs[!is.na(coefs)]
 
-      # Fix interaction order to match model.matrix behavior:
-      # when a variable in an interaction has no main effect,
-      # model.matrix puts the variable WITH a main effect first
-      coef_names <- names(coefs)
-      main_effects <- coef_names[!grepl(":", coef_names)]
-      interactions <- grep(":", coef_names)
-      for (idx in interactions) {
-        parts <- strsplit(coef_names[idx], ":")[[1]]
-        if (!(parts[1] %in% main_effects) && (parts[2] %in% main_effects)) {
-          coef_names[idx] <- paste(parts[2], parts[1], sep = ":")
+      # Fix interaction term ordering: model.matrix() may order terms in
+      # interactions (e.g., cos(ta_):tod_end_day) differently than the
+      # coefficient names from the fitted model (e.g., tod_end_day:cos(ta_)).
+      # We build a dummy model, check what model.matrix() actually produces
+      # using the training data, and swap any mismatched interaction terms.
+      dummy_sim <- make_issf_model(coefs = coefs)
+      mm_names <- colnames(model.matrix(
+        amt:::ssf_formula(dummy_sim$model$formula),
+        data = deer_data$stp.var[[i]]
+      ))
+
+      # For each coef name,
+      # if it doesn't match mm_names but swapping does, swap it
+      for (idx in seq_along(coefs)) {
+        if (
+          grepl(":", names(coefs)[idx]) && !(names(coefs)[idx] %in% mm_names)
+        ) {
+          parts <- strsplit(names(coefs)[idx], ":")[[1]]
+          perms <- combinat::permn(parts)
+          for (p in perms) {
+            candidate <- paste(p, collapse = ":")
+            if (candidate %in% mm_names) {
+              names(coefs)[idx] <- candidate
+              break
+            }
+          }
         }
       }
-      names(coefs) <- coef_names
 
       model_sim <- make_issf_model(
         coefs = coefs,
