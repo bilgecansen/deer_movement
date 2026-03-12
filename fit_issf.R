@@ -67,21 +67,34 @@ cat("Extracting environmental variables...\n")
 deer_mvt_var <-
   extract_step_variables(
     data = deer_mvt_random,
-    env = env_raster$wiscland,
+    env = env_raster,
     ndvi_list = ndvi_rasters
   )
 
 # Step 3: Fit models
 cat("Fitting models...\n")
-null <- "case_ ~ log(sl_) + cos(ta_) + HR_end + strata(step_id_)"
+
+formulas <-
+  c(
+    "case_ ~ (log(sl_) + cos(ta_)):tod_end_",
+    "case_ ~ (log(sl_) + cos(ta_)):tod_end_ + HR_end",
+    "case_ ~ (log(sl_) + cos(ta_)):tod_end_ + HR_end + days",
+    "case_ ~ (log(sl_) + cos(ta_)):tod_end_ + HR_end:days",
+    "case_ ~ (log(sl_) + cos(ta_)):tod_end_ + (log(sl_) + cos(ta_)):HR_end",
+    "case_ ~ (log(sl_) + cos(ta_)):tod_end_:HR_end",
+    "case_ ~ (log(sl_) + cos(ta_)):tod_end_:HR_end + days",
+    "case_ ~ (log(sl_) + cos(ta_)):tod_end_:HR_end + HR_end:days",
+    "case_ ~ (log(sl_) + cos(ta_)):tod_end_ + (log(sl_) + cos(ta_)):HR_end + 
+      days",
+    "case_ ~ (log(sl_) + cos(ta_)):tod_end_ + (log(sl_) + cos(ta_)):HR_end + 
+      days + HR_end:days"
+  )
+
+formulas <- paste(formulas, "+ strata(step_id_)")
+
 formula_df <- data.frame(
-  formula = c(
-    null,
-    paste(null, "+ ndvi_end"),
-    paste(null, "+ wiscland_end"),
-    paste(null, "+ wiscland_end*ndvi_end")
-  ),
-  name = c("null", "ndvi", "wiscland", "wisc*ndvi")
+  formula = formulas,
+  name = 1:length(formulas)
 )
 
 ## Fit models for each formula
@@ -97,94 +110,56 @@ cat("Simulating movement...\n")
 cl <- makeCluster(detectCores() - 1)
 registerDoParallel(cl)
 
-sim_res_hr <- run_simulations(
-  deer_mvt,
-  model_res[[1]],
-  env_raster,
-  ndvi_rasters
-)
+n_models <- nrow(formula_df)
+n_deer <- nrow(deer_mvt)
+n_sim <- 10
 
-sim_res_ndvi <- run_simulations(
-  deer_mvt,
-  model_res[[2]],
-  env_raster,
-  ndvi_rasters
-)
-
-sim_res_wisc <- run_simulations(
-  deer_mvt,
-  model_res[[3]],
-  env_raster,
-  ndvi_rasters
-)
-
-sim_res_wisc_ndvi <- run_simulations(
-  deer_mvt,
-  model_res[[4]],
-  env_raster,
-  ndvi_rasters
-)
+sim_res <- foreach(m = 1:n_models) %do%
+  {
+    cat("Simulating model:", formula_df$name[m], "\n")
+    run_simulations(
+      deer_mvt_var,
+      model_res[[m]],
+      env_raster,
+      ndvi_rasters,
+      n_sim = n_sim,
+      n_deer = nrow(deer_mvt_var)
+    )
+  }
+names(sim_res) <- formula_df$name
 
 # Step 5: Estimate and compare UD
 cat("Estimating overlap of UDs...\n")
 
-res_ud_hr <- foreach(
-  i = 1:10,
-  .packages = c("amt", "terra", "sf", "tidyverse", "foreach", "ctmm")
-) %dopar%
+res_ud <- foreach(m = 1:n_models) %do%
   {
-    overlap_ud(deer_mvt$stp[[i]], sim_res_hr[[i]], n_sim = 10)
+    cat("UD overlap for model:", formula_df$name[m], "\n")
+    foreach(
+      i = 1:n_deer,
+      .packages = c("amt", "terra", "sf", "tidyverse", "foreach", "ctmm")
+    ) %dopar%
+      {
+        overlap_ud(deer_mvt_var$stp.var[[i]], sim_res[[m]][[i]], n_sim = n_sim)
+      }
   }
-
-res_ud_ndvi <- foreach(
-  i = 1:10,
-  .packages = c("amt", "terra", "sf", "tidyverse", "foreach", "ctmm")
-) %dopar%
-  {
-    overlap_ud(deer_mvt$stp[[i]], sim_res_ndvi[[i]], n_sim = 10)
-  }
-
-res_ud_wisc <- foreach(
-  i = 1:10,
-  .packages = c("amt", "terra", "sf", "tidyverse", "foreach", "ctmm")
-) %dopar%
-  {
-    overlap_ud(deer_mvt$stp[[i]], sim_res_wisc[[i]], n_sim = 10)
-  }
-
-res_ud_wisc_ndvi <- foreach(
-  i = 1:10,
-  .packages = c("amt", "terra", "sf", "tidyverse", "foreach", "ctmm")
-) %dopar%
-  {
-    overlap_ud(deer_mvt$stp[[i]], sim_res_wisc_ndvi[[i]], n_sim = 10)
-  }
+names(res_ud) <- formula_df$name
 
 # Step 6: Estimate proximity between observed vs simulated paths
 cat("Estimating proximity...\n")
-prox_hr <- foreach(i = 1:10, .combine = "rbind", .packages = "ctmm") %dopar%
-  {
-    prox_path(res_ud_hr[[i]], n_sim = 10)
-  }
 
-prox_ndvi <- foreach(i = 1:10, .combine = "rbind", .packages = "ctmm") %dopar%
+prox <- foreach(m = 1:n_models) %do%
   {
-    prox_path(res_ud_ndvi[[i]], n_sim = 10)
+    cat("Proximity for model:", formula_df$name[m], "\n")
+    foreach(
+      i = 1:n_deer,
+      .combine = "rbind",
+      .packages = "ctmm"
+    ) %dopar%
+      {
+        prox_path(res_ud[[m]][[i]], n_sim = n_sim)
+      }
   }
-
-prox_wisc <- foreach(i = 1:10, .combine = "rbind", .packages = "ctmm") %dopar%
-  {
-    prox_path(res_ud_wisc[[i]], n_sim = 10)
-  }
-
-prox_wisc_ndvi <- foreach(
-  i = 1:10,
-  .combine = "rbind",
-  .packages = "ctmm"
-) %dopar%
-  {
-    prox_path(res_ud_wisc_ndvi[[i]], n_sim = 10)
-  }
+names(prox) <- formula_df$name
 
 stopCluster(cl)
 
