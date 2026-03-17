@@ -4,14 +4,20 @@
 #' @param data Dataframe with movement steps
 #' @param n_pts Number of random points per step
 #' @param water binary raster for water bodies
-make_random_pt_extraction <- function(data, n_pts, water = water_binary) {
+make_random_pt_extraction <- function(
+  data,
+  n_pts,
+  water = water_binary,
+  stp_col = "stp",
+  output_col = "random.stp"
+) {
   random.stp <- foreach(i = 1:nrow(data)) %do%
     {
       print(i)
 
       z <- data[i, ]
 
-      data_step <- z$stp[[1]]
+      data_step <- z[[stp_col]][[1]]
 
       # Start with buffer for water removal
       n_random <- ceiling(n_pts * 10)
@@ -51,7 +57,7 @@ make_random_pt_extraction <- function(data, n_pts, water = water_binary) {
       res
     }
 
-  data$random.stp <- random.stp
+  data[[output_col]] <- random.stp
   data
 }
 
@@ -62,7 +68,9 @@ make_random_pt_extraction <- function(data, n_pts, water = water_binary) {
 extract_step_variables <- function(
   data,
   env = env_raster$wiscland,
-  ndvi_list = ndvi_rasters
+  ndvi_list = ndvi_rasters,
+  random_col = "random.stp",
+  output_col = "stp.var"
 ) {
   stp.var <- foreach(i = 1:nrow(data)) %do%
     {
@@ -92,7 +100,7 @@ extract_step_variables <- function(
       )
 
       # Process step data
-      data_ssf <- data_row$random.stp[[1]] %>%
+      data_ssf <- data_ssf <- data_row[[random_col]][[1]] %>%
         amt::extract_covariates(env, where = 'both') %>%
         amt::extract_covariates_var_time(
           ndvi,
@@ -115,8 +123,7 @@ extract_step_variables <- function(
       data_ssf
     }
 
-  data$stp.var <- stp.var
-
+  data[[output_col]] <- stp.var
   data
 }
 
@@ -125,7 +132,7 @@ extract_step_variables <- function(
 #' @param formula Model formula string
 #' @return List with iss (fitted models), coeff (tidy coefficients), aic (AIC values)
 fit_mods <- function(data, formula) {
-  iss <- map(data$stp.var, function(ssf_data) {
+  iss <- map(data$stp.var.train, function(ssf_data) {
     tryCatch(
       ssf_data %>% amt::fit_issf(as.formula(formula), model = TRUE),
       error = function(err) "Error"
@@ -158,7 +165,8 @@ simulate_movement <- function(
   deer_data,
   env_test,
   ndvi_test,
-  issf_train
+  issf_train,
+  stp_col = "stp_test"
 ) {
   # Calculate distance to home range center
   median_pt <- terra::vect(
@@ -169,79 +177,73 @@ simulate_movement <- function(
   env_test$HR <- NA
   env_test$HR <- terra::distance(env_test$HR, median_pt) / 1000
 
-  sim_days <- unique(as.Date(deer_data$stp[[1]]$t1_, tz = 'CST6CDT'))
+  step_data <- deer_data[[stp_col]][[1]]
+  bursts <- unique(step_data$burst_)
 
-  sim_days_all <- seq.Date(
-    first(sim_days),
-    last(sim_days),
-    by = 1
-  )
+  # Simulate each burst separately, then combine
+  sim_all_bursts <- foreach(b = bursts, .combine = "rbind") %do%
+    {
+      burst_data <- step_data %>% filter(burst_ == b)
 
-  # Extract the first step to use as the initial step of the simulation
-  sim_i <- deer_data$stp[[1]][1, c('x1_', 'y1_', 't1_')]
-  names(sim_i) <- c('x_', 'y_', 't_')
+      sim_days <- unique(as.Date(burst_data$t1_, tz = 'CST6CDT'))
+      sim_days_all <- seq.Date(first(sim_days), last(sim_days), by = 1)
 
-  # Simulate each day one by one. To do this, we simulate 6 steps at a time
-  # Because we are on a 4h time scale
+      # Start from the first step of this burst
+      sim_i <- burst_data[1, c('x1_', 'y1_', 't1_')]
+      names(sim_i) <- c('x_', 'y_', 't_')
 
-  for (d in sim_days_all) {
-    # Get the corresponding ndvi value for that day
-    env_test$ndvi <- resample(
-      ndvi_test[[which.min(abs(
-        as.Date(d, origin = "1970-01-01") - terra::time(ndvi_test)
-      ))]],
-      env_test,
-      method = 'near'
-    )
-
-    # Make the starting pts of the kernel and simulation
-    start_pt_sim <- sim_i[nrow(sim_i), ] |>
-      amt::make_track(.x = x_, .y = y_, .t = t_, crs = crs(env_test)) |>
-      amt::make_start() |>
-      amt::mutate(dt = hours(4))
-
-    # Make the redistribution kernel
-    kernel <- amt::redistribution_kernel(
-      x = issf_train,
-      map = env_test,
-      fun = function(xy, map) {
-        xy %>%
-          amt::extract_covariates(map, where = "both") %>%
-          amt::time_of_day(include.crepuscule = FALSE) %>%
-          mutate(
-            tod_end_day = as.integer(tod_end_ == "day"),
-            tod_end_night = as.integer(tod_end_ == "night"),
-            days = lubridate::yday(t2_) - min(lubridate::yday(t2_)) + 1
-          )
-      },
-      start = start_pt_sim,
-      landscape = "discrete",
-      as.rast = TRUE
-    )
-
-    # Simulate the mvt using the redistribution kernel and the starting pt
-    # if simulation fails, we have a NA
-
-    # CHANGE TIMING TO ENSURE WE SIMULATE ON THE RIGHT DATE AND TIME !!!
-    ## For each day, the 1st point should always be the begining of the day !
-    ### Ensure the sim dates are all on the same day, remove it if not
-
-    sim_result <- tryCatch(
-      amt::simulate_path(kernel, n = 6),
-      error = function(err) NA
-    )
-
-    if (!any(is.na(sim_result))) {
-      sim_filtered <- sim_result %>%
-        filter(
-          as.Date(t_, tz = 'America/Chicago') ==
-            as.Date(d, origin = "1970-01-01")
+      for (d in sim_days_all) {
+        env_test$ndvi <- resample(
+          ndvi_test[[which.min(abs(
+            as.Date(d, origin = "1970-01-01") - terra::time(ndvi_test)
+          ))]],
+          env_test,
+          method = 'near'
         )
-      sim_i <- bind_rows(sim_i, sim_filtered[, -4])
-    }
-  }
 
-  sim_i[-1, ]
+        start_pt_sim <- sim_i[nrow(sim_i), ] |>
+          amt::make_track(.x = x_, .y = y_, .t = t_, crs = crs(env_test)) |>
+          amt::make_start() |>
+          amt::mutate(dt = hours(4))
+
+        kernel <- amt::redistribution_kernel(
+          x = issf_train,
+          map = env_test,
+          fun = function(xy, map) {
+            xy %>%
+              amt::extract_covariates(map, where = "both") %>%
+              amt::time_of_day(include.crepuscule = FALSE) %>%
+              mutate(
+                tod_end_day = as.integer(tod_end_ == "day"),
+                tod_end_night = as.integer(tod_end_ == "night"),
+                days = lubridate::yday(t2_) - min(lubridate::yday(t2_)) + 1
+              )
+          },
+          start = start_pt_sim,
+          landscape = "discrete",
+          as.rast = TRUE
+        )
+
+        sim_result <- tryCatch(
+          amt::simulate_path(kernel, n = 6),
+          error = function(err) NA
+        )
+
+        if (!any(is.na(sim_result))) {
+          sim_filtered <- sim_result %>%
+            filter(
+              as.Date(t_, tz = 'America/Chicago') ==
+                as.Date(d, origin = "1970-01-01")
+            )
+          sim_i <- bind_rows(sim_i, sim_filtered[, -4])
+        }
+      }
+
+      sim_i[-1, ] %>%
+        mutate(burst_ = b)
+    }
+
+  sim_all_bursts
 }
 
 #' Rename categorical landcover coefficients to match binary raster layer names
@@ -296,7 +298,7 @@ run_simulations <- function(
   # Pre-crop rasters per deer in main process (small memory footprint)
   deer_crops <- lapply(1:n_deer, function(i) {
     crop_extent <- st_buffer(
-      st_as_sf(deer_data$stp[[i]], coords = c('x1_', 'y1_'), crs = 6610),
+      st_as_sf(deer_data$stp_test[[i]], coords = c('x1_', 'y1_'), crs = 6610),
       5000
     )
 
@@ -334,7 +336,7 @@ run_simulations <- function(
       dummy_sim <- make_issf_model(coefs = coefs)
       mm_names <- colnames(model.matrix(
         amt:::ssf_formula(dummy_sim$model$formula),
-        data = deer_data$stp.var[[i]]
+        data = deer_data$stp.var.train[[i]]
       ))
 
       # For each coef name,
@@ -367,12 +369,56 @@ run_simulations <- function(
             deer_data[i, ],
             env_local,
             ndvi_local,
-            model_sim
+            model_sim,
+            stp_col = "stp_test"
           )
           res$nsim <- h
           res
         }
     }
+}
+
+#' Calculate mean Energy Score between observed and simulated paths
+#' @param obs Observed path dataframe with x1_, y1_, t1_ columns
+#' @param sim Simulated paths dataframe with x_, y_, t_, nsim columns
+#' @return Mean energy score across all matched time steps
+calc_energy_score <- function(obs, sim) {
+  # Round times to nearest hour for matching
+  obs_times <- round_date(obs$t1_, unit = "hour")
+  sim_times <- round_date(sim$t_, unit = "hour")
+
+  # Find shared time steps
+  shared_times <- intersect(obs_times, sim_times)
+
+  if (length(shared_times) == 0) {
+    warning("No matching time steps between observed and simulated paths")
+    return(NA_real_)
+  }
+
+  # Filter to shared times
+  obs_matched <- obs[obs_times %in% shared_times, ]
+  sim_matched <- sim[sim_times %in% shared_times, ]
+
+  es_per_step <- foreach(t = seq_len(nrow(obs_matched)), .combine = "c") %do%
+    {
+      obs_xy <- c(obs_matched$x1_[t], obs_matched$y1_[t])
+      obs_time <- round_date(obs_matched$t1_[t], unit = "hour")
+
+      # Get all sim locations at this time step
+      sim_at_t <- sim_matched[
+        round_date(sim_matched$t_, unit = "hour") == obs_time,
+      ]
+
+      if (nrow(sim_at_t) == 0) {
+        return(NA_real_)
+      }
+
+      # es_sample expects: obs = d-vector, dat = d x n matrix
+      sim_matrix <- t(cbind(sim_at_t$x_, sim_at_t$y_))
+      scoringRules::es_sample(obs_xy, dat = sim_matrix)
+    }
+
+  mean(es_per_step, na.rm = TRUE)
 }
 
 #' Estimate overlap of utilization distributions
@@ -421,6 +467,8 @@ overlap_ud <- function(data, sim, n_sim) {
     verbose = TRUE,
     cores = 1
   )
+  ms1 <- ms1[[1]]
+
   ms2 <- lapply(z2, function(z) {
     ctmm.select(
       z,
@@ -429,22 +477,25 @@ overlap_ud <- function(data, sim, n_sim) {
       cores = 1
     )
   })
+  ms2 <- map(ms2, function(x) x[[1]])
+  ms2_avg <- mean(ms2)
 
-  uds <- foreach(k = 1:length(z2)) %do%
-    {
-      akde(list(z1, z2[[k]]), list(ms1[[1]], ms2[[k]][[1]]))
-    }
+  z1_uds <- akde(z1, ms1)
+  z2_uds <- akde(z2, ms2, grid = list(r = z1_uds$r, dr = z1_uds$dr)) %>%
+    mean()
 
   # Estimate the overlap of UDs
-  bat <- map_dbl(uds, function(x) overlap(x)$CI[1, 2, 2])
+  bat_uds <- overlap(list(z1_uds, z2_uds))$CI[1, 2, 2]
+  bat_ctmm <- overlap(list(ms1, ms2_avg))$CI[1, 2, 2]
 
   list(
     data = z1,
     sim = z2,
-    ctmm_data = ms1[[1]],
+    ctmm_data = ms1,
     ctmm_sim = ms2,
-    uds = uds,
-    bat_coeff = bat
+    uds = list(obs_uds = z1_uds, sim_uds = z2_uds),
+    bat_uds = bat_uds,
+    bat_ctmm = bat_ctmm
   )
 }
 

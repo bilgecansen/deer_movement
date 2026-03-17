@@ -5,7 +5,7 @@
 #' 3. Fit iSSF models
 #' 4. Simulate movement from models
 #' 5. Estimate and compare utilization distributions
-#' 6. Estimate proximity
+#' 6. Calculate Energy Scores
 
 # Load packages ----------------------------------------------------------------
 library(amt)
@@ -15,6 +15,7 @@ library(foreach)
 library(sf)
 library(doParallel)
 library(ctmm)
+library(scoringRules)
 
 # Load data --------------------------------------------------------------------
 
@@ -35,8 +36,14 @@ raw_data <- readRDS('Example_code/SW_filtered_deer.RData')
 
 # Prepare sample data
 deer_mvt <- raw_data %>%
-  filter(year == 2017, sex == 'Female', season == 'fa') %>%
-  slice(1:10)
+  filter(year %in% c(2017, 2018))
+
+# Separate training and test splits
+deer_mvt <- deer_mvt %>%
+  mutate(
+    stp_train = map(stp, ~ .x[1:ceiling(nrow(.x) * 0.7), ]),
+    stp_test = map(stp, ~ .x[(ceiling(nrow(.x) * 0.7) + 1):nrow(.x), ])
+  )
 
 # helper functions
 source("helper_functions.R")
@@ -47,29 +54,42 @@ source("helper_functions.R")
 set.seed(1919)
 
 # Step 1: Generate random steps
-cat("Generating random steps...\n")
-deer_with_random <- make_random_pt_extraction(
+cat("Generating random steps for train...\n")
+deer_mvt <- make_random_pt_extraction(
   data = deer_mvt,
   n_pts = 10,
-  water = water_binary
-) %>%
-  select(id, season, year, age.at.col1, sex, indicator, random.stp)
+  water = water_binary,
+  stp_col = "stp_train",
+  output_col = "stp.random.train"
+)
 
-## Join with original data
-deer_mvt_random <- deer_mvt %>%
-  left_join(
-    deer_with_random,
-    by = c('id', 'season', 'year', 'age.at.col1', 'sex', 'indicator')
-  )
+cat("Generating random steps for test...\n")
+deer_mvt <- make_random_pt_extraction(
+  data = deer_mvt,
+  n_pts = 10,
+  water = water_binary,
+  stp_col = "stp_test",
+  output_col = "stp.random.test"
+)
 
 # Step 2: Extract environmental variables
-cat("Extracting environmental variables...\n")
-deer_mvt_var <-
-  extract_step_variables(
-    data = deer_mvt_random,
-    env = env_raster,
-    ndvi_list = ndvi_rasters
-  )
+cat("Extracting environmental variables for train...\n")
+deer_mvt <- extract_step_variables(
+  data = deer_mvt,
+  env = env_raster,
+  ndvi_list = ndvi_rasters,
+  random_col = "stp.random.train",
+  output_col = "stp.var.train"
+)
+
+cat("Extracting environmental variables for test...\n")
+deer_mvt <- extract_step_variables(
+  data = deer_mvt,
+  env = env_raster,
+  ndvi_list = ndvi_rasters,
+  random_col = "stp.random.test",
+  output_col = "stp.var.test"
+)
 
 # Step 3: Fit models
 cat("Fitting models...\n")
@@ -98,10 +118,10 @@ formula_df <- data.frame(
 )
 
 ## Fit models for each formula
-model_res <- model_res <- foreach(i = 1:nrow(formula_df)) %do%
+res_model <- foreach(i = 1:nrow(formula_df)) %do%
   {
     cat("Fitting formula", i, "\n")
-    fit_mods(deer_mvt_var, formula_df[i, 1])
+    fit_mods(deer_mvt, formula_df[i, 1])
   }
 
 # Step 4: Simulate movement
@@ -114,21 +134,23 @@ n_models <- nrow(formula_df)
 n_deer <- nrow(deer_mvt)
 n_sim <- 10
 
-sim_res <- foreach(m = 1:n_models) %do%
+res_sim <- foreach(m = 1:n_models) %do%
   {
     cat("Simulating model:", formula_df$name[m], "\n")
     run_simulations(
-      deer_mvt_var,
+      deer_mvt,
       model_res[[m]],
       env_raster,
       ndvi_rasters,
       n_sim = n_sim,
-      n_deer = nrow(deer_mvt_var)
+      n_deer = nrow(deer_mvt)
     )
   }
-names(sim_res) <- formula_df$name
+names(res_sim) <- formula_df$name
 
-# Step 5: Estimate and compare UD
+saveRDS(res_sim, "results_sim.rds")
+
+# Step 5: Estimate UD overlap
 cat("Estimating overlap of UDs...\n")
 
 res_ud <- foreach(m = 1:n_models) %do%
@@ -139,34 +161,126 @@ res_ud <- foreach(m = 1:n_models) %do%
       .packages = c("amt", "terra", "sf", "tidyverse", "foreach", "ctmm")
     ) %dopar%
       {
-        overlap_ud(deer_mvt_var$stp.var[[i]], sim_res[[m]][[i]], n_sim = n_sim)
+        overlap_ud(
+          deer_mvt$stp_test[[i]],
+          res_sim[[m]][[i]],
+          n_sim = n_sim
+        )
+        #prox <- prox_path(ud, n_sim = n_sim)
+
+        #list(bat = ud$bat_coeff, prox = prox)
       }
   }
 names(res_ud) <- formula_df$name
 
-# Step 6: Estimate proximity between observed vs simulated paths
-cat("Estimating proximity...\n")
+saveRDS(res_ud, "results_ud.rds")
 
-prox <- foreach(m = 1:n_models) %do%
+# Step 6: Calculate Energy Scores
+cat("Calculating Energy Scores...\n")
+
+res_es <- foreach(m = 1:n_models, .combine = "rbind") %do%
   {
-    cat("Proximity for model:", formula_df$name[m], "\n")
-    foreach(
+    cat("Energy Score for model:", formula_df$name[m], "\n")
+
+    scores <- foreach(
       i = 1:n_deer,
-      .combine = "rbind",
-      .packages = "ctmm"
-    ) %dopar%
+      .combine = "c"
+    ) %do%
       {
-        prox_path(res_ud[[m]][[i]], n_sim = n_sim)
+        sim_i <- res_sim[[m]][[i]]
+
+        # Skip if simulation failed
+        if (length(sim_i) == 1 && is.na(sim_i)) {
+          return(NA_real_)
+        }
+
+        calc_energy_score(
+          obs = deer_mvt$stp_test[[i]],
+          sim = sim_i
+        )
       }
+
+    data.frame(
+      model = formula_df$name[m],
+      deer = deer_mvt$id,
+      energy_score = scores
+    )
   }
-names(prox) <- formula_df$name
+
+saveRDS(res_es, "results_es.rds")
 
 stopCluster(cl)
 
 # Plots ------------------------------------------------------------------------
-## Visualize results
-cat("Creating visualization...\n")
+
 library(patchwork)
+
+# Wrangle res_ud into a data frame
+res_bat <- foreach(m = names(res_ud), .combine = "rbind") %do%
+  {
+    scores_uds <- foreach(i = 1:n_deer, .combine = "c") %do%
+      {
+        if (length(res_ud[[m]][[i]]) == 1 && is.na(res_ud[[m]][[i]])) {
+          return(NA_real_)
+        }
+        res_ud[[m]][[i]]$bat_uds
+      }
+
+    scores_ctmm <- foreach(i = 1:n_deer, .combine = "c") %do%
+      {
+        if (length(res_ud[[m]][[i]]) == 1 && is.na(res_ud[[m]][[i]])) {
+          return(NA_real_)
+        }
+        res_ud[[m]][[i]]$bat_ctmm$CI[1, 2, 2]
+      }
+
+    data.frame(
+      model = m,
+      deer = deer_mvt$id,
+      bat_uds = scores_uds,
+      bat_ctmm = scores_ctmm
+    )
+  }
+
+# Energy score violin plot
+p_es <- ggplot(
+  res_es,
+  aes(x = as.factor(model), y = 1 - (energy_score / 500))
+) +
+  geom_violin(trim = FALSE, fill = "lightblue", alpha = 0.5) +
+  geom_jitter(width = 0.15, size = 1.5, alpha = 0.7) +
+  labs(
+    x = "Model",
+    y = "Energy Skill Score"
+  ) +
+  theme_minimal()
+
+# Bhattacharyya coefficient violin plot
+p_uds <- ggplot(res_bat, aes(x = as.factor(model), y = bat_uds)) +
+  geom_violin(trim = T, fill = "lightgreen", alpha = 0.5) +
+  geom_jitter(width = 0.15, size = 1.5, alpha = 0.7) +
+  labs(
+    x = "Model",
+    y = "Bhattacharyya Coefficient (UD)"
+  ) +
+  theme_minimal()
+
+p_ctmm <- ggplot(res_bat, aes(x = as.factor(model), y = bat_ctmm)) +
+  geom_violin(trim = T, fill = "lightgreen", alpha = 0.5) +
+  geom_jitter(width = 0.15, size = 1.5, alpha = 0.7) +
+  labs(
+    x = "Model",
+    y = "Bhattacharyya Coefficient (CTMM)"
+  ) +
+  theme_minimal()
+
+p_uds
+p_ctmm
+p_es
+
+
+cat("Creating visualization...\n")
+
 
 plot_list <- foreach(i = c(4, 5, 8, 10)) %do%
   {
