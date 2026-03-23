@@ -21,6 +21,15 @@ library(scoringRules)
 
 # landscape data
 env_raster <- rast("env/wiscland/wiscland2_binary.tif")
+env_old <- rast("Example_code/Env_2017.tif")
+env_raster <- terra::crop(env_raster, env_old) %>%
+  terra::resample(env_old)
+
+env_raster$ele <- env_old$ele
+env_raster$east <- env_old$eastness
+env_raster$east2 <- env_old$eastness2
+env_raster$north <- env_old$northness
+env_raster$dist <- env_old$fe.dist
 
 water_binary <- ifel(env_raster$wiscland == "water", 1, 0)
 names(water_binary) <- "Water"
@@ -43,7 +52,8 @@ deer_mvt <- deer_mvt %>%
   mutate(
     stp_train = map(stp, ~ .x[1:ceiling(nrow(.x) * 0.7), ]),
     stp_test = map(stp, ~ .x[(ceiling(nrow(.x) * 0.7) + 1):nrow(.x), ])
-  )
+  ) %>%
+  slice(1:30)
 
 # helper functions
 source("helper_functions.R")
@@ -91,23 +101,26 @@ deer_mvt <- extract_step_variables(
   output_col = "stp.var.test"
 )
 
+saveRDS(deer_mvt, "data_deer.rds")
+
 # Step 3: Fit models
 cat("Fitting models...\n")
 
 formulas <-
   c(
-    "case_ ~ (log(sl_) + cos(ta_)):tod_end_",
-    "case_ ~ (log(sl_) + cos(ta_)):tod_end_ + HR_end",
-    "case_ ~ (log(sl_) + cos(ta_)):tod_end_ + HR_end + days",
-    "case_ ~ (log(sl_) + cos(ta_)):tod_end_ + HR_end:days",
-    "case_ ~ (log(sl_) + cos(ta_)):tod_end_ + (log(sl_) + cos(ta_)):HR_end",
-    "case_ ~ (log(sl_) + cos(ta_)):tod_end_:HR_end",
-    "case_ ~ (log(sl_) + cos(ta_)):tod_end_:HR_end + days",
-    "case_ ~ (log(sl_) + cos(ta_)):tod_end_:HR_end + HR_end:days",
-    "case_ ~ (log(sl_) + cos(ta_)):tod_end_ + (log(sl_) + cos(ta_)):HR_end + 
-      days",
-    "case_ ~ (log(sl_) + cos(ta_)):tod_end_ + (log(sl_) + cos(ta_)):HR_end + 
-      days + HR_end:days"
+    "case_ ~ (log(sl_) + cos(ta_)):tod_start_",
+    "case_ ~ (log(sl_) + cos(ta_)):tod_start_ + HR_end",
+    "case_ ~ (log(sl_) + cos(ta_)):tod_start_ + HR_end:days",
+    "case_ ~ (log(sl_) + cos(ta_)):tod_start_ + (log(sl_) + cos(ta_)):HR_start",
+    "case_ ~ (log(sl_) + cos(ta_)):tod_start_:HR_start",
+    "case_ ~ (log(sl_) + cos(ta_)):tod_start_:HR_start + HR_end:days",
+    "case_ ~ (log(sl_) + cos(ta_)):tod_start_ + (log(sl_) + cos(ta_)):HR_start",
+    "case_ ~ (log(sl_) + cos(ta_)):tod_start_ + (log(sl_) + cos(ta_)):HR_start + 
+      HR_end:days",
+    "case_ ~ (log(sl_) + cos(ta_)):tod_start_ + HR_end + east_end + east2_end + 
+      north_end + dist_end + wiscland_end + wiscland_end:ndvi_end",
+    "case_ ~ (log(sl_) + cos(ta_)):tod_start_ + east_end + east2_end + 
+      north_end + dist_end + wiscland_end + wiscland_end:ndvi_end"
   )
 
 formulas <- paste(formulas, "+ strata(step_id_)")
@@ -118,7 +131,9 @@ formula_df <- data.frame(
 )
 
 ## Fit models for each formula
-res_model <- foreach(i = 1:nrow(formula_df)) %do%
+results <- list()
+
+results$models <- foreach(i = 1:nrow(formula_df)) %do%
   {
     cat("Fitting formula", i, "\n")
     fit_mods(deer_mvt, formula_df[i, 1])
@@ -134,28 +149,26 @@ n_models <- nrow(formula_df)
 n_deer <- nrow(deer_mvt)
 n_sim <- 10
 
-res_sim <- foreach(m = 1:n_models) %do%
+results$sim <- foreach(m = 1:n_models) %do%
   {
     cat("Simulating model:", formula_df$name[m], "\n")
     run_simulations(
       deer_mvt,
-      model_res[[m]],
+      results$models[[m]],
       env_raster,
       ndvi_rasters,
       n_sim = n_sim,
       n_deer = nrow(deer_mvt)
     )
   }
-names(res_sim) <- formula_df$name
-
-saveRDS(res_sim, "results_sim.rds")
+names(results$sim) <- formula_df$name
 
 # Step 5: Estimate UD overlap
-cat("Estimating overlap of UDs...\n")
+cat("Estimating overlap of UDs and CTMMs...\n")
 
-res_ud <- foreach(m = 1:n_models) %do%
+results$ud <- foreach(m = 1:n_models) %do%
   {
-    cat("UD overlap for model:", formula_df$name[m], "\n")
+    cat("UD and CTMM overlap for model:", formula_df$name[m], "\n")
     foreach(
       i = 1:n_deer,
       .packages = c("amt", "terra", "sf", "tidyverse", "foreach", "ctmm")
@@ -163,22 +176,17 @@ res_ud <- foreach(m = 1:n_models) %do%
       {
         overlap_ud(
           deer_mvt$stp_test[[i]],
-          res_sim[[m]][[i]],
+          results$sim[[m]][[i]],
           n_sim = n_sim
         )
-        #prox <- prox_path(ud, n_sim = n_sim)
-
-        #list(bat = ud$bat_coeff, prox = prox)
       }
   }
-names(res_ud) <- formula_df$name
-
-saveRDS(res_ud, "results_ud.rds")
+names(results$ud) <- formula_df$name
 
 # Step 6: Calculate Energy Scores
 cat("Calculating Energy Scores...\n")
 
-res_es <- foreach(m = 1:n_models, .combine = "rbind") %do%
+results$es <- foreach(m = 1:n_models, .combine = "rbind") %do%
   {
     cat("Energy Score for model:", formula_df$name[m], "\n")
 
@@ -187,7 +195,7 @@ res_es <- foreach(m = 1:n_models, .combine = "rbind") %do%
       .combine = "c"
     ) %do%
       {
-        sim_i <- res_sim[[m]][[i]]
+        sim_i <- results$sim[[m]][[i]]
 
         # Skip if simulation failed
         if (length(sim_i) == 1 && is.na(sim_i)) {
@@ -207,31 +215,30 @@ res_es <- foreach(m = 1:n_models, .combine = "rbind") %do%
     )
   }
 
-saveRDS(res_es, "results_es.rds")
+results$es <- results$es %>%
+  group_by(deer) %>%
+  mutate(energy_skill = 1 - (energy_score / energy_score[2]))
 
-stopCluster(cl)
-
-# Plots ------------------------------------------------------------------------
-
-library(patchwork)
+# Step 7: Select best models for each deer
+cat("Selecting best models...\n")
 
 # Wrangle res_ud into a data frame
-res_bat <- foreach(m = names(res_ud), .combine = "rbind") %do%
+res_bat <- foreach(m = names(results$ud), .combine = "rbind") %do%
   {
     scores_uds <- foreach(i = 1:n_deer, .combine = "c") %do%
       {
-        if (length(res_ud[[m]][[i]]) == 1 && is.na(res_ud[[m]][[i]])) {
+        if (length(results$ud[[m]][[i]]) == 1 && is.na(results$ud[[m]][[i]])) {
           return(NA_real_)
         }
-        res_ud[[m]][[i]]$bat_uds
+        results$ud[[m]][[i]]$bat_uds
       }
 
     scores_ctmm <- foreach(i = 1:n_deer, .combine = "c") %do%
       {
-        if (length(res_ud[[m]][[i]]) == 1 && is.na(res_ud[[m]][[i]])) {
+        if (length(results$ud[[m]][[i]]) == 1 && is.na(results$ud[[m]][[i]])) {
           return(NA_real_)
         }
-        res_ud[[m]][[i]]$bat_ctmm$CI[1, 2, 2]
+        results$ud[[m]][[i]]$bat_ctmm
       }
 
     data.frame(
@@ -242,18 +249,80 @@ res_bat <- foreach(m = names(res_ud), .combine = "rbind") %do%
     )
   }
 
+res_bat$model <- factor(res_bat$model, levels = unique(res_bat$model))
+results$es$model <- factor(results$es$model, levels = unique(results$es$model))
+
+# Filter and select best model per deer
+model_selection <- res_bat %>%
+  left_join(results$es, by = c("deer", "model")) %>%
+  group_by(deer) %>%
+  mutate(
+    step1 = bat_uds > 0.8,
+    step2 = step1 & bat_ctmm > 0.8,
+    step3 = step2 & energy_skill == max(energy_skill[step2])
+  ) %>%
+  ungroup()
+
+selected <- model_selection %>%
+  filter(step3) %>%
+  select(deer, model, bat_uds, bat_ctmm, energy_skill)
+
+no_selection <- model_selection %>%
+  group_by(deer) %>%
+  summarize(
+    passed_step1 = sum(step1),
+    passed_step2 = sum(step2),
+    passed_step3 = sum(step3)
+  ) %>%
+  filter(passed_step3 == 0)
+
+# Step 8: Calculate proximity for selected models --------------------------------
+cat("Calculating proximity for selected models...\n")
+
+results$prox <- foreach(
+  r = 1:nrow(selected),
+  .packages = c("amt", "ctmm", "tidyverse", "sf", "foreach"),
+  .combine = "rbind"
+) %dopar%
+  {
+    deer_idx <- which(deer_mvt$id == selected$deer[r])
+    model_name <- as.character(selected$model[r])
+
+    obs <- deer_mvt$stp_test[[deer_idx]]
+    sim <- results$sim[[model_name]][[deer_idx]]
+
+    n_sim <- length(unique(sim$nsim))
+
+    prox_result <- prox_path(data = obs, sim = sim, n_sim = n_sim)
+
+    data.frame(
+      deer = selected$deer[r],
+      model = model_name,
+      mean_prox = prox_result[1],
+      prox_lt1 = prox_result[2]
+    )
+  }
+
+stopCluster(cl)
+
+# Plots ------------------------------------------------------------------------
+
+library(patchwork)
+
+
 # Energy score violin plot
-p_es <- ggplot(
-  res_es,
-  aes(x = as.factor(model), y = 1 - (energy_score / 500))
-) +
-  geom_violin(trim = FALSE, fill = "lightblue", alpha = 0.5) +
-  geom_jitter(width = 0.15, size = 1.5, alpha = 0.7) +
-  labs(
-    x = "Model",
-    y = "Energy Skill Score"
+es <-
+  p_es <- ggplot(
+    es,
+    aes(x = as.factor(model), y = energy_score)
   ) +
-  theme_minimal()
+    geom_jitter(width = 0.15, size = 1.5, alpha = 0.5) +
+    geom_violin(fill = "lightblue", alpha = 0.5) +
+    labs(
+      x = "Model",
+      y = "Energy Skill Score"
+    ) +
+    theme_minimal()
 
 # Bhattacharyya coefficient violin plot
 p_uds <- ggplot(res_bat, aes(x = as.factor(model), y = bat_uds)) +
@@ -278,101 +347,72 @@ p_uds
 p_ctmm
 p_es
 
+best_models <- res_bat %>%
+  group_by(deer) %>%
+  summarise(
+    best_m_uds = which.max(bat_uds),
+    best_m_ctmm = which.max(bat_ctmm),
+    best_uds = max(bat_uds),
+    best_ctmm = max(bat_ctmm)
+  )
 
-cat("Creating visualization...\n")
+best_models <- left_join(
+  best_models,
+  (es %>%
+    group_by(deer) %>%
+    summarise(
+      best_m_es = which.max(energy_score),
+      best_es = max(energy_score)
+    )),
+  by = "deer"
+)
 
-
-plot_list <- foreach(i = c(4, 5, 8, 10)) %do%
-  {
-    obs_data <- deer_mvt$stp[[i]]
-    sim_hr <- sim_res_hr[[i]]
-    sim_quad <- sim_res_ndvi[[i]]
-
-    x_range_lin <- range(c(obs_data$x1_, sim_hr$x_))
-    y_range_lin <- range(c(obs_data$y1_, sim_hr$y_))
-
-    x_range_quad <- range(c(obs_data$x1_, sim_quad$x_))
-    y_range_quad <- range(c(obs_data$y1_, sim_quad$y_))
-
-    # Linear HR model
-    p_lin <- ggplot() +
-      geom_spatraster(data = env_rasters$env_2017$Coarse_scale) +
-      xlim(x_range_lin[1] - 1000, x_range_lin[2] + 1000) +
-      ylim(y_range_lin[1] - 1000, y_range_lin[2] + 1000) +
-      geom_path(
-        data = sim_hr,
-        aes(x = x_, y = y_, group = nsim),
-        color = "black",
-        linewidth = 0.3,
-        alpha = 0.3
-      ) +
-      geom_path(
-        data = obs_data,
-        aes(x = x1_, y = y1_),
-        color = 'white',
-        linewidth = 0.8,
-        alpha = 0.5
-      ) +
-      labs(title = paste0("Deer ", i, " — Linear HR")) +
-      theme_minimal() +
-      theme(
-        plot.title = element_text(size = 12, face = "bold"),
-        axis.title = element_blank(),
-        axis.text = element_blank(),
-        legend.position = "none"
-      )
-
-    # Quadratic HR model
-    p_ndvi <- ggplot() +
-      geom_spatraster(data = env_rasters$env_2017$Coarse_scale) +
-      xlim(x_range_quad[1] - 1000, x_range_quad[2] + 1000) +
-      ylim(y_range_quad[1] - 1000, y_range_quad[2] + 1000) +
-      geom_path(
-        data = sim_quad,
-        aes(x = x_, y = y_, group = nsim),
-        color = "black",
-        linewidth = 0.3,
-        alpha = 0.3
-      ) +
-      geom_path(
-        data = obs_data,
-        aes(x = x1_, y = y1_),
-        color = 'white',
-        linewidth = 0.8,
-        alpha = 0.5
-      ) +
-      labs(title = paste0("Deer ", i, " — NDVI + HR")) +
-      theme_minimal() +
-      theme(
-        plot.title = element_text(size = 12, face = "bold"),
-        axis.title = element_blank(),
-        axis.text = element_blank(),
-        legend.position = "none"
-      )
-
-    list(p_lin, p_ndvi)
-  }
+best_models$best_m_uds %>% table()
+best_models$best_m_ctmm %>% table()
+best_models$best_m_es %>% table()
 
 # Single deer plot
 ggplot() +
-  geom_spatraster(data = env_rasters$env_2017$Coarse_scale) +
-  xlim(
-    min(sim_res_hr_quad[[3]]$x_) - 1000,
-    max(sim_res_hr_quad[[3]]$x_) + 1000
-  ) +
-  ylim(
-    min(sim_res_hr_quad[[3]]$y_) - 1000,
-    max(sim_res_hr_quad[[3]]$y_) + 1000
-  ) +
   geom_path(
-    data = deer_mvt$stp[[3]],
+    data = deer_mvt$stp_test[[14]],
     aes(x = x1_, y = y1_),
     color = 'black',
     alpha = 0.5
   ) +
   geom_path(
-    data = sim_res_hr_quad[[3]],
-    aes(x = x_, y = y_, group = nsim),
+    data = filter(results$sim[[11]][[14]], nsim == 7),
+    aes(x = x_, y = y_),
     color = "orange",
-    alpha = 0.1
-  )
+    alpha = 0.5
+  ) +
+  theme_minimal()
+
+ggplot() +
+  geom_path(
+    data = deer_mvt$stp_test[[14]],
+    aes(x = x1_, y = y1_),
+    color = 'black',
+    alpha = 0.5
+  ) +
+  geom_path(
+    data = results$sim[[11]][[14]],
+    aes(x = x_, y = y_, group = n_sim),
+    color = "orange",
+    alpha = 0.2
+  ) +
+  theme_minimal()
+
+ggplot() +
+  geom_path(
+    data = deer_mvt$stp_test[[4]],
+    aes(x = x1_, y = y1_),
+    color = 'black',
+    alpha = 0.5
+  ) +
+  geom_path(
+    data = results$sim[[2]][[4]],
+    aes(x = x_, y = y_, group = n_sim),
+    color = "orange",
+    alpha = 0.2
+  ) +
+  theme_minimal()
