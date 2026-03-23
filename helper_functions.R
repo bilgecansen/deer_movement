@@ -185,24 +185,48 @@ simulate_movement <- function(
     {
       burst_data <- step_data %>% filter(burst_ == b)
 
-      sim_days <- unique(as.Date(burst_data$t1_, tz = 'CST6CDT'))
-      sim_days_all <- seq.Date(first(sim_days), last(sim_days), by = 1)
+      # Split burst into monthly groups
+      burst_data$month_group <- format(burst_data$t1_, "%Y-%m")
+      months <- unique(burst_data$month_group)
 
-      # Start from the first step of this burst
-      sim_i <- burst_data[1, c('x1_', 'y1_', 't1_')]
-      names(sim_i) <- c('x_', 'y_', 't_')
+      sim_burst <- NULL
 
-      for (d in sim_days_all) {
+      for (mo in months) {
+        mo_data <- burst_data %>% filter(month_group == mo)
+        n_steps <- nrow(mo_data)
+
+        # Set NDVI for this month
+        mo_mid <- median(mo_data$t1_)
         env_test$ndvi <- resample(
           ndvi_test[[which.min(abs(
-            as.Date(d, origin = "1970-01-01") - terra::time(ndvi_test)
+            as.Date(mo_mid, tz = 'America/Chicago') - terra::time(ndvi_test)
           ))]],
           env_test,
           method = 'near'
         )
 
-        start_pt_sim <- sim_i[nrow(sim_i), ] |>
-          amt::make_track(.x = x_, .y = y_, .t = t_, crs = crs(env_test)) |>
+        # Start from previous chunk's last point, or burst start
+        if (is.null(sim_burst)) {
+          start_row <- mo_data[1, c('x1_', 'y1_', 't1_')]
+          start_pt <- amt::make_track(
+            start_row,
+            .x = x1_,
+            .y = y1_,
+            .t = t1_,
+            crs = crs(env_test)
+          )
+        } else {
+          start_row <- sim_burst[nrow(sim_burst), ]
+          start_pt <- amt::make_track(
+            start_row,
+            .x = x_,
+            .y = y_,
+            .t = t_,
+            crs = crs(env_test)
+          )
+        }
+
+        start_pt <- start_pt |>
           amt::make_start() |>
           amt::mutate(dt = hours(4))
 
@@ -219,28 +243,27 @@ simulate_movement <- function(
                 days = lubridate::yday(t2_) - min(lubridate::yday(t2_)) + 1
               )
           },
-          start = start_pt_sim,
+          start = start_pt,
           landscape = "discrete",
           as.rast = TRUE
         )
 
         sim_result <- tryCatch(
-          amt::simulate_path(kernel, n = 6),
+          amt::simulate_path(kernel, n = n_steps),
           error = function(err) NA
         )
 
-        if (!any(is.na(sim_result))) {
-          sim_filtered <- sim_result %>%
-            filter(
-              as.Date(t_, tz = 'America/Chicago') ==
-                as.Date(d, origin = "1970-01-01")
-            )
-          sim_i <- bind_rows(sim_i, sim_filtered[, -4])
+        if (any(is.na(sim_result))) {
+          return(NULL)
         }
+
+        sim_burst <- bind_rows(
+          sim_burst,
+          sim_result %>% select(x_, y_, t_)
+        )
       }
 
-      sim_i[-1, ] %>%
-        mutate(burst_ = b)
+      sim_burst %>% mutate(burst_ = b)
     }
 
   sim_all_bursts
@@ -310,21 +333,32 @@ run_simulations <- function(
     )
   })
 
+  # Pre-extract per-deer data so each worker only receives its own slice
+  deer_rows <- lapply(1:n_deer, function(i) deer_data[i, ])
+  deer_coeff <- model_results$coeff
+  deer_iss <- model_results$iss
+  deer_train <- deer_data$stp.var.train
+
   foreach(
     i = 1:n_deer,
+    crop_i = deer_crops,
+    deer_i = deer_rows,
+    coeff_i = deer_coeff,
+    iss_i = deer_iss,
+    train_i = deer_train,
     .packages = c("amt", "terra", "sf", "dplyr", "foreach"),
     .export = c("simulate_movement", "rename_landcover_coefs")
   ) %dopar%
     {
-      if (length(model_results$coeff[[i]]) == 1) {
+      if (length(coeff_i) == 1) {
         return(NA)
       }
 
-      # Each worker only unwraps a small cropped raster
-      env_local <- terra::unwrap(deer_crops[[i]]$env)
-      ndvi_local <- terra::unwrap(deer_crops[[i]]$ndvi)
+      # Each worker only unwraps its own small cropped raster
+      env_local <- terra::unwrap(crop_i$env)
+      ndvi_local <- terra::unwrap(crop_i$ndvi)
 
-      coefs <- model_results$iss[[i]]$model$coefficients
+      coefs <- iss_i$model$coefficients
       names(coefs) <- rename_landcover_coefs(names(coefs))
       coefs <- coefs[!is.na(coefs)]
 
@@ -336,7 +370,7 @@ run_simulations <- function(
       dummy_sim <- make_issf_model(coefs = coefs)
       mm_names <- colnames(model.matrix(
         amt:::ssf_formula(dummy_sim$model$formula),
-        data = deer_data$stp.var.train[[i]]
+        data = train_i
       ))
 
       # For each coef name,
@@ -359,14 +393,14 @@ run_simulations <- function(
 
       model_sim <- make_issf_model(
         coefs = coefs,
-        sl = model_results$iss[[i]]$sl_,
-        ta = model_results$iss[[i]]$ta_
+        sl = iss_i$sl_,
+        ta = iss_i$ta_
       )
 
       foreach(h = 1:n_sim, .combine = "rbind") %do%
         {
           res <- simulate_movement(
-            deer_data[i, ],
+            deer_i,
             env_local,
             ndvi_local,
             model_sim,
@@ -489,28 +523,74 @@ overlap_ud <- function(data, sim, n_sim) {
   bat_ctmm <- overlap(list(ms1, ms2_avg))$CI[1, 2, 2]
 
   list(
-    data = z1,
-    sim = z2,
-    ctmm_data = ms1,
-    ctmm_sim = ms2,
-    uds = list(obs_uds = z1_uds, sim_uds = z2_uds),
     bat_uds = bat_uds,
     bat_ctmm = bat_ctmm
   )
 }
 
 #' Estimate proximity between observed and a simulated path
-#' @param res_ud output of overlap_ud function
-#' @param n_sim Number of simulated paths
-prox_path <- function(res_ud, n_sim) {
-  z1 <- res_ud$data
-  z2 <- res_ud$sim
+#' @param data Observed paths
+#' @param sim Simulated paths
+#' @param n_sim number of simulated paths
+prox_path <- function(data, sim, n_sim) {
+  z1 <- data |>
+    select("x1_", "y1_", "t1_") |>
+    st_as_sf(coords = c("x1_", "y1_"), crs = 6610) |>
+    st_transform(4326) |> # Transform to WGS84 lat/long
+    mutate(
+      longitude = st_coordinates(geometry)[, 1],
+      latitude = st_coordinates(geometry)[, 2],
+      timestamp = t1_
+    ) |>
+    st_drop_geometry() |>
+    as.data.frame() |>
+    as.telemetry()
+
+  z2 <- foreach(k = 1:n_sim) %do%
+    {
+      tel <- sim |>
+        filter(nsim == k) |>
+        select("x_", "y_", "t_") |>
+        st_as_sf(coords = c("x_", "y_"), crs = 6610) |>
+        st_transform(4326) |> # Transform to WGS84 lat/long
+        mutate(
+          longitude = st_coordinates(geometry)[, 1],
+          latitude = st_coordinates(geometry)[, 2],
+          timestamp = t_
+        ) |>
+        st_drop_geometry() |>
+        as.data.frame() |>
+        as.telemetry()
+
+      projection(tel) <- projection(z1)
+
+      tel
+    }
+
+  # Fit single guestiamted ctmm model
+  ms1 <- ctmm.select(
+    z1,
+    ctmm.guess(z1, interactive = FALSE),
+    verbose = TRUE,
+    cores = 1
+  )
+  ms1 <- ms1[[1]]
+
+  ms2 <- lapply(z2, function(z) {
+    ctmm.select(
+      z,
+      ctmm.guess(z, interactive = FALSE),
+      verbose = TRUE,
+      cores = 1
+    )
+  })
+  ms2 <- map(ms2, function(x) x[[1]])
 
   prox <- foreach(k = 1:n_sim, .combine = "rbind") %do%
     {
       proximity(
         list(z1, z2[[k]]),
-        list(res_ud$ctmm_data, res_ud$ctmm_sim[[k]][[1]])
+        list(ms1, ms2[[k]])
       )
     }
 
