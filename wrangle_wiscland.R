@@ -7,6 +7,13 @@ library(terra)
 
 # Load categorical raster
 env_raster <- rast("env/wiscland/wiscland2.tif")
+
+# Reclassify: merge hay -> agriculture, other.forest -> other
+levs <- cats(env_raster)[[1]]
+rcl <- matrix(c(8, 2, 4, 3), ncol = 2, byrow = TRUE)
+env_raster <- classify(env_raster, rcl)
+levs <- levs[!levs$label %in% c("hay", "other.forest"), ]
+levels(env_raster) <- levs
 names(env_raster) <- "wiscland"
 
 # Create binary indicator layers for each non-reference level
@@ -17,51 +24,23 @@ names(agriculture) <- "agriculture"
 grassland <- ifel(env_raster$wiscland == "grassland", 1, 0)
 names(grassland) <- "grassland"
 
-hay <- ifel(env_raster$wiscland == "hay", 1, 0)
-names(hay) <- "hay"
-
 oak <- ifel(env_raster$wiscland == "oak", 1, 0)
 names(oak) <- "oak"
 
 central.hardwoods <- ifel(env_raster$wiscland == "central.hardwoods", 1, 0)
 names(central.hardwoods) <- "central.hardwoods"
 
-other.forest <- ifel(env_raster$wiscland == "other.forest", 1, 0)
-names(other.forest) <- "other.forest"
-
 other <- ifel(env_raster$wiscland == "other", 1, 0)
 names(other) <- "other"
-
-# Distance to forest edge (central.hardwoods + other.forest)
-forest_binary <- ifel(
-  env_raster$wiscland == "central.hardwoods" |
-    env_raster$wiscland == "other.forest",
-  1,
-  0
-)
-dist_to_forest <- terra::distance(ifel(forest_binary == 1, 1, NA), unit = "m")
-dist_to_nonforest <- terra::distance(
-  ifel(forest_binary == 0, 1, NA),
-  unit = "m"
-)
-dist_forest_edge <- dist_forest_edge <- min(c(
-  dist_to_forest,
-  dist_to_nonforest
-))
-
-names(dist_forest_edge) <- "dist_forest_edge"
 
 # Stack all layers together
 env_binary <- c(
   env_raster,
   agriculture,
   grassland,
-  hay,
   oak,
   central.hardwoods,
-  other.forest,
-  other,
-  dist_forest_edge
+  other
 )
 
 # Save
