@@ -16,6 +16,7 @@ library(sf)
 library(doParallel)
 library(ctmm)
 library(scoringRules)
+library(furrr)
 
 # Load data --------------------------------------------------------------------
 
@@ -166,21 +167,31 @@ names(results$sim) <- formula_df$name
 # Step 5: Estimate UD overlap
 cat("Estimating overlap of UDs and CTMMs...\n")
 
+plan(multisession, workers = detectCores() - 1)
+
 results$ud <- foreach(m = 1:n_models) %do%
   {
     cat("UD and CTMM overlap for model:", formula_df$name[m], "\n")
-    foreach(
-      i = 1:n_deer,
-      .packages = c("amt", "terra", "sf", "tidyverse", "foreach", "ctmm")
-    ) %dopar%
-      {
-        overlap_ud(
-          deer_mvt$stp_test[[i]],
-          results$sim[[m]][[i]],
-          n_sim = n_sim
-        )
-      }
+
+    sim_m <- results$sim[[m]]
+    stp_test <- deer_mvt$stp_test
+
+    ud_m <- future_map(
+      1:n_deer,
+      function(i) {
+        overlap_ud(stp_test[[i]], sim_m[[i]], n_sim = n_sim)
+      },
+      .options = furrr_options(
+        packages = c("amt", "terra", "sf", "tidyverse", "ctmm"),
+        stdout = FALSE,
+        seed = 1919
+      )
+    )
+
+    gc()
+    ud_m
   }
+
 names(results$ud) <- formula_df$name
 
 # Step 6: Calculate Energy Scores
@@ -276,53 +287,24 @@ no_selection <- model_selection %>%
   ) %>%
   filter(passed_step3 == 0)
 
-# Step 8: Calculate proximity for selected models --------------------------------
-cat("Calculating proximity for selected models...\n")
-
-results$prox <- foreach(
-  r = 1:nrow(selected),
-  .packages = c("amt", "ctmm", "tidyverse", "sf", "foreach"),
-  .combine = "rbind"
-) %dopar%
-  {
-    deer_idx <- which(deer_mvt$id == selected$deer[r])
-    model_name <- as.character(selected$model[r])
-
-    obs <- deer_mvt$stp_test[[deer_idx]]
-    sim <- results$sim[[model_name]][[deer_idx]]
-
-    n_sim <- length(unique(sim$nsim))
-
-    prox_result <- prox_path(data = obs, sim = sim, n_sim = n_sim)
-
-    data.frame(
-      deer = selected$deer[r],
-      model = model_name,
-      mean_prox = prox_result[1],
-      prox_lt1 = prox_result[2]
-    )
-  }
-
 stopCluster(cl)
 
 # Plots ------------------------------------------------------------------------
 
 library(patchwork)
 
-
 # Energy score violin plot
-es <-
-  p_es <- ggplot(
-    es,
-    aes(x = as.factor(model), y = energy_score)
+p_es <- ggplot(
+  results$es,
+  aes(x = as.factor(model), y = energy_skill)
+) +
+  geom_jitter(width = 0.15, size = 1.5, alpha = 0.5) +
+  geom_violin(fill = "lightblue", alpha = 0.5) +
+  labs(
+    x = "Model",
+    y = "Energy Skill Score"
   ) +
-    geom_jitter(width = 0.15, size = 1.5, alpha = 0.5) +
-    geom_violin(fill = "lightblue", alpha = 0.5) +
-    labs(
-      x = "Model",
-      y = "Energy Skill Score"
-    ) +
-    theme_minimal()
+  theme_minimal()
 
 # Bhattacharyya coefficient violin plot
 p_uds <- ggplot(res_bat, aes(x = as.factor(model), y = bat_uds)) +
@@ -358,7 +340,7 @@ best_models <- res_bat %>%
 
 best_models <- left_join(
   best_models,
-  (es %>%
+  (results$es %>%
     group_by(deer) %>%
     summarise(
       best_m_es = which.max(energy_score),
@@ -374,31 +356,16 @@ best_models$best_m_es %>% table()
 # Single deer plot
 ggplot() +
   geom_path(
-    data = deer_mvt$stp_test[[14]],
+    data = deer_mvt$stp_test[[4]],
     aes(x = x1_, y = y1_),
     color = 'black',
     alpha = 0.5
   ) +
   geom_path(
-    data = filter(results$sim[[11]][[14]], nsim == 7),
+    data = filter(results$sim[[9]][[4]], nsim == 1),
     aes(x = x_, y = y_),
     color = "orange",
     alpha = 0.5
-  ) +
-  theme_minimal()
-
-ggplot() +
-  geom_path(
-    data = deer_mvt$stp_test[[14]],
-    aes(x = x1_, y = y1_),
-    color = 'black',
-    alpha = 0.5
-  ) +
-  geom_path(
-    data = results$sim[[11]][[14]],
-    aes(x = x_, y = y_, group = n_sim),
-    color = "orange",
-    alpha = 0.2
   ) +
   theme_minimal()
 
@@ -410,7 +377,37 @@ ggplot() +
     alpha = 0.5
   ) +
   geom_path(
-    data = results$sim[[2]][[4]],
+    data = results$sim[[9]][[4]],
+    aes(x = x_, y = y_, group = n_sim),
+    color = "orange",
+    alpha = 0.2
+  ) +
+  theme_minimal()
+
+ggplot() +
+  geom_path(
+    data = deer_mvt$stp_test[[9]],
+    aes(x = x1_, y = y1_),
+    color = 'black',
+    alpha = 0.5
+  ) +
+  geom_path(
+    data = filter(results$sim[[9]][[9]], nsim == 1),
+    aes(x = x_, y = y_),
+    color = "orange",
+    alpha = 0.5
+  ) +
+  theme_minimal()
+
+ggplot() +
+  geom_path(
+    data = deer_mvt$stp_test[[9]],
+    aes(x = x1_, y = y1_),
+    color = 'black',
+    alpha = 0.5
+  ) +
+  geom_path(
+    data = results$sim[[9]][[9]],
     aes(x = x_, y = y_, group = n_sim),
     color = "orange",
     alpha = 0.2

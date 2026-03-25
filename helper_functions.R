@@ -114,10 +114,10 @@ extract_step_variables <- function(
           wiscland_start = factor(wiscland_start, levels = lc_levels),
           wiscland_end = factor(wiscland_end, levels = lc_levels)
         ) %>%
-        amt::time_of_day(include.crepuscule = F) %>%
+        amt::time_of_day(include.crepuscule = F, where = "both") %>%
         mutate(
-          tod_end_day = as.integer(tod_end_ == "day"),
-          tod_end_night = as.integer(tod_end_ == "night"),
+          tod_start_day = as.integer(tod_start_ == "day"),
+          tod_start_night = as.integer(tod_start_ == "night"),
           days = lubridate::yday(t2_) - min(lubridate::yday(t2_)) + 1
         )
       data_ssf
@@ -236,10 +236,10 @@ simulate_movement <- function(
           fun = function(xy, map) {
             xy %>%
               amt::extract_covariates(map, where = "both") %>%
-              amt::time_of_day(include.crepuscule = FALSE) %>%
+              amt::time_of_day(include.crepuscule = FALSE, where = "both") %>%
               mutate(
-                tod_end_day = as.integer(tod_end_ == "day"),
-                tod_end_night = as.integer(tod_end_ == "night"),
+                tod_start_day = as.integer(tod_start_ == "day"),
+                tod_start_night = as.integer(tod_start_ == "night"),
                 days = lubridate::yday(t2_) - min(lubridate::yday(t2_)) + 1
               )
           },
@@ -494,24 +494,25 @@ overlap_ud <- function(data, sim, n_sim) {
       tel
     }
 
-  # Fit single guestiamted ctmm model
+  # Fit single guestimated ctmm model
   ms1 <- ctmm.select(
     z1,
     ctmm.guess(z1, interactive = FALSE),
-    verbose = TRUE,
+    verbose = F,
     cores = 1
   )
-  ms1 <- ms1[[1]]
 
-  ms2 <- lapply(z2, function(z) {
-    ctmm.select(
-      z,
-      ctmm.guess(z, interactive = FALSE),
-      verbose = TRUE,
-      cores = 1
+  ms2 <- map(z2, function(z) {
+    tryCatch(
+      ctmm.fit(z, ms1),
+      error = function(e) NULL
     )
   })
-  ms2 <- map(ms2, function(x) x[[1]])
+
+  # Remove failed fits and their corresponding telemetry data
+  keep <- !map_lgl(ms2, is.null)
+  ms2 <- ms2[keep]
+  z2 <- z2[keep]
   ms2_avg <- mean(ms2)
 
   z1_uds <- akde(z1, ms1)
