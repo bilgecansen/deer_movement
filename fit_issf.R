@@ -1,11 +1,23 @@
 #' @description
-#' Simplified deer movement analysis code
-#' 1. View raw deer movement data
-#' 2. Create random steps with environmental covariates
-#' 3. Fit iSSF models
-#' 4. Simulate movement from models
-#' 5. Estimate and compare utilization distributions
-#' 6. Calculate Energy Scores
+#' Deer movement analysis code
+#' 1. Fit iSSF models
+#' 2. Simulate movement from models
+#' 3. Estimate and compare utilization distributions
+#' 4. Calculate Energy Scores
+
+# Parse command line arguments -------------------------------------------------
+args <- commandArgs(trailingOnly = TRUE)
+
+if (length(args) != 2) {
+  stop(
+    "Usage: Rscript fit_issf.R <start_row> <end_row>\nExample: Rscript fit_issf.R 1 30"
+  )
+}
+
+row_start <- as.integer(args[1])
+row_end <- as.integer(args[2])
+
+cat(sprintf("Running rows %d to %d\n", row_start, row_end))
 
 # Load packages ----------------------------------------------------------------
 library(amt)
@@ -16,11 +28,14 @@ library(sf)
 library(ctmm)
 library(scoringRules)
 library(furrr)
+library(parallel)
 
 # helper functions
 source("helper_functions.R")
 
 # Load data --------------------------------------------------------------------
+
+start_time <- Sys.time()
 
 # landscape data
 env_raster <- terra::rast("env/wiscland/wiscland2_binary.tif")
@@ -44,11 +59,7 @@ ndvi_rasters <- list(
 )
 
 # Deer movement data
-raw_data <- readRDS('Example_code/SW_filtered_deer.RData')
-
-# Prepare sample data
-deer_mvt <- raw_data %>%
-  dplyr::filter(year %in% c(2017, 2018))
+deer_mvt <- readRDS("data_deer_1_119.rds")
 
 # Separate training and test splits
 deer_mvt <- deer_mvt %>%
@@ -56,54 +67,11 @@ deer_mvt <- deer_mvt %>%
     stp_train = purrr::map(stp, ~ .x[1:ceiling(nrow(.x) * 0.7), ]),
     stp_test = purrr::map(stp, ~ .x[(ceiling(nrow(.x) * 0.7) + 1):nrow(.x), ])
   ) %>%
-  dplyr::slice(1:30)
+  dplyr::slice(row_start:row_end)
 
 # Main workflow ----------------------------------------------------------------
 
-# Set seed for reproducibility
-set.seed(1919)
-
-# Step 1: Generate random steps
-cat("Generating random steps for train...\n")
-deer_mvt <- make_random_pt_extraction(
-  data = deer_mvt,
-  n_pts = 10,
-  water = water_binary,
-  stp_col = "stp_train",
-  output_col = "stp.random.train"
-)
-
-cat("Generating random steps for test...\n")
-deer_mvt <- make_random_pt_extraction(
-  data = deer_mvt,
-  n_pts = 10,
-  water = water_binary,
-  stp_col = "stp_test",
-  output_col = "stp.random.test"
-)
-
-# Step 2: Extract environmental variables
-cat("Extracting environmental variables for train...\n")
-deer_mvt <- extract_step_variables(
-  data = deer_mvt,
-  env = env_raster,
-  ndvi_list = ndvi_rasters,
-  random_col = "stp.random.train",
-  output_col = "stp.var.train"
-)
-
-cat("Extracting environmental variables for test...\n")
-deer_mvt <- extract_step_variables(
-  data = deer_mvt,
-  env = env_raster,
-  ndvi_list = ndvi_rasters,
-  random_col = "stp.random.test",
-  output_col = "stp.var.test"
-)
-
-saveRDS(deer_mvt, "data_deer.rds")
-
-# Step 3: Fit models
+# Step 1: Fit models
 cat("Fitting models...\n")
 
 formulas <-
@@ -137,14 +105,14 @@ results$models <- purrr::map(1:nrow(formula_df), function(i) {
   fit_mods(deer_mvt, formula_df[i, 1])
 })
 
-# Step 4: Simulate movement
+# Step 2: Simulate movement
 cat("Simulating movement...\n")
 
 n_models <- nrow(formula_df)
 n_deer <- nrow(deer_mvt)
 n_sim <- 10
 
-future::plan(multisession, workers = detectCores() - 1)
+future::plan(multisession, workers = parallel::detectCores() - 1)
 
 results$sim <- purrr::map(1:n_models, function(m) {
   cat("Simulating model:", formula_df$name[m], "\n")
@@ -160,7 +128,7 @@ results$sim <- purrr::map(1:n_models, function(m) {
 })
 names(results$sim) <- formula_df$name
 
-# Step 5: Estimate UD overlap
+# Step 3: Estimate UD overlap
 cat("Estimating overlap of UDs and CTMMs...\n")
 
 results$ud <- purrr::map(1:n_models, function(m) {
@@ -177,7 +145,7 @@ results$ud <- purrr::map(1:n_models, function(m) {
     .options = furrr_options(
       packages = c("amt", "terra", "sf", "tidyverse", "ctmm"),
       stdout = FALSE,
-      seed = 1919
+      seed = T
     )
   )
 
@@ -187,7 +155,7 @@ results$ud <- purrr::map(1:n_models, function(m) {
 
 names(results$ud) <- formula_df$name
 
-# Step 6: Calculate Energy Scores
+# Step 4: Calculate Energy Scores
 cat("Calculating Energy Scores...\n")
 
 results$es <- foreach(m = 1:n_models, .combine = "rbind") %do%
@@ -219,4 +187,12 @@ results$es <- results$es %>%
   dplyr::group_by(deer) %>%
   dplyr::mutate(energy_skill = 1 - (energy_score / energy_score[2]))
 
-saveRDS(results, "results_issf.rds")
+saveRDS(results, sprintf("results_issf_%d_%d.rds", row_start, row_end))
+
+elapsed <- difftime(Sys.time(), start_time, units = "mins")
+cat(sprintf(
+  "Rows %d-%d completed in %.1f minutes\n",
+  row_start,
+  row_end,
+  elapsed
+))
