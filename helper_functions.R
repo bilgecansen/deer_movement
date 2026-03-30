@@ -201,27 +201,30 @@ fit_mods <- function(data, formula) {
 }
 
 #' Simulate a single movement path
-#' @param deer_data Deer movement data (e.g., deer_mvt)
+#' @param stp_data Step data dataframe
+#' @param x_median Median x coordinate of home range center
+#' @param y_median Median y coordinate of home range center
 #' @param env_test Environmental rasters for test data
 #' @param ndvi_test ndvi rasters for test data
 #' @param issf_train Fitted iSSF model
 simulate_movement <- function(
-  deer_data,
+  stp_data,
+  x_median,
+  y_median,
   env_test,
   ndvi_test,
-  issf_train,
-  stp_col = "stp_test"
+  issf_train
 ) {
   # Calculate distance to home range center
   median_pt <- terra::vect(
-    cbind(deer_data$x_median, deer_data$y_median),
+    cbind(x_median, y_median),
     crs = terra::crs(env_test[[1]])
   )
 
   env_test$HR <- NA
   env_test$HR <- terra::distance(env_test$HR, median_pt) / 1000
 
-  step_data <- deer_data[[stp_col]][[1]]
+  step_data <- stp_data
   bursts <- unique(step_data$burst_)
 
   # Simulate each burst separately, then combine
@@ -287,7 +290,7 @@ simulate_movement <- function(
           },
           start = start_pt,
           landscape = "discrete",
-          as.rast = TRUE
+          as.rast = F
         )
 
         sim_result <- tryCatch(
@@ -343,122 +346,54 @@ rename_landcover_coefs <- function(
 }
 
 #' Run simulate_movement across all deer and replications for a given model
-#' @param deer_data Deer movement data (e.g., deer_mvt)
-#' @param model_results List of model results from fitting step
-#' @param env Environment raster to pass to simulate_movement
-#' @param ndvi_list Named list of NDVI rasters
-#' @param n_deer Number of deers to simulate
+#' @param deer_inputs_base List of per-deer data (cropped rasters, stp_test, coordinates)
+#' @param model_sims List of pre-built simulation models per deer (NULL for skipped deer)
 #' @param n_sim Number of simulations per deer
 run_simulations <- function(
-  deer_data,
-  model_results,
-  env,
-  ndvi_list,
-  n_deer = nrow(deer_data),
+  deer_inputs_base,
+  model_sims,
   n_sim = 10
 ) {
-  # Pre-crop rasters per deer in main process (small memory footprint)
-  deer_crops <- purrr::map(1:n_deer, function(i) {
-    crop_extent <- sf::st_buffer(
-      sf::st_as_sf(
-        deer_data$stp_test[[i]],
-        coords = c('x1_', 'y1_'),
-        crs = 6610
-      ),
-      5000
-    )
-
-    ndvi_year <- ndvi_list[[paste("ndvi", deer_data[i, ]$year, sep = "_")]]
-
-    list(
-      env = terra::wrap(terra::crop(env, crop_extent)),
-      ndvi = terra::wrap(terra::crop(ndvi_year, crop_extent))
-    )
+  # Combine base inputs with model-specific info
+  deer_inputs <- purrr::map(1:length(deer_inputs_base), function(i) {
+    input <- deer_inputs_base[[i]]
+    input$skip <- is.null(model_sims[[i]])
+    input$model_sim <- model_sims[[i]]
+    input
   })
 
-  # Pre-extract per-deer data so each worker only receives its own slice
-  deer_rows <- purrr::map(1:n_deer, function(i) deer_data[i, ])
-  deer_coeff <- model_results$coeff
-  deer_iss <- model_results$iss
-  deer_train <- deer_data$stp.var.train
-
   furrr::future_map(
-    1:n_deer,
-    function(i) {
-      crop_i <- deer_crops[[i]]
-      deer_i <- deer_rows[[i]]
-      coeff_i <- deer_coeff[[i]]
-      iss_i <- deer_iss[[i]]
-      train_i <- deer_train[[i]]
-
-      if (length(coeff_i) == 1) {
+    deer_inputs,
+    function(input) {
+      if (input$skip) {
         return(NA)
       }
 
-      # Each worker only unwraps its own small cropped raster
-      env_local <- terra::unwrap(crop_i$env)
-      ndvi_local <- terra::unwrap(crop_i$ndvi)
-
-      coefs <- iss_i$model$coefficients
-      names(coefs) <- rename_landcover_coefs(names(coefs))
-      coefs <- coefs[!is.na(coefs)]
-
-      # Fix interaction term ordering: model.matrix() may order terms in
-      # interactions (e.g., cos(ta_):tod_end_day) differently than the
-      # coefficient names from the fitted model (e.g., tod_end_day:cos(ta_)).
-      # We build a dummy model, check what model.matrix() actually produces
-      # using the training data, and swap any mismatched interaction terms.
-      dummy_sim <- amt::make_issf_model(coefs = coefs)
-      mm_names <- colnames(model.matrix(
-        amt:::ssf_formula(dummy_sim$model$formula),
-        data = train_i
-      ))
-
-      # For each coef name,
-      # if it doesn't match mm_names but swapping does, swap it
-      for (idx in seq_along(coefs)) {
-        if (
-          grepl(":", names(coefs)[idx]) && !(names(coefs)[idx] %in% mm_names)
-        ) {
-          parts <- strsplit(names(coefs)[idx], ":")[[1]]
-          perms <- combinat::permn(parts)
-          for (p in perms) {
-            candidate <- paste(p, collapse = ":")
-            if (candidate %in% mm_names) {
-              names(coefs)[idx] <- candidate
-              break
-            }
-          }
-        }
-      }
-
-      # issf model to use in sims
-      model_sim <- amt::make_issf_model(
-        coefs = coefs,
-        sl = iss_i$sl_,
-        ta = iss_i$ta_
-      )
+      env_local <- terra::unwrap(input$crop_env)
+      ndvi_local <- terra::unwrap(input$crop_ndvi)
 
       foreach(h = 1:n_sim, .combine = "rbind") %do%
         {
           res <- simulate_movement(
-            deer_i,
-            env_local,
-            ndvi_local,
-            model_sim,
-            stp_col = "stp_test"
+            stp_data = input$stp_test,
+            x_median = input$x_median,
+            y_median = input$y_median,
+            env_test = env_local,
+            ndvi_test = ndvi_local,
+            issf_train = input$model_sim
           )
           res$nsim <- h
           res
         }
     },
     .options = furrr_options(
-      packages = c("amt", "terra", "sf", "tidyverse"),
+      packages = c("amt", "terra", "sf", "dplyr", "lubridate", "foreach"),
       stdout = FALSE,
-      seed = T
+      seed = TRUE
     )
   )
 }
+
 
 #' Calculate mean Energy Score between observed and simulated paths
 #' @param obs Observed path dataframe with x1_, y1_, t1_ columns
