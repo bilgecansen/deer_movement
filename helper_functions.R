@@ -475,18 +475,24 @@ overlap_ud <- function(data, sim, n_sim) {
     tel
   })
 
-  # Fit single guestimated ctmm model
-  ms1 <- ctmm::ctmm.select(
-    z1,
-    ctmm::ctmm.guess(z1, interactive = FALSE),
-    verbose = F,
-    cores = 1
-  )
+  # Fit single guestimated ctmm model (silenced)
+  invisible(capture.output(
+    ms1 <- ctmm::ctmm.select(
+      z1,
+      ctmm::ctmm.guess(z1, interactive = FALSE),
+      verbose = F,
+      cores = 1
+    )
+  ))
 
   ms2 <- purrr::map(z2, function(z) {
-    tryCatch(
-      ctmm::ctmm.fit(z, ms1),
-      error = function(e) NULL
+    tryCatch({
+      invisible(capture.output(
+        fit <- ctmm::ctmm.fit(z, ms1)
+      ))
+      fit
+    },
+    error = function(e) NULL
     )
   })
 
@@ -494,11 +500,13 @@ overlap_ud <- function(data, sim, n_sim) {
   keep <- !purrr::map_lgl(ms2, is.null)
   ms2 <- ms2[keep]
   z2 <- z2[keep]
-  ms2_avg <- mean(ms2)
+  invisible(capture.output(ms2_avg <- mean(ms2)))
 
   z1_uds <- ctmm::akde(z1, ms1)
-  z2_uds <- ctmm::akde(z2, ms2, grid = list(r = z1_uds$r, dr = z1_uds$dr)) |>
-    mean()
+  invisible(capture.output(
+    z2_uds <- ctmm::akde(z2, ms2, grid = list(r = z1_uds$r, dr = z1_uds$dr)) |>
+      mean()
+  ))
 
   # Estimate the overlap of UDs
   bat_uds <- ctmm::overlap(list(z1_uds, z2_uds))$CI[1, 2, 2]
