@@ -57,7 +57,7 @@ ndvi_year <- terra::rast(paste(
 
 
 # issf models
-results_issf <- readRDS(sprintf("results_issf_1_119.rds"))
+results_issf <- readRDS(sprintf("results/results_issf_%d.rds", row_no))
 
 # Simulate movement ------------------------------------------------------------
 
@@ -87,13 +87,18 @@ deer_input <- list(
 cat("Precomputing simulation models...\n")
 
 model_sims <- purrr::map(1:n_models, function(m) {
-  coeff_i <- results_issf[[m]]$coeff[[1]]
+  coeff_i <- results_issf[[m]]$coeff
 
-  if (length(coeff_i) == 1) {
+  if (length(coeff_i) == 1 && is.na(coeff_i)) {
     return(NULL)
   }
 
-  iss_i <- results_issf[[m]]$iss[[1]]
+  iss_i <- results_issf[[m]]$iss
+
+  if (is.character(iss_i)) {
+    return(NULL)
+  }
+
   train_i <- deer_mvt$stp.var.train[[1]]
 
   coefs <- iss_i$model$coefficients
