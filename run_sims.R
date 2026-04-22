@@ -55,9 +55,31 @@ ndvi_year <- terra::rast(paste(
   sep = ""
 ))
 
-
 # issf models
 results_issf <- readRDS(sprintf("results/results_issf_%d.rds", row_no))
+
+# log-likelihood results — used to pick which models to simulate
+results_loglik <- readRDS(sprintf("results/results_loglik_%d.rds", row_no))
+
+# Select models to simulate: the null (model 2) is always included, plus any
+# models beating the null by > 3 delta_logp.
+null_model <- 2L
+
+better_models <- results_loglik %>%
+  dplyr::filter(!is.na(delta_logp) & delta_logp > 3) %>%
+  dplyr::pull(model)
+
+models_to_sim <- sort(unique(c(null_model, better_models)))
+
+if (length(better_models) == 0) {
+  cat("No models beat null by > 3 delta_logp; simulating null model only.\n")
+} else {
+  cat(sprintf(
+    "Simulating null + %d model(s) with delta_logp > 3: %s\n",
+    length(better_models),
+    paste(models_to_sim, collapse = ", ")
+  ))
+}
 
 # Simulate movement ------------------------------------------------------------
 
@@ -75,18 +97,21 @@ crop_extent <- sf::st_buffer(
   5000
 )
 
+env_cropped <- terra::crop(env_raster, crop_extent)
+env_cropped$HR_bin <- load_hr_raster(row_no, env_cropped)
+
 deer_input <- list(
-  crop_env = terra::wrap(terra::crop(env_raster, crop_extent)),
+  crop_env = terra::wrap(env_cropped),
   crop_ndvi = terra::wrap(terra::crop(ndvi_year, crop_extent)),
   stp_test = deer_mvt$stp_test[[1]],
   x_median = deer_mvt$x_median,
   y_median = deer_mvt$y_median
 )
 
-# Precompute simulation models for all models for this deer
+# Precompute simulation models for the selected models for this deer
 cat("Precomputing simulation models...\n")
 
-model_sims <- purrr::map(1:n_models, function(m) {
+model_sims <- purrr::map(models_to_sim, function(m) {
   coeff_i <- results_issf[[m]]$coeff
 
   if (length(coeff_i) == 1 && is.na(coeff_i)) {
@@ -131,6 +156,7 @@ model_sims <- purrr::map(1:n_models, function(m) {
     ta = iss_i$ta_
   )
 })
+names(model_sims) <- as.character(models_to_sim)
 
 # Free large objects
 rm(env_raster, ndvi_year, env_old, results_issf, deer_mvt)
@@ -139,14 +165,19 @@ gc()
 # Simulate across models in parallel
 cat("Simulating movement...\n")
 
-future::plan(multisession, workers = parallel::detectCores() - 1)
+future::plan(
+  multisession,
+  workers = min(length(models_to_sim), parallel::detectCores() - 1)
+)
 
 results_sim <- furrr::future_map(
-  1:n_models,
+  models_to_sim,
   function(m) {
     cat("Simulating model:", m, "\n")
 
-    if (is.null(model_sims[[m]])) {
+    model_sim <- model_sims[[as.character(m)]]
+
+    if (is.null(model_sim)) {
       return(NA)
     }
 
@@ -161,7 +192,7 @@ results_sim <- furrr::future_map(
           y_median = deer_input$y_median,
           env_test = env_local,
           ndvi_test = ndvi_local,
-          issf_train = model_sims[[m]]
+          issf_train = model_sim
         )
         res$nsim <- h
         res
@@ -177,7 +208,7 @@ results_sim <- furrr::future_map(
 future::plan(sequential)
 gc()
 
-names(results_sim) <- 1:n_models
+names(results_sim) <- as.character(models_to_sim)
 
 saveRDS(results_sim, sprintf("results/results_sim_%d.rds", row_no))
 
