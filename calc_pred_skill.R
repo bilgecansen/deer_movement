@@ -36,22 +36,28 @@ start_time <- Sys.time()
 deer_mvt <- readRDS("data_deer_1_119.rds") %>%
   dplyr::slice(row_no)
 
-# Simulated paths for this deer
+# Simulated paths for this deer — named list; names are the actual model
+# numbers that were simulated (a subset, since run_sims.R now only simulates
+# the null plus any models beating it by > 3 delta_logp).
 results_sim <- readRDS(sprintf("results/results_sim_%d.rds", row_no))
 
-n_models <- length(results_sim)
+# Model numbers actually present in results_sim
+model_nums <- as.integer(names(results_sim))
 n_sim <- 10
 results_skill <- list()
 
 # Step 1: Estimate UD overlap (parallelized across models)
-future::plan(multisession, workers = parallel::detectCores() - 1)
+future::plan(
+  multisession,
+  workers = min(length(model_nums), parallel::detectCores() - 1)
+)
 
 results_skill$ud <- suppressMessages(suppressWarnings(
   furrr::future_map(
-    1:n_models,
+    model_nums,
     function(m) {
       cat("  UD model:", m, "\n")
-      sim_m <- results_sim[[m]]
+      sim_m <- results_sim[[as.character(m)]]
 
       if (length(sim_m) == 1 && is.na(sim_m)) {
         return(list(bat_uds = NA, bat_ctmm = NA))
@@ -66,15 +72,15 @@ results_skill$ud <- suppressMessages(suppressWarnings(
     )
   )
 ))
-names(results_skill$ud) <- 1:n_models
+names(results_skill$ud) <- as.character(model_nums)
 
 future::plan(sequential)
 gc()
 
-# Step 2: Calculate Energy Scores
+# Step 2: Calculate Energy Scores (raw scores only — no ratio to null)
 results_skill$es <- suppressMessages(suppressWarnings(
-  purrr::map_dfr(1:n_models, function(m) {
-    sim_m <- results_sim[[m]]
+  purrr::map_dfr(model_nums, function(m) {
+    sim_m <- results_sim[[as.character(m)]]
 
     if (length(sim_m) == 1 && is.na(sim_m)) {
       return(data.frame(
