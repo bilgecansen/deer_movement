@@ -36,17 +36,16 @@ formulas <-
   c(
     "case_ ~ (log(sl_) + cos(ta_)):tod_start_",
     "case_ ~ (log(sl_) + cos(ta_)):tod_start_ + HR_end",
-    "case_ ~ (log(sl_) + cos(ta_)):tod_start_ + HR_end + HR_end:days",
+    "case_ ~ (log(sl_) + cos(ta_)):tod_start_ + HR_edge_end",
     "case_ ~ (log(sl_) + cos(ta_)):tod_start_ + (log(sl_) + cos(ta_)):HR_start",
     "case_ ~ (log(sl_) + cos(ta_)):tod_start_:HR_start",
-    "case_ ~ (log(sl_) + cos(ta_)):tod_start_:HR_start + HR_end + HR_end:days",
-    "case_ ~ (log(sl_) + cos(ta_)):tod_start_ + (log(sl_) + cos(ta_)):HR_start +
-      HR_end + HR_end:days",
     "case_ ~ (log(sl_) + cos(ta_)):tod_start_ + HR_end + east_end + east2_end +
       north_end + dist_end + wiscland_end + ndvi_end + wiscland_end:ndvi_end",
     "case_ ~ log(sl_) + cos(ta_) + east_end + east2_end +
       north_end + dist_end + wiscland_end + ndvi_end + wiscland_end:ndvi_end",
     "case_ ~ (log(sl_) + cos(ta_)):tod_start_ + HR_end + east_end + east2_end +
+      north_end + dist_end + wiscland_end",
+    "case_ ~ (log(sl_) + cos(ta_)):tod_start_ + east_end + east2_end +
       north_end + dist_end + wiscland_end"
   )
 

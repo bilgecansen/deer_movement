@@ -74,7 +74,10 @@ deer_mvt <- deer_mvt %>%
 
 future::plan(multisession, workers = parallel::detectCores() - 1)
 
-# Step 1: Generate random steps
+# Step 1: Generate random steps for training data only.
+# Test data does not need control steps — at prediction time, candidate
+# endpoints are produced (and covariates extracted) on the fly inside the
+# redistribution kernel in run_loglik / run_sims / run_onestep_es.
 cat("Generating random steps for train...\n")
 deer_mvt <- make_random_pt_extraction(
   data = deer_mvt,
@@ -84,16 +87,10 @@ deer_mvt <- make_random_pt_extraction(
   output_col = "stp.random.train"
 )
 
-cat("Generating random steps for test...\n")
-deer_mvt <- make_random_pt_extraction(
-  data = deer_mvt,
-  n_pts = 10,
-  water = water_binary,
-  stp_col = "stp_test",
-  output_col = "stp.random.test"
-)
-
-# Step 2: Extract environmental variables
+# Step 2: Extract environmental variables for training data only.
+# The fitted iSSF model carries everything it needs into the prediction
+# pipeline; test-side covariates are pulled from the env raster live during
+# kernel construction.
 cat("Extracting environmental variables for train...\n")
 deer_mvt <- extract_step_variables(
   data = deer_mvt,
@@ -101,15 +98,6 @@ deer_mvt <- extract_step_variables(
   ndvi_list = ndvi_rasters,
   random_col = "stp.random.train",
   output_col = "stp.var.train"
-)
-
-cat("Extracting environmental variables for test...\n")
-deer_mvt <- extract_step_variables(
-  data = deer_mvt,
-  env = env_raster,
-  ndvi_list = ndvi_rasters,
-  random_col = "stp.random.test",
-  output_col = "stp.var.test"
 )
 
 saveRDS(deer_mvt, sprintf("data_deer_%d_%d.rds", row_start, row_end))

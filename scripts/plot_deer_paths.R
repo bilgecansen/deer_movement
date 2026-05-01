@@ -45,19 +45,18 @@ ggsave("plots/deer_paths_85.png", width = 10, height = 8, dpi = 300)
 # Best model per selected deer (highest energy_skill among passing models)
 best_selected <- selected %>%
   group_by(deer) %>%
-  slice_max(energy_skill, n = 1, with_ties = FALSE) %>%
+  slice_max(p_excd, n = 1, with_ties = FALSE) %>%
   ungroup()
 
 pdf("plots/deer_paths_selected.pdf", width = 10, height = 8)
 for (r in sort(best_selected$deer)) {
   info <- best_selected %>% filter(deer == r)
   subtitle <- sprintf(
-    "Selected model: %s | BA-UDS: %.3f | BA-CTMM: %.3f | dAIC: %.2f | energy skill: %.3f",
+    "Selected model: %s | BA-UDS: %.3f | BA-CTMM: %.3f | P(sl > es): %.3f",
     info$model,
     info$bat_uds,
     info$bat_ctmm,
-    info$delta_aic,
-    info$energy_skill
+    info$p_excd
   )
   p <- plot_deer_paths(r) + labs(subtitle = subtitle)
   print(p)

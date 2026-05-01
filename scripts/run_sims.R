@@ -81,6 +81,14 @@ if (length(better_models) == 0) {
   ))
 }
 
+# TEMP: override the selection above to force a null (2) vs HR_edge (3) run.
+# Revert by deleting this block.
+models_to_sim <- c(2L, 3L)
+cat(sprintf(
+  "[TEMP override] Simulating only models: %s\n",
+  paste(models_to_sim, collapse = ", ")
+))
+
 # Simulate movement ------------------------------------------------------------
 
 n_models <- length(results_issf)
@@ -99,6 +107,7 @@ crop_extent <- sf::st_buffer(
 
 env_cropped <- terra::crop(env_raster, crop_extent)
 env_cropped$HR_bin <- load_hr_raster(row_no, env_cropped)
+env_cropped$HR_edge <- load_hr_edge_raster(row_no, env_cropped)
 
 deer_input <- list(
   crop_env = terra::wrap(env_cropped),

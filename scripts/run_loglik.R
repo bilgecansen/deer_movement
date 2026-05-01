@@ -59,6 +59,10 @@ results_issf <- readRDS(sprintf("results/results_issf_%d.rds", row_no))
 
 n_models <- length(results_issf)
 
+# TEMP: restrict this run to the null model (2) and the HR_edge model (3).
+# Revert by setting: models_to_run <- seq_len(n_models)
+models_to_run <- c(2L, 3L)
+
 # Pre-crop rasters for this deer -----------------------------------------------
 crop_extent <- sf::st_buffer(
   sf::st_as_sf(
@@ -69,8 +73,12 @@ crop_extent <- sf::st_buffer(
   5000
 )
 
+env_cropped <- terra::crop(env_raster, crop_extent)
+env_cropped$HR_bin <- load_hr_raster(row_no, env_cropped)
+env_cropped$HR_edge <- load_hr_edge_raster(row_no, env_cropped)
+
 deer_input <- list(
-  crop_env = terra::wrap(terra::crop(env_raster, crop_extent)),
+  crop_env = terra::wrap(env_cropped),
   crop_ndvi = terra::wrap(terra::crop(ndvi_year, crop_extent)),
   stp_test = deer_mvt$stp_test[[1]],
   x_median = deer_mvt$x_median,
@@ -80,7 +88,7 @@ deer_input <- list(
 # Precompute all models --------------------------------------------------------
 cat("Precomputing simulation models...\n")
 
-model_sims <- purrr::map(1:n_models, function(m) {
+model_sims <- purrr::map(models_to_run, function(m) {
   coeff_i <- results_issf[[m]]$coeff
 
   if (length(coeff_i) == 1 && is.na(coeff_i)) {
@@ -125,7 +133,7 @@ model_sims <- purrr::map(1:n_models, function(m) {
     ta = iss_i$ta_
   )
 })
-names(model_sims) <- as.character(1:n_models)
+names(model_sims) <- as.character(models_to_run)
 
 # Free large objects
 rm(env_raster, ndvi_year, env_old, results_issf, deer_mvt)
@@ -134,10 +142,13 @@ gc()
 # Run log-likelihood across all models in parallel -----------------------------
 cat("Computing one-step log-likelihoods...\n")
 
-future::plan(multisession, workers = parallel::detectCores() - 1)
+future::plan(
+  multisession,
+  workers = min(length(models_to_run), parallel::detectCores() - 1)
+)
 
 results_loglik <- furrr::future_map(
-  1:n_models,
+  models_to_run,
   function(m) {
     cat("  Model:", m, "\n")
 
