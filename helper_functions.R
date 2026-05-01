@@ -81,13 +81,17 @@ make_random_pt_extraction <- function(
 }
 
 #' Extract environmental variables for each step
-#' @param data Dataframe with random steps
+#' @param data Dataframe with random steps (row i matches HRbin_<i>.tif and
+#'   HRedge_<i>.tif in hr_folder)
 #' @param env Environmental rasters
 #' @param ndvi_list NDVI rasters
+#' @param hr_folder Folder containing per-deer HR rasters (HRbin_<i>.tif binary
+#'   indicator and HRedge_<i>.tif signed distance to HR edge)
 extract_step_variables <- function(
   data,
   env = env_raster,
   ndvi_list = ndvi_rasters,
+  hr_folder = "data/HR",
   random_col = "random.stp",
   output_col = "stp.var"
 ) {
@@ -103,9 +107,24 @@ extract_step_variables <- function(
 
     ndvi_year <- ndvi_list[[paste0('ndvi_', data_row$year)]]
 
+    # Per-deer HR binary raster (already cropped by create_hr_rasters.R)
+    hr_raster <- terra::rast(
+      file.path(hr_folder, sprintf("HRbin_%d.tif", i))
+    )
+    names(hr_raster) <- "HR_bin"
+
+    # Per-deer signed distance-to-HR-edge raster (positive inside, negative
+    # outside) — continuous companion to HR_bin
+    hr_edge_raster <- terra::rast(
+      file.path(hr_folder, sprintf("HRedge_%d.tif", i))
+    )
+    names(hr_edge_raster) <- "HR_edge"
+
     list(
       env = terra::wrap(terra::crop(env, crop_extent)),
       ndvi = terra::wrap(terra::crop(ndvi_year, crop_extent)),
+      hr = terra::wrap(hr_raster),
+      hr_edge = terra::wrap(hr_edge_raster),
       data_row = data_row,
       step_data = step_data
     )
@@ -116,6 +135,8 @@ extract_step_variables <- function(
     function(input) {
       env_local <- terra::unwrap(input$env)
       ndvi_local <- terra::unwrap(input$ndvi)
+      hr_local <- terra::unwrap(input$hr)
+      hr_edge_local <- terra::unwrap(input$hr_edge)
       data_row <- input$data_row
       step_data <- input$step_data
 
@@ -140,6 +161,8 @@ extract_step_variables <- function(
       # Process step data
       data_ssf <- step_data |>
         amt::extract_covariates(env_local, where = 'both') |>
+        amt::extract_covariates(hr_local, where = 'both') |>
+        amt::extract_covariates(hr_edge_local, where = 'both') |>
         amt::extract_covariates_var_time(
           ndvi_local,
           max_time = lubridate::days(31),
@@ -169,6 +192,45 @@ extract_step_variables <- function(
 
   data[[output_col]] <- stp.var
   data
+}
+
+#' Load a deer's HR binary raster and align it to a template
+#'
+#' Reads HRbin_<row_no>.tif from hr_folder, resamples it onto the template's
+#' grid (they share a grid since both were derived from env_raster), and fills
+#' any cells outside the HR raster's extent with 0. Returns a one-layer
+#' SpatRaster named "HR_bin" that can be added directly to an env raster.
+#'
+#' @param row_no Deer row number (matches HRbin_<row_no>.tif filename)
+#' @param template SpatRaster defining the target extent and grid
+#' @param hr_folder Folder containing HRbin_<row_no>.tif files
+#' @return SpatRaster with a single layer named "HR_bin"
+load_hr_raster <- function(row_no, template, hr_folder = "data/HR") {
+  hr <- terra::rast(file.path(hr_folder, sprintf("HRbin_%d.tif", row_no)))
+  hr_aligned <- terra::resample(hr, template, method = "near")
+  hr_aligned <- terra::subst(hr_aligned, NA, 0)
+  names(hr_aligned) <- "HR_bin"
+  hr_aligned
+}
+
+#' Load per-deer signed distance-to-HR-edge raster
+#'
+#' Positive inside HR, negative outside. Resampled with bilinear interpolation
+#' (the field is continuous). Cells falling outside the source HR distance
+#' raster's extent get the minimum observed value — a conservative "far
+#' outside" fill to avoid NA propagation in the linear predictor.
+#'
+#' @param row_no Deer row number (matches HRedge_<row_no>.tif filename)
+#' @param template SpatRaster defining the target extent and grid
+#' @param hr_folder Folder containing HRedge_<row_no>.tif files
+#' @return SpatRaster with a single layer named "HR_edge"
+load_hr_edge_raster <- function(row_no, template, hr_folder = "data/HR") {
+  hr_edge <- terra::rast(file.path(hr_folder, sprintf("HRedge_%d.tif", row_no)))
+  hr_edge_aligned <- terra::resample(hr_edge, template, method = "bilinear")
+  min_val <- terra::global(hr_edge_aligned, "min", na.rm = TRUE)[1, 1]
+  hr_edge_aligned <- terra::subst(hr_edge_aligned, NA, min_val)
+  names(hr_edge_aligned) <- "HR_edge"
+  hr_edge_aligned
 }
 
 #' Fit a single iSSF model for one individual
