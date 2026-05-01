@@ -1,9 +1,9 @@
 #' @description
-#' Fit ctmm to training data for all deer, calculate AKDE, and save a binary
-#' home range raster for each deer.
-#'
-#' Binary raster: inside 95% HR (upper CI bound) = 1, outside = 0.
-#' Output: data/HR/HR_<row_no>.tif  (one file per deer)
+#' Fit ctmm to all training+test locations for each (deer_id, season, year)
+#' combination, calculate AKDE, and save three per-deer rasters:
+#'   * HRbin_<id>_<season>_<year>.tif    — binary 95% HR (upper CI)
+#'   * HRedge_<id>_<season>_<year>.tif   — signed distance to HR edge (+inside)
+#'   * HRcenter_<id>_<season>_<year>.tif — distance to ctmm μ (HR center)
 #'
 #' Usage: Rscript create_hr_rasters.R
 
@@ -15,35 +15,34 @@ library(sf)
 library(furrr)
 library(parallel)
 
-# Row range — keep in sync with wrangle_deer_mvt.R so HR file indices match
-# the deer row numbers in data_deer_1_119.rds
-row_start <- 1
-row_end <- 119
-
 # Load data --------------------------------------------------------------------
 cat("Loading data...\n")
 
-# Deer movement data
-raw_data <- readRDS('Example_code/SW_filtered_deer.RData')
+# Deer movement data — new source of truth
+load('data/sw_deer_tracks.rda') # provides `sw_deer_tracks`
 
-# Prepare sample data
-deer_mvt <- raw_data %>%
+# Filter to the rows we want to model
+deer_mvt <- sw_deer_tracks %>%
   dplyr::filter(keep == T & excursion == F & unstable_hr_center == F) %>%
-  dplyr::filter(year %in% c(2017, 2018)) %>%
-  dplyr::slice(row_start:row_end)
+  dplyr::filter(year %in% 2017:2021)
 
-# Pre-extract the FULL step track per deer (training + test). The HR boundary
-# is estimated more accurately when all available locations are used; the
-# resulting distance-to-edge raster is then read into training data via
-# extract_step_variables().
+# Pre-extract per-deer inputs as a flat list — avoids serializing the full
+# nested deer_mvt object (with all nested columns) into every worker process.
+# Each element carries the metadata needed for output filenames plus the FULL
+# track (train + test) used to estimate the HR boundary.
 step_list <- lapply(seq_len(nrow(deer_mvt)), function(i) {
-  deer_mvt$stp[[i]]
+  list(
+    id = deer_mvt$id[i],
+    season = deer_mvt$season[i],
+    year = deer_mvt$year[i],
+    stp = deer_mvt$stp[[i]]
+  )
 })
-rm(raw_data, deer_mvt)
+rm(sw_deer_tracks, deer_mvt)
 gc()
 
 # Load env_raster — used only as spatial template (CRS + resolution)
-env_raster <- terra::rast("env/wiscland/wiscland2_binary.tif")
+env_raster <- terra::rast("data/env/wiscland/wiscland2_binary.tif")
 env_old <- terra::rast("Example_code/Env_2017.tif")
 env_raster <- terra::crop(env_raster, env_old) %>%
   terra::resample(env_old)
@@ -62,14 +61,19 @@ cat(sprintf("Processing %d deer on 5 workers...\n", length(step_list)))
 future::plan(multisession, workers = 5)
 
 furrr::future_map(
-  seq_len(length(step_list)),
-  function(i) {
+  step_list,
+  function(deer_input) {
+    id <- deer_input$id
+    season <- deer_input$season
+    year <- deer_input$year
+    deer_key <- sprintf("%s_%s_%d", id, season, year)
+
     tryCatch(
       {
-        cat(sprintf("Deer %d: starting\n", i))
+        cat(sprintf("Deer %s: starting\n", deer_key))
 
         # Step 1: Reconstruct full track (training + test) ---------------------
-        stp_all <- step_list[[i]]
+        stp_all <- deer_input$stp
 
         # All step start locations (every GPS fix except the last per burst)
         locs_start <- stp_all %>%
@@ -113,6 +117,17 @@ furrr::future_map(
             cores = 1
           )
         ))
+
+        # Step 3b: Capture HR center (ctmm μ) in CRS 6610 ----------------------
+        # μ is in ctmm's internal AEQD projection (set by `tele`); reproject it
+        # to the working CRS so the runtime distance raster lives on the same
+        # grid as HRbin/HRedge.
+        mu_proj <- ctmm::projection(tele)
+        mu_pt <- sf::st_sfc(
+          sf::st_point(as.numeric(fit$mu)),
+          crs = mu_proj
+        ) %>%
+          sf::st_transform(6610)
 
         # Step 4: Calculate AKDE -----------------------------------------------
         invisible(capture.output(
@@ -158,14 +173,21 @@ furrr::future_map(
         # Positive inside HR, negative outside — gradient always points inward,
         # so the deer is pulled back toward the HR even if it slips outside.
         hr_boundary <- sf::st_boundary(hr_high)
-        dist_raster <- terra::distance(env_local, terra::vect(hr_boundary))
-        hr_dist <- terra::ifel(hr_binary == 1, dist_raster, -dist_raster)
-        names(hr_dist) <- "HR_edge"
+        edge_dist <- terra::distance(env_local, terra::vect(hr_boundary))
+        hr_edge <- terra::ifel(hr_binary == 1, edge_dist, -edge_dist)
+        names(hr_edge) <- "HR_edge"
+
+        # Step 8: Distance to HR center (ctmm μ) -------------------------------
+        # Positive everywhere; the further the cell from the home-range center,
+        # the larger the value. Lives on the same grid as HRbin/HRedge.
+        hr_center <- terra::distance(env_local, terra::vect(mu_pt))
+        names(hr_center) <- "HR_center"
 
         rm(
           hr_high,
           hr_boundary,
-          dist_raster,
+          edge_dist,
+          mu_pt,
           env_local,
           crop_extent,
           stp_all
@@ -173,21 +195,28 @@ furrr::future_map(
         gc()
 
         # Save
-        out_path <- sprintf("data/HR/HRbin_%d.tif", i)
-        terra::writeRaster(hr_binary, out_path, overwrite = TRUE)
+        out_bin <- sprintf("data/HR/HRbin_%s.tif", deer_key)
+        out_edge <- sprintf("data/HR/HRedge_%s.tif", deer_key)
+        out_center <- sprintf("data/HR/HRcenter_%s.tif", deer_key)
 
-        out_path_dist <- sprintf("data/HR/HRedge_%d.tif", i)
-        terra::writeRaster(hr_dist, out_path_dist, overwrite = TRUE)
+        terra::writeRaster(hr_binary, out_bin, overwrite = TRUE)
+        terra::writeRaster(hr_edge, out_edge, overwrite = TRUE)
+        terra::writeRaster(hr_center, out_center, overwrite = TRUE)
 
         cat(sprintf(
-          "Deer %d: saved to %s and %s\n",
-          i,
-          out_path,
-          out_path_dist
+          "Deer %s: saved %s, %s, %s\n",
+          deer_key,
+          out_bin,
+          out_edge,
+          out_center
         ))
       },
       error = function(e) {
-        warning(sprintf("Deer %d failed: %s", i, conditionMessage(e)))
+        warning(sprintf(
+          "Deer %s failed: %s",
+          deer_key,
+          conditionMessage(e)
+        ))
       }
     )
   },
