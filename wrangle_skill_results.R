@@ -21,88 +21,81 @@ deer_numbers <- sort(deer_numbers)
 cat(sprintf("Loading %d deer skill results...\n", length(result_files)))
 
 results <- purrr::map(result_files, readRDS)
-
 n_deer <- length(results)
-n_models <- length(results[[1]]$ud)
 
-# Load AIC from iSSF models and compute delta AIC ------------------------------
-results_issf <- readRDS("results_issf_1_119.rds")
-n_models <- length(results_issf)
+# Deer movement data — needed for test step length distributions (exceedance)
+deer_mvt <- readRDS("data_deer_1_119.rds")
 
-# Build delta_aic data frame for the deer that have skill results
-# deer_numbers contains the row indices of the 116 deer with results
-res_aic <- purrr::map_dfr(1:n_models, function(m) {
-  aic_all <- results_issf[[m]]$aic
-  aic_null <- results_issf[[2]]$aic # null model (model 2)
-
-  # delta_aic = aic_null - aic_focal; positive means focal is better
-  delta <- aic_null - aic_all
-  data.frame(
-    model = m,
-    deer = deer_numbers,
-    delta_aic = delta[deer_numbers]
-  )
+# Wrangle UD and CTMM overlap into a long data frame --------------------------
+# Each deer may have a different subset of models (the names of results$ud are
+# the actual model numbers that were simulated for that deer — null plus any
+# models beating null by > 3 delta_logp).
+res_bat <- purrr::map2_dfr(results, deer_numbers, function(r, d) {
+  model_nums <- as.integer(names(r$ud))
+  purrr::map_dfr(model_nums, function(m) {
+    ud <- r$ud[[as.character(m)]]
+    if (length(ud) == 1 && is.na(ud)) {
+      return(data.frame(
+        deer = d,
+        model = m,
+        bat_uds = NA_real_,
+        bat_ctmm = NA_real_
+      ))
+    }
+    data.frame(
+      deer = d,
+      model = m,
+      bat_uds = ud$bat_uds,
+      bat_ctmm = ud$bat_ctmm
+    )
+  })
 })
 
-# Wrangle UD results into a data frame -----------------------------------------
-res_bat <- foreach(i = 1:n_deer, .combine = "rbind") %do%
-  {
-    scores_uds <- purrr::map_dbl(1:n_models, function(m) {
-      ud <- results[[i]]$ud[[m]]
-      if (length(ud) == 1 && is.na(ud)) {
-        return(NA_real_)
-      }
-      ud$bat_uds
-    })
-
-    scores_ctmm <- purrr::map_dbl(1:n_models, function(m) {
-      ud <- results[[i]]$ud[[m]]
-      if (length(ud) == 1 && is.na(ud)) {
-        return(NA_real_)
-      }
-      ud$bat_ctmm
-    })
-
-    data.frame(
-      model = 1:n_models,
-      deer = deer_numbers[i],
-      bat_uds = scores_uds,
-      bat_ctmm = scores_ctmm
-    )
-  }
-
-# Combine energy scores from all deer and compute energy skill
+# Energy scores (raw, per-model, per-deer) + exceedance probability -----------
+# p_excd = P(observed test step length > energy_score), i.e. fraction of the
+# deer's actual test steps that are longer than the energy score value.
 res_es <- purrr::map2_dfr(results, deer_numbers, function(r, d) {
-  r$es %>% dplyr::mutate(deer = d)
-}) %>%
-  dplyr::group_by(deer) %>%
-  dplyr::mutate(energy_skill = 1 - (energy_score / energy_score[2])) %>%
-  dplyr::ungroup()
+  sl_test <- deer_mvt$stp_test[[d]]$sl_
+  r$es %>%
+    dplyr::mutate(
+      deer = d,
+      p_excd = purrr::map_dbl(energy_score, function(es) {
+        if (is.na(es)) {
+          return(NA_real_)
+        }
+        mean(sl_test > es, na.rm = TRUE)
+      })
+    )
+})
 
-
-# Ensure model columns match types before joining
+# Ensure model column types match before joining
 res_bat$model <- as.integer(res_bat$model)
 res_es$model <- as.integer(res_es$model)
 
-# Filter and select best model per deer
+# Filter: UD overlap (step1), CTMM overlap (step2), ES exceedance (step3) -----
 model_selection <- res_bat %>%
-  left_join(res_es, by = c("deer", "model")) %>%
-  left_join(res_aic, by = c("deer", "model")) %>%
+  left_join(
+    res_es %>% dplyr::select(deer, model, energy_score, p_excd),
+    by = c("deer", "model")
+  ) %>%
   group_by(deer) %>%
   mutate(
-    step1 = bat_uds >= 0.8,
-    step2 = step1 & bat_ctmm >= 0.8,
-    step3 = step2 & (delta_aic > 2 | delta_aic == 0),
-    step4 = step3 & (energy_skill >= 0)
+    step1 = !is.na(bat_uds) & bat_uds >= 0.8,
+    step2 = step1 & !is.na(bat_ctmm) & bat_ctmm >= 0.8,
+    step3 = step2 & !is.na(p_excd) & p_excd >= 0.5
   ) %>%
   ungroup()
 
+null_model <- 2L
+
 selected <- model_selection %>%
-  filter(step4) %>%
+  filter(step3) %>%
+  select(deer, model, bat_uds, bat_ctmm, energy_score, p_excd) %>%
   group_by(deer) %>%
-  filter(energy_skill == max(energy_skill)) %>%
-  ungroup() %>%
-  select(deer, model, bat_uds, bat_ctmm, delta_aic, energy_skill)
+  # Drop the null model for deer that have at least one alternative selected.
+  # Keep it only for deer where the null is the sole passing model.
+  filter(!(model == null_model & any(model != null_model))) %>%
+  ungroup()
 
 no_selection <- model_selection %>%
   group_by(deer) %>%
@@ -113,6 +106,7 @@ no_selection <- model_selection %>%
   ) %>%
   filter(passed_step3 == 0)
 
+saveRDS(model_selection, "results_sel.rds")
 
 # Plots ------------------------------------------------------------------------
 
@@ -135,9 +129,9 @@ p_uds <- ggplot(res_bat, aes(x = as.factor(model), y = bat_uds)) +
   ) +
   theme_minimal()
 
-# CTMM overlap (BC) violin plot
+# CTMM overlap (BC) violin plot — restricted to models passing step 1
 p_ctmm <- ggplot(
-  res_bat[model_selection$step1 == T, ],
+  model_selection %>% filter(step1),
   aes(x = as.factor(model), y = bat_ctmm)
 ) +
   geom_violin(trim = T, fill = "#16E7CF", alpha = 0.5) +
@@ -155,49 +149,36 @@ p_ctmm <- ggplot(
   ) +
   theme_minimal()
 
-# Delta AIC violin plot
-idx_aic <- which(model_selection$step1 == T & model_selection$step2 == T)
-p_aic <- ggplot(
-  res_aic[idx_aic, ],
-  aes(x = as.factor(model), y = delta_aic)
+# ES exceedance violin plot — for models passing step 2
+p_excd <- ggplot(
+  model_selection %>% filter(step2),
+  aes(x = as.factor(model), y = p_excd)
 ) +
-  geom_violin(trim = T, fill = "#00A2FF", alpha = 0.5) +
-  geom_jitter(width = 0.15, size = 1.5, alpha = 0.5) +
-  labs(
-    x = "Model",
-    y = "Delta AIC (relative to null)"
-  ) +
+  geom_violin(fill = "#BF5AF2", alpha = 0.5) +
+  geom_jitter(width = 0.15, size = 1.5, alpha = 0.7) +
   geom_hline(
-    yintercept = 2,
+    yintercept = 0.5,
     col = "red",
     alpha = 0.8,
     linetype = 2,
     linewidth = 2
+  ) +
+  labs(
+    x = "Model",
+    y = "P(observed step length > energy score)"
   ) +
   theme_minimal()
 
-# Energy score violin plot
-idx_es <- which(
-  model_selection$step1 == T &
-    model_selection$step2 == T &
-    model_selection$step3 == T
-)
+# Energy score violin plot — for models passing step 3 (final selection)
 p_es <- ggplot(
-  res_es[idx_es, ],
-  aes(x = as.factor(model), y = energy_skill)
+  model_selection %>% filter(step3),
+  aes(x = as.factor(model), y = energy_score)
 ) +
   geom_violin(fill = "#61D836", alpha = 0.5) +
   geom_jitter(width = 0.15, size = 1.5, alpha = 0.5) +
-  geom_hline(
-    yintercept = 0,
-    col = "red",
-    alpha = 0.8,
-    linetype = 2,
-    linewidth = 2
-  ) +
   labs(
     x = "Model",
-    y = "Energy Skill Score"
+    y = "Energy Score"
   ) +
   theme_minimal()
 
@@ -207,8 +188,8 @@ ggsave("plots/p_uds.png", p_uds, width = 8, height = 5, dpi = 300)
 p_ctmm
 ggsave("plots/p_ctmm.png", p_ctmm, width = 8, height = 5, dpi = 300)
 
-p_aic
-ggsave("plots/p_aic.png", p_aic, width = 8, height = 5, dpi = 300)
+p_excd
+ggsave("plots/p_excd.png", p_excd, width = 8, height = 5, dpi = 300)
 
 p_es
 ggsave("plots/p_es.png", p_es, width = 8, height = 5, dpi = 300)
