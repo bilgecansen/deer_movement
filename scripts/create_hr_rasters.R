@@ -18,8 +18,8 @@ library(parallel)
 # Load data --------------------------------------------------------------------
 cat("Loading data...\n")
 
-# Deer movement data — new source of truth
-load('data/sw_deer_tracks.rda') # provides `sw_deer_tracks`
+# Deer movement data
+sw_deer_tracks <- readRDS('data/SW_filtered_deer.RData')
 
 # Filter to the rows we want to model
 deer_mvt <- sw_deer_tracks %>%

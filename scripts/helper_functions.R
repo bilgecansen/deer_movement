@@ -1,9 +1,14 @@
 # Helper functions -------------------------------------------------------------
 
-#' Generate random steps with environmental covariates
-#' @param data Dataframe with movement steps
+#' Generate random steps with environmental covariates (single-deer)
+#'
+#' Operates on a single-row tibble. Generates `n_pts` water-free random
+#' control steps per observed step and writes them to `data[[output_col]]`
+#' as a list-column.
+#'
+#' @param data Single-row dataframe with movement steps
 #' @param n_pts Number of random points per step
-#' @param water binary raster for water bodies
+#' @param water Binary raster for water bodies
 make_random_pt_extraction <- function(
   data,
   n_pts,
@@ -11,82 +16,72 @@ make_random_pt_extraction <- function(
   stp_col = "stp",
   output_col = "random.stp"
 ) {
-  # Pre-crop and wrap water raster per deer
-  deer_water <- purrr::map(1:nrow(data), function(i) {
-    step_data <- data[i, ][[stp_col]][[1]]
-    crop_extent <- sf::st_buffer(
-      sf::st_as_sf(step_data, coords = c('x1_', 'y1_'), crs = 6610),
-      5000
-    )
-    terra::wrap(terra::crop(water, crop_extent))
-  })
+  stopifnot(nrow(data) == 1)
 
-  random.stp <- furrr::future_map(
-    1:nrow(data),
-    function(i) {
-      print(i)
-
-      water_local <- terra::unwrap(deer_water[[i]])
-
-      z <- data[i, ]
-
-      data_step <- z[[stp_col]][[1]]
-
-      # Start with buffer for water removal
-      n_random <- ceiling(n_pts * 10)
-
-      # Generate random steps
-      random_pts <- data_step |>
-        amt::random_steps(n_control = n_random) |>
-        amt::extract_covariates(water_local, where = "end")
-
-      # Filter and select final random points
-      res <- random_pts |>
-        # Select points not on water
-        dplyr::filter(case_ == FALSE, Water == 0) |>
-        # sample n_pts for each step
-        dplyr::slice_sample(n = n_pts, by = step_id_) |>
-        dplyr::bind_rows(random_pts |> dplyr::filter(case_ == TRUE)) |>
-        dplyr::ungroup() |>
-        dplyr::select(-Water)
-
-      # Warning if there are steps with less than random n_pts
-      # + 1 is the original step
-      final_counts <- table(res$step_id_)
-      if (any(final_counts < (n_pts + 1))) {
-        # Immediate feedback in console
-        message(paste(
-          "\nNote: Individual",
-          z$id,
-          "has steps with missing random points."
-        ))
-        # Formal warning
-        warning(
-          paste("Data for individual", z$id, "is incomplete."),
-          immediate. = TRUE
-        )
-      }
-
-      res
-    },
-    .options = furrr_options(
-      packages = c("amt", "terra", "sf", "tidyverse"),
-      stdout = FALSE,
-      seed = T
-    )
+  # Crop water raster to this deer's buffer
+  data_step <- data[[stp_col]][[1]]
+  crop_extent <- sf::st_buffer(
+    sf::st_as_sf(data_step, coords = c('x1_', 'y1_'), crs = 6610),
+    5000
   )
+  water_local <- terra::crop(water, crop_extent)
 
-  data[[output_col]] <- random.stp
+  # Start with buffer for water removal
+  n_random <- ceiling(n_pts * 10)
+
+  # Generate random steps
+  random_pts <- data_step |>
+    amt::random_steps(n_control = n_random) |>
+    amt::extract_covariates(water_local, where = "end")
+
+  # Filter and select final random points
+  res <- random_pts |>
+    # Select random steps not on water
+    dplyr::filter(case_ == FALSE, Water == 0) |>
+    # sample n_pts for each step
+    dplyr::slice_sample(n = n_pts, by = step_id_) |>
+    # Combine with observed steps
+    dplyr::bind_rows(random_pts |> dplyr::filter(case_ == TRUE)) |>
+    dplyr::ungroup() |>
+    dplyr::select(-Water)
+
+  # Warning if there are steps with less than random n_pts (+ 1 is the obs step)
+  final_counts <- table(res$step_id_)
+  if (any(final_counts < (n_pts + 1))) {
+    message(paste(
+      "\nNote: Individual",
+      data$id,
+      "has steps with missing random points."
+    ))
+    warning(
+      paste("Data for individual", data$id, "is incomplete."),
+      immediate. = TRUE
+    )
+  }
+
+  data[[output_col]] <- list(res)
   data
 }
 
-#' Extract environmental variables for each step
-#' @param data Dataframe with random steps (row i matches HRbin_<i>.tif and
-#'   HRedge_<i>.tif in hr_folder)
+#' Extract environmental variables for each step (single-deer)
+#'
+#' Operates on a single-row tibble. Builds a cropped env stack
+#' (env + NDVI + the three HR rasters keyed by id/season/year) and extracts
+#' covariates at every step start and end of the deer's random-steps tibble
+#' in `data[[random_col]]`.
+#'
+#' Produces design-matrix columns including:
+#'   * env layers (wiscland, ele, east, east2, north, dist) at start and end
+#'   * HR_bin_start/end, HR_edge_start/end (m), HR_center_start/end (km)
+#'   * ndvi_start/end (time-matched)
+#'
+#' @param data Single-row dataframe; must contain id, season, year and the
+#'   random-steps column named by `random_col`. The HR raster files
+#'   `HRbin_<id>_<season>_<year>.tif`, `HRedge_<id>_<season>_<year>.tif`, and
+#'   `HRcenter_<id>_<season>_<year>.tif` must exist in `hr_folder`.
 #' @param env Environmental rasters
 #' @param ndvi_list NDVI rasters
-#' @param hr_folder Folder containing per-deer HR rasters (HRbin_<i>.tif binary
-#'   indicator and HRedge_<i>.tif signed distance to HR edge)
+#' @param hr_folder Folder containing per-deer HR rasters
 extract_step_variables <- function(
   data,
   env = env_raster,
@@ -95,118 +90,100 @@ extract_step_variables <- function(
   random_col = "random.stp",
   output_col = "stp.var"
 ) {
-  # Pre-crop and wrap rasters per deer, bundled with deer data
-  deer_inputs <- purrr::map(1:nrow(data), function(i) {
-    data_row <- data[i, ]
-    step_data <- data_row[[random_col]][[1]]
+  stopifnot(nrow(data) == 1)
 
-    crop_extent <- sf::st_buffer(
-      sf::st_as_sf(step_data, coords = c('x1_', 'y1_'), crs = 6610),
-      5000
-    )
+  data_step <- data[[random_col]][[1]]
 
-    ndvi_year <- ndvi_list[[paste0('ndvi_', data_row$year)]]
-
-    # Per-deer HR binary raster (already cropped by create_hr_rasters.R)
-    hr_raster <- terra::rast(
-      file.path(hr_folder, sprintf("HRbin_%d.tif", i))
-    )
-    names(hr_raster) <- "HR_bin"
-
-    # Per-deer signed distance-to-HR-edge raster (positive inside, negative
-    # outside) — continuous companion to HR_bin
-    hr_edge_raster <- terra::rast(
-      file.path(hr_folder, sprintf("HRedge_%d.tif", i))
-    )
-    names(hr_edge_raster) <- "HR_edge"
-
-    list(
-      env = terra::wrap(terra::crop(env, crop_extent)),
-      ndvi = terra::wrap(terra::crop(ndvi_year, crop_extent)),
-      hr = terra::wrap(hr_raster),
-      hr_edge = terra::wrap(hr_edge_raster),
-      data_row = data_row,
-      step_data = step_data
-    )
-  })
-
-  stp.var <- furrr::future_map(
-    deer_inputs,
-    function(input) {
-      env_local <- terra::unwrap(input$env)
-      ndvi_local <- terra::unwrap(input$ndvi)
-      hr_local <- terra::unwrap(input$hr)
-      hr_edge_local <- terra::unwrap(input$hr_edge)
-      data_row <- input$data_row
-      step_data <- input$step_data
-
-      # Add HR distance to environment
-      median_pt <- terra::vect(
-        cbind(data_row$x_median, data_row$y_median),
-        crs = terra::crs(env_local)
-      )
-
-      ## Any layer in env works for distance calculation
-      env_local$HR <- NA
-      env_local$HR <- terra::distance(env_local$HR, median_pt) / 1000
-
-      lc_levels <- c(
-        "central.hardwoods",
-        "oak",
-        "agriculture",
-        "grassland",
-        "other"
-      )
-
-      # Process step data
-      data_ssf <- step_data |>
-        amt::extract_covariates(env_local, where = 'both') |>
-        amt::extract_covariates(hr_local, where = 'both') |>
-        amt::extract_covariates(hr_edge_local, where = 'both') |>
-        amt::extract_covariates_var_time(
-          ndvi_local,
-          max_time = lubridate::days(31),
-          when = "any",
-          where = "both",
-          name_covar = "ndvi"
-        ) |>
-        # Setting the intercept to the 'forest' land type
-        dplyr::mutate(
-          wiscland_start = factor(wiscland_start, levels = lc_levels),
-          wiscland_end = factor(wiscland_end, levels = lc_levels)
-        ) |>
-        amt::time_of_day(include.crepuscule = F, where = "both") |>
-        dplyr::mutate(
-          tod_start_day = as.integer(tod_start_ == "day"),
-          tod_start_night = as.integer(tod_start_ == "night"),
-          days = lubridate::yday(t2_) - min(lubridate::yday(t2_)) + 1
-        )
-      data_ssf
-    },
-    .options = furrr_options(
-      packages = c("amt", "terra", "sf", "tidyverse"),
-      stdout = FALSE,
-      seed = T
-    )
+  crop_extent <- sf::st_buffer(
+    sf::st_as_sf(data_step, coords = c('x1_', 'y1_'), crs = 6610),
+    5000
   )
 
-  data[[output_col]] <- stp.var
+  env_cropped <- terra::crop(env, crop_extent)
+  ndvi_year <- ndvi_list[[paste0('ndvi_', data$year)]]
+  ndvi_local <- terra::crop(ndvi_year, crop_extent)
+
+  # Per-deer HR rasters, aligned to env_cropped via the load_hr_*_raster
+  # helpers (which handle resample + NA fill)
+  hr_bin <- load_hr_raster(
+    data$id,
+    data$season,
+    data$year,
+    env_cropped,
+    hr_folder
+  )
+  hr_edge <- load_hr_edge_raster(
+    data$id,
+    data$season,
+    data$year,
+    env_cropped,
+    hr_folder
+  )
+  hr_center <- load_hr_center_raster(
+    data$id,
+    data$season,
+    data$year,
+    env_cropped,
+    hr_folder
+  )
+
+  # Convert to log scale
+  hr_center_log <- log1p(hr_center)
+
+  lc_levels <- c(
+    "central.hardwoods",
+    "oak",
+    "agriculture",
+    "grassland",
+    "other"
+  )
+
+  data_ssf <- data_step |>
+    amt::extract_covariates(env_cropped, where = 'both') |>
+    amt::extract_covariates(hr_bin, where = 'both') |>
+    amt::extract_covariates(hr_edge, where = 'both') |>
+    amt::extract_covariates(hr_center, where = 'both') |>
+    amt::extract_covariates(hr_center_log, where = 'both') |>
+    amt::extract_covariates_var_time(
+      ndvi_local,
+      max_time = lubridate::days(31),
+      when = "any",
+      where = "both",
+      name_covar = "ndvi"
+    ) |>
+    # Setting the intercept to the 'central.hardwoods' land type
+    dplyr::mutate(
+      wiscland_start = factor(wiscland_start, levels = lc_levels),
+      wiscland_end = factor(wiscland_end, levels = lc_levels)
+    ) |>
+    amt::time_of_day(include.crepuscule = FALSE, where = "both") |>
+    dplyr::mutate(
+      tod_start_day = as.integer(tod_start_ == "day"),
+      tod_start_night = as.integer(tod_start_ == "night"),
+      days = lubridate::yday(t2_) - min(lubridate::yday(t2_)) + 1
+    )
+
+  data[[output_col]] <- list(data_ssf)
   data
 }
 
 #' Load a deer's HR binary raster and align it to a template
 #'
-#' Reads HRbin_<row_no>.tif from hr_folder, resamples it onto the template's
-#' grid (they share a grid since both were derived from env_raster), and fills
-#' any cells outside the HR raster's extent with 0. Returns a one-layer
-#' SpatRaster named "HR_bin" that can be added directly to an env raster.
+#' Reads HRbin_<id>_<season>_<year>.tif from hr_folder, resamples it onto the
+#' template's grid (they share a grid since both were derived from env_raster),
+#' and fills any cells outside the HR raster's extent with 0. Returns a
+#' one-layer SpatRaster named "HR_bin" that can be added directly to an env
+#' raster.
 #'
-#' @param row_no Deer row number (matches HRbin_<row_no>.tif filename)
+#' @param id Deer ID
+#' @param season Season string (e.g. "fa", "nb")
+#' @param year Year (integer)
 #' @param template SpatRaster defining the target extent and grid
-#' @param hr_folder Folder containing HRbin_<row_no>.tif files
+#' @param hr_folder Folder containing HRbin_<id>_<season>_<year>.tif files
 #' @return SpatRaster with a single layer named "HR_bin"
-load_hr_raster <- function(row_no, template, hr_folder = "data/HR") {
-  hr <- terra::rast(file.path(hr_folder, sprintf("HRbin_%d.tif", row_no)))
+load_hr_raster <- function(id, season, year, template, hr_folder = "data/HR") {
+  fname <- sprintf("HRbin_%s_%s_%d.tif", id, season, year)
+  hr <- terra::rast(file.path(hr_folder, fname))
   hr_aligned <- terra::resample(hr, template, method = "near")
   hr_aligned <- terra::subst(hr_aligned, NA, 0)
   names(hr_aligned) <- "HR_bin"
@@ -220,17 +197,56 @@ load_hr_raster <- function(row_no, template, hr_folder = "data/HR") {
 #' raster's extent get the minimum observed value — a conservative "far
 #' outside" fill to avoid NA propagation in the linear predictor.
 #'
-#' @param row_no Deer row number (matches HRedge_<row_no>.tif filename)
+#' @param id Deer ID
+#' @param season Season string (e.g. "fa", "nb")
+#' @param year Year (integer)
 #' @param template SpatRaster defining the target extent and grid
-#' @param hr_folder Folder containing HRedge_<row_no>.tif files
+#' @param hr_folder Folder containing HRedge_<id>_<season>_<year>.tif files
 #' @return SpatRaster with a single layer named "HR_edge"
-load_hr_edge_raster <- function(row_no, template, hr_folder = "data/HR") {
-  hr_edge <- terra::rast(file.path(hr_folder, sprintf("HRedge_%d.tif", row_no)))
+load_hr_edge_raster <- function(
+  id,
+  season,
+  year,
+  template,
+  hr_folder = "data/HR"
+) {
+  fname <- sprintf("HRedge_%s_%s_%d.tif", id, season, year)
+  hr_edge <- terra::rast(file.path(hr_folder, fname))
   hr_edge_aligned <- terra::resample(hr_edge, template, method = "bilinear")
   min_val <- terra::global(hr_edge_aligned, "min", na.rm = TRUE)[1, 1]
   hr_edge_aligned <- terra::subst(hr_edge_aligned, NA, min_val)
   names(hr_edge_aligned) <- "HR_edge"
   hr_edge_aligned
+}
+
+#' Load per-deer distance-to-HR-center raster
+#'
+#' Distance (in CRS 6610 units, i.e. metres) from each cell to the ctmm μ of
+#' the fitted home-range model — this is the "where the deer lives" centroid,
+#' not a geometric polygon centroid. Always non-negative. Resampled with
+#' bilinear interpolation; cells outside the source raster's extent are filled
+#' with the max observed value (a conservative "far from center" stand-in).
+#'
+#' @param id Deer ID
+#' @param season Season string (e.g. "fa", "nb")
+#' @param year Year (integer)
+#' @param template SpatRaster defining the target extent and grid
+#' @param hr_folder Folder containing HRcenter_<id>_<season>_<year>.tif files
+#' @return SpatRaster with a single layer named "HR_center"
+load_hr_center_raster <- function(
+  id,
+  season,
+  year,
+  template,
+  hr_folder = "data/HR"
+) {
+  fname <- sprintf("HRcenter_%s_%s_%d.tif", id, season, year)
+  hr_c <- terra::rast(file.path(hr_folder, fname))
+  hr_c_aligned <- terra::resample(hr_c, template, method = "bilinear")
+  max_val <- terra::global(hr_c_aligned, "max", na.rm = TRUE)[1, 1]
+  hr_c_aligned <- terra::subst(hr_c_aligned, NA, max_val)
+  names(hr_c_aligned) <- "HR_center"
+  hr_c_aligned
 }
 
 #' Fit a single iSSF model for one individual
