@@ -1,18 +1,27 @@
 #' @description
-#' Simulate deer movement from models
+#' Simulate deer movement from all fitted models for a single deer.
+#'
+#' Usage: Rscript run_sims.R <id> <season> <year>
+#'   id     — deer ID
+#'   season — season string (e.g. "fa", "nb")
+#'   year   — year (integer)
 
 # Parse command line arguments -------------------------------------------------
 args <- commandArgs(trailingOnly = TRUE)
 
-if (length(args) != 1) {
+if (length(args) != 3) {
   stop(
-    "Usage: Rscript run_sims.R <row_number>\nExample: Rscript run_sims.R 5"
+    "Usage: Rscript run_sims.R <id> <season> <year>\nExample: 
+      Rscript run_sims.R 5000 fa 2017"
   )
 }
 
-row_no <- as.integer(args[1])
+id <- args[1]
+season <- args[2]
+year <- as.integer(args[3])
 
-cat(sprintf("Running deer %d\n", row_no))
+key <- sprintf("%s_%s_%d", id, season, year)
+cat(sprintf("Running deer %s\n", key))
 
 # Load packages ----------------------------------------------------------------
 library(amt)
@@ -24,20 +33,16 @@ library(furrr)
 library(parallel)
 
 # helper functions
-source("helper_functions.R")
+source("scripts/helper_functions.R")
 
 # Load data --------------------------------------------------------------------
 start_time <- Sys.time()
 
-# Deer movement data
-deer_mvt <- readRDS("data_deer_1_119.rds")
-
-# Pick deers to simulate
-deer_mvt <- deer_mvt %>%
-  dplyr::slice(row_no)
+# Deer movement data — single-row per-deer file
+deer_mvt <- readRDS(sprintf("data/tracks/data_%s.rds", key))
 
 # landscape data
-env_raster <- terra::rast("env/wiscland/wiscland2_binary.tif")
+env_raster <- terra::rast("data/env/wiscland/wiscland2_binary.tif")
 env_old <- terra::rast("Example_code/Env_2017.tif")
 env_raster <- terra::crop(env_raster, env_old) %>%
   terra::resample(env_old)
@@ -49,56 +54,21 @@ env_raster$north <- env_old$northness
 env_raster$dist <- env_old$fe.dist
 
 # NDVI data
-ndvi_year <- terra::rast(paste(
-  paste("NDVI", deer_mvt$year, sep = "_"),
-  ".tif",
-  sep = ""
-))
+ndvi_year <- terra::rast(sprintf("data/NDVI_year/NDVI_%d.tif", year))
 
 # issf models
-results_issf <- readRDS(sprintf("results/results_issf_%d.rds", row_no))
+results_issf <- readRDS(sprintf("results/results_issf_%s.rds", key))
 
-# log-likelihood results — used to pick which models to simulate
-results_loglik <- readRDS(sprintf("results/results_loglik_%d.rds", row_no))
-
-# Select models to simulate: the null (model 2) is always included, plus any
-# models beating the null by > 3 delta_logp.
-null_model <- 2L
-
-better_models <- results_loglik %>%
-  dplyr::filter(!is.na(delta_logp) & delta_logp > 3) %>%
-  dplyr::pull(model)
-
-models_to_sim <- sort(unique(c(null_model, better_models)))
-
-if (length(better_models) == 0) {
-  cat("No models beat null by > 3 delta_logp; simulating null model only.\n")
-} else {
-  cat(sprintf(
-    "Simulating null + %d model(s) with delta_logp > 3: %s\n",
-    length(better_models),
-    paste(models_to_sim, collapse = ", ")
-  ))
-}
-
-# TEMP: override the selection above to force a null (2) vs HR_edge (3) run.
-# Revert by deleting this block.
-models_to_sim <- c(2L, 3L)
-cat(sprintf(
-  "[TEMP override] Simulating only models: %s\n",
-  paste(models_to_sim, collapse = ", ")
-))
-
-# Simulate movement ------------------------------------------------------------
-
+# Simulate every model that was fitted — null/failed models are filtered out
+# automatically inside the precompute step (returns NULL for those).
 n_models <- length(results_issf)
-n_deer <- nrow(deer_mvt)
+models_to_sim <- seq_len(n_models)
 n_sim <- 10
 
-# Pre-crop rasters for this single deer
+# Pre-crop rasters for this single deer ---------------------------------------
 crop_extent <- sf::st_buffer(
   sf::st_as_sf(
-    deer_mvt$stp_test[[1]],
+    deer_mvt$stp[[1]],
     coords = c('x1_', 'y1_'),
     crs = 6610
   ),
@@ -106,34 +76,30 @@ crop_extent <- sf::st_buffer(
 )
 
 env_cropped <- terra::crop(env_raster, crop_extent)
-env_cropped$HR_bin <- load_hr_raster(row_no, env_cropped)
-env_cropped$HR_edge <- load_hr_edge_raster(row_no, env_cropped)
+
+# HR rasters — no HR_bin (no model uses it). HR_edge stays in metres; for
+# HR_center we also build the log1p transformed layer the formulas reference.
+env_cropped$HR_edge <- load_hr_edge_raster(id, season, year, env_cropped)
+env_cropped$HR_center <- load_hr_center_raster(id, season, year, env_cropped)
+env_cropped$HR_center_log <- log1p(env_cropped$HR_center)
 
 deer_input <- list(
   crop_env = terra::wrap(env_cropped),
   crop_ndvi = terra::wrap(terra::crop(ndvi_year, crop_extent)),
-  stp_test = deer_mvt$stp_test[[1]],
-  x_median = deer_mvt$x_median,
-  y_median = deer_mvt$y_median
+  stp = deer_mvt$stp[[1]]
 )
 
-# Precompute simulation models for the selected models for this deer
+# Precompute simulation models ------------------------------------------------
 cat("Precomputing simulation models...\n")
 
 model_sims <- purrr::map(models_to_sim, function(m) {
-  coeff_i <- results_issf[[m]]$coeff
-
-  if (length(coeff_i) == 1 && is.na(coeff_i)) {
-    return(NULL)
-  }
-
   iss_i <- results_issf[[m]]$iss
 
   if (is.character(iss_i)) {
     return(NULL)
   }
 
-  train_i <- deer_mvt$stp.var.train[[1]]
+  train_i <- deer_mvt$stp.var[[1]]
 
   coefs <- iss_i$model$coefficients
   names(coefs) <- rename_landcover_coefs(names(coefs))
@@ -171,7 +137,7 @@ names(model_sims) <- as.character(models_to_sim)
 rm(env_raster, ndvi_year, env_old, results_issf, deer_mvt)
 gc()
 
-# Simulate across models in parallel
+# Simulate across models in parallel ------------------------------------------
 cat("Simulating movement...\n")
 
 future::plan(
@@ -196,9 +162,7 @@ results_sim <- furrr::future_map(
     foreach(h = 1:n_sim, .combine = "rbind") %do%
       {
         res <- simulate_movement(
-          stp_data = deer_input$stp_test,
-          x_median = deer_input$x_median,
-          y_median = deer_input$y_median,
+          stp_data = deer_input$stp,
           env_test = env_local,
           ndvi_test = ndvi_local,
           issf_train = model_sim
@@ -219,11 +183,9 @@ gc()
 
 names(results_sim) <- as.character(models_to_sim)
 
-saveRDS(results_sim, sprintf("results/results_sim_%d.rds", row_no))
+# Save -------------------------------------------------------------------------
+dir.create("sims", showWarnings = FALSE)
+saveRDS(results_sim, sprintf("sims/sims_%s.rds", key))
 
 elapsed <- difftime(Sys.time(), start_time, units = "mins")
-cat(sprintf(
-  "Row %d completed in %.1f minutes\n",
-  row_no,
-  elapsed
-))
+cat(sprintf("Deer %s completed in %.1f minutes\n", key, elapsed))

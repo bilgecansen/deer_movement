@@ -129,6 +129,7 @@ extract_step_variables <- function(
 
   # Convert to log scale
   hr_center_log <- log1p(hr_center)
+  names(hr_center_log) <- "HR_center_log"
 
   lc_levels <- c(
     "central.hardwoods",
@@ -266,96 +267,153 @@ fit_mod <- function(ssf_data, formula) {
 }
 
 #' Simulate a single movement path
-#' @param stp_data Step data dataframe
-#' @param x_median Median x coordinate of home range center
-#' @param y_median Median y coordinate of home range center
-#' @param env_test Environmental rasters for test data
-#' @param ndvi_test ndvi rasters for test data
+#'
+#' Builds a redistribution kernel from `issf_train` and `env_test` and
+#' simulates one path that follows the observed step timing in `stp_data`.
+#' The caller is responsible for ensuring `env_test` already carries every
+#' covariate layer the model formula references (HR_edge, HR_center_log, etc.).
+#'
+#' Two code paths inside, chosen automatically based on whether the model has
+#' any NDVI coefficients:
+#'   * NDVI path — for each burst, walks month-by-month, swapping
+#'     `env_test$ndvi` to that month's layer before building a fresh kernel.
+#'     Required because NDVI is the only time-varying covariate.
+#'   * Simple path — for each burst, builds one kernel and simulates every step
+#'     in the burst in a single call. Avoids redundant kernel rebuilds when
+#'     the model has no NDVI terms (model-formula coefficients drive the
+#'     detection).
+#'
+#' @param stp_data Step data dataframe (provides timestamps + burst structure)
+#' @param env_test Environmental rasters for the simulation extent
+#' @param ndvi_test NDVI rasters indexed by month (ignored if the model has no
+#'   NDVI terms)
 #' @param issf_train Fitted iSSF model
 simulate_movement <- function(
   stp_data,
-  x_median,
-  y_median,
   env_test,
   ndvi_test,
   issf_train
 ) {
-  # Calculate distance to home range center
-  median_pt <- terra::vect(
-    cbind(x_median, y_median),
-    crs = terra::crs(env_test[[1]])
-  )
+  # Detect whether this model needs monthly NDVI swaps. If no coefficient name
+  # mentions "ndvi", the month sub-loop is wasted work and we use the simple
+  # one-kernel-per-burst path.
+  needs_ndvi <- any(grepl(
+    "ndvi",
+    all.vars(issf_train$model$formula),
+    ignore.case = TRUE
+  ))
 
-  env_test$HR <- NA
-  env_test$HR <- terra::distance(env_test$HR, median_pt) / 1000
+  data_step <- stp_data
+  bursts <- unique(data_step$burst_)
 
-  step_data <- stp_data
-  bursts <- unique(step_data$burst_)
+  # Covariate-extraction callback used by both code paths
+  cov_fun <- function(xy, map) {
+    xy |>
+      amt::extract_covariates(map, where = "both") |>
+      amt::time_of_day(include.crepuscule = FALSE, where = "both") |>
+      dplyr::mutate(
+        tod_start_day = as.integer(tod_start_ == "day"),
+        tod_start_night = as.integer(tod_start_ == "night"),
+        days = lubridate::yday(t2_) - min(lubridate::yday(t2_)) + 1
+      )
+  }
 
   # Simulate each burst separately, then combine
   sim_all_bursts <- foreach(b = bursts, .combine = "rbind") %do%
     {
-      burst_data <- step_data |> dplyr::filter(burst_ == b)
+      burst_data <- data_step |> dplyr::filter(burst_ == b)
 
-      # Split burst into monthly groups
-      burst_data$month_group <- lubridate::month(burst_data$t1_)
-      months <- unique(burst_data$month_group)
+      if (needs_ndvi) {
+        # ---- NDVI path: month-by-month within the burst -----------------
+        burst_data$month_group <- lubridate::month(burst_data$t1_)
+        months <- unique(burst_data$month_group)
 
-      # we fill sim_burst with simulated paths
-      sim_burst <- NULL
+        # we fill sim_burst with simulated paths
+        sim_burst <- NULL
 
-      for (mo in months) {
-        mo_data <- burst_data |> dplyr::filter(month_group == mo)
-        n_steps <- nrow(mo_data)
+        for (mo in months) {
+          mo_data <- burst_data |> dplyr::filter(month_group == mo)
+          n_steps <- nrow(mo_data)
 
-        # Set NDVI for this month
-        env_test$ndvi <- terra::resample(
-          ndvi_test[[mo]],
-          env_test,
-          method = 'near'
-        )
-
-        # Start from previous chunk's last point, or burst start
-        if (is.null(sim_burst)) {
-          start_row <- mo_data[1, c('x1_', 'y1_', 't1_')]
-          start_pt <- amt::make_track(
-            start_row,
-            .x = x1_,
-            .y = y1_,
-            .t = t1_,
-            crs = terra::crs(env_test)
+          # Set NDVI for this month
+          env_test$ndvi <- terra::resample(
+            ndvi_test[[mo]],
+            env_test,
+            method = 'near'
           )
-        } else {
-          start_row <- sim_burst[nrow(sim_burst), ]
-          start_pt <- amt::make_track(
-            start_row,
-            .x = x_,
-            .y = y_,
-            .t = t_,
-            crs = terra::crs(env_test)
+
+          # Start from previous chunk's last point, or burst start
+          if (is.null(sim_burst)) {
+            start_row <- mo_data[1, c('x1_', 'y1_', 't1_')]
+            start_pt <- amt::make_track(
+              start_row,
+              .x = x1_,
+              .y = y1_,
+              .t = t1_,
+              crs = terra::crs(env_test)
+            )
+          } else {
+            start_row <- sim_burst[nrow(sim_burst), ]
+            start_pt <- amt::make_track(
+              start_row,
+              .x = x_,
+              .y = y_,
+              .t = t_,
+              crs = terra::crs(env_test)
+            )
+          }
+
+          start_pt <- start_pt |>
+            amt::make_start() |>
+            amt::mutate(dt = lubridate::hours(4))
+
+          kernel <- amt::redistribution_kernel(
+            x = issf_train,
+            map = env_test,
+            fun = cov_fun,
+            start = start_pt,
+            landscape = "discrete",
+            as.rast = FALSE
+          )
+
+          sim_result <- tryCatch(
+            amt::simulate_path(kernel, n = n_steps),
+            error = function(err) NA
+          )
+
+          if (any(is.na(sim_result))) {
+            return(NULL)
+          }
+
+          sim_burst <- dplyr::bind_rows(
+            sim_burst,
+            sim_result |> dplyr::select(x_, y_, t_)
           )
         }
 
-        start_pt <- start_pt |>
+        sim_burst |> dplyr::mutate(burst_ = b)
+      } else {
+        # ---- Simple path: one kernel for the whole burst ----------------
+        n_steps <- nrow(burst_data)
+
+        start_row <- burst_data[1, c('x1_', 'y1_', 't1_')]
+        start_pt <- amt::make_track(
+          start_row,
+          .x = x1_,
+          .y = y1_,
+          .t = t1_,
+          crs = terra::crs(env_test)
+        ) |>
           amt::make_start() |>
           amt::mutate(dt = lubridate::hours(4))
 
         kernel <- amt::redistribution_kernel(
           x = issf_train,
           map = env_test,
-          fun = function(xy, map) {
-            xy |>
-              amt::extract_covariates(map, where = "both") |>
-              amt::time_of_day(include.crepuscule = FALSE, where = "both") |>
-              dplyr::mutate(
-                tod_start_day = as.integer(tod_start_ == "day"),
-                tod_start_night = as.integer(tod_start_ == "night"),
-                days = lubridate::yday(t2_) - min(lubridate::yday(t2_)) + 1
-              )
-          },
+          fun = cov_fun,
           start = start_pt,
           landscape = "discrete",
-          as.rast = F
+          as.rast = FALSE
         )
 
         sim_result <- tryCatch(
@@ -367,13 +425,10 @@ simulate_movement <- function(
           return(NULL)
         }
 
-        sim_burst <- dplyr::bind_rows(
-          sim_burst,
-          sim_result |> dplyr::select(x_, y_, t_)
-        )
+        sim_result |>
+          dplyr::select(x_, y_, t_) |>
+          dplyr::mutate(burst_ = b)
       }
-
-      sim_burst |> dplyr::mutate(burst_ = b)
     }
 
   sim_all_bursts
@@ -409,56 +464,6 @@ rename_landcover_coefs <- function(
 
   coef_names
 }
-
-#' Run simulate_movement across all deer and replications for a given model
-#' @param deer_inputs_base List of per-deer data (cropped rasters, stp_test, coordinates)
-#' @param model_sims List of pre-built simulation models per deer (NULL for skipped deer)
-#' @param n_sim Number of simulations per deer
-run_simulations <- function(
-  deer_inputs_base,
-  model_sims,
-  n_sim = 10
-) {
-  # Combine base inputs with model-specific info
-  deer_inputs <- purrr::map(1:length(deer_inputs_base), function(i) {
-    input <- deer_inputs_base[[i]]
-    input$skip <- is.null(model_sims[[i]])
-    input$model_sim <- model_sims[[i]]
-    input
-  })
-
-  furrr::future_map(
-    deer_inputs,
-    function(input) {
-      if (input$skip) {
-        return(NA)
-      }
-
-      env_local <- terra::unwrap(input$crop_env)
-      ndvi_local <- terra::unwrap(input$crop_ndvi)
-
-      foreach(h = 1:n_sim, .combine = "rbind") %do%
-        {
-          res <- simulate_movement(
-            stp_data = input$stp_test,
-            x_median = input$x_median,
-            y_median = input$y_median,
-            env_test = env_local,
-            ndvi_test = ndvi_local,
-            issf_train = input$model_sim
-          )
-          res$nsim <- h
-          res
-        }
-    },
-    .options = furrr_options(
-      packages = c("amt", "terra", "sf", "dplyr", "lubridate", "foreach"),
-      stdout = FALSE,
-      seed = TRUE
-    )
-  )
-}
-
 
 #' Calculate mean Energy Score between observed and simulated paths
 #' @param obs Observed path dataframe with x1_, y1_, t1_ columns
@@ -502,166 +507,25 @@ calc_energy_score <- function(obs, sim) {
   mean(es_per_step, na.rm = TRUE)
 }
 
-#' One-step-ahead Energy Score between observed and simulated paths
+#' One-step-ahead log score of observed path under a given model
+#'
+#' For each observed step, builds the redistribution kernel anchored at the
+#' observed start, evaluates it as a raster, and reads off the kernel value at
+#' the observed endpoint to give a per-step log probability. The caller is
+#' responsible for ensuring `env_test` already carries every covariate layer
+#' the model formula references (HR_edge, HR_center_log, etc.).
+#'
 #' @param stp_data Observed step data for one deer (x1_, y1_, t1_, x2_, y2_, t2_, burst_)
-#' @param x_median Home range center x coordinate
-#' @param y_median Home range center y coordinate
-#' @param env_test Cropped environmental rasters
-#' @param ndvi_test Cropped NDVI rasters (indexed by month)
-#' @param issf_train Precomputed iSSF model (from amt::make_issf_model)
-#' @param n_sim Number of single-step simulations per observed step
-#' @return data.frame with burst_, step_index, t1_, energy_score, spread, n_sim_success
-onestep_energy_score <- function(
-  stp_data,
-  x_median,
-  y_median,
-  env_test,
-  ndvi_test,
-  issf_train,
-  n_sim = 10
-) {
-  # Setup: compute HR distance layer once
-  median_pt <- terra::vect(
-    cbind(x_median, y_median),
-    crs = terra::crs(env_test[[1]])
-  )
-  env_test$HR <- NA
-  env_test$HR <- terra::distance(env_test$HR, median_pt) / 1000
-
-  bursts <- unique(stp_data$burst_)
-
-  results <- foreach(b = bursts, .combine = "rbind") %do%
-    {
-      burst_data <- stp_data |> dplyr::filter(burst_ == b)
-      current_month <- NULL
-      step_results <- vector("list", nrow(burst_data))
-
-      for (i in seq_len(nrow(burst_data))) {
-        # Update NDVI only when month changes
-        mo <- lubridate::month(burst_data$t1_[i])
-        if (is.null(current_month) || mo != current_month) {
-          env_test$ndvi <- terra::resample(
-            ndvi_test[[mo]],
-            env_test,
-            method = "near"
-          )
-          current_month <- mo
-        }
-
-        # Build start point from observed location
-        start_pt <- burst_data[i, c("x1_", "y1_", "t1_")] |>
-          amt::make_track(
-            .x = x1_,
-            .y = y1_,
-            .t = t1_,
-            crs = terra::crs(env_test)
-          ) |>
-          amt::make_start() |>
-          amt::mutate(dt = lubridate::hours(4))
-
-        # Build redistribution kernel
-        kernel <- tryCatch(
-          amt::redistribution_kernel(
-            x = issf_train,
-            map = env_test,
-            fun = function(xy, map) {
-              xy |>
-                amt::extract_covariates(map, where = "both") |>
-                amt::time_of_day(
-                  include.crepuscule = FALSE,
-                  where = "both"
-                ) |>
-                dplyr::mutate(
-                  tod_start_day = as.integer(tod_start_ == "day"),
-                  tod_start_night = as.integer(tod_start_ == "night"),
-                  days = lubridate::yday(t2_) - min(lubridate::yday(t2_)) + 1
-                )
-            },
-            start = start_pt,
-            landscape = "discrete",
-            as.rast = FALSE
-          ),
-          error = function(e) NULL
-        )
-
-        if (is.null(kernel)) {
-          step_results[[i]] <- data.frame(
-            burst_ = b,
-            step_index = i,
-            t1_ = burst_data$t1_[i],
-            energy_score = NA_real_,
-            spread = NA_real_,
-            n_sim_success = 0L
-          )
-          next
-        }
-
-        # Simulate n_sim single steps
-        sim_endpoints <- matrix(NA_real_, nrow = 2, ncol = n_sim)
-        n_success <- 0L
-
-        for (s in seq_len(n_sim)) {
-          sim_result <- tryCatch(
-            amt::simulate_path(kernel, n = 1),
-            error = function(e) NULL
-          )
-          if (!is.null(sim_result) && nrow(sim_result) >= 2) {
-            n_success <- n_success + 1L
-            sim_endpoints[1, n_success] <- sim_result$x_[2]
-            sim_endpoints[2, n_success] <- sim_result$y_[2]
-          }
-        }
-
-        # Compute energy score and spread
-        es <- NA_real_
-        spread <- NA_real_
-        if (n_success >= 2) {
-          sim_valid <- sim_endpoints[, seq_len(n_success), drop = FALSE]
-          obs_xy <- c(burst_data$x2_[i], burst_data$y2_[i])
-          es <- scoringRules::es_sample(obs_xy, dat = sim_valid)
-          spread <- mean(dist(t(sim_valid)))
-        }
-
-        step_results[[i]] <- data.frame(
-          burst_ = b,
-          step_index = i,
-          t1_ = burst_data$t1_[i],
-          energy_score = es,
-          spread = spread,
-          n_sim_success = n_success
-        )
-      }
-
-      dplyr::bind_rows(step_results)
-    }
-
-  results
-}
-
-#' One-step-ahead log-likelihood of observed path under a given model
-#' @param stp_data Observed step data for one deer (x1_, y1_, t1_, x2_, y2_, t2_, burst_)
-#' @param x_median Home range center x coordinate
-#' @param y_median Home range center y coordinate
-#' @param env_test Cropped environmental rasters
+#' @param env_test Cropped environmental rasters (with all model covariates as layers)
 #' @param ndvi_test Cropped NDVI rasters (indexed by month)
 #' @param issf_train Precomputed iSSF model (from amt::make_issf_model)
 #' @return data.frame with burst_, step_index, t1_, logp
-onestep_loglik <- function(
+onestep_logscore <- function(
   stp_data,
-  x_median,
-  y_median,
   env_test,
   ndvi_test,
   issf_train
 ) {
-  # Setup: compute HR distance layer once
-  median_pt <- terra::vect(
-    cbind(x_median, y_median),
-    crs = terra::crs(env_test[[1]])
-  )
-  env_test$HR <- NA
-  env_test$HR <- terra::distance(env_test$HR, median_pt) / 1000
-
   bursts <- unique(stp_data$burst_)
 
   results <- foreach(b = bursts, .combine = "rbind") %do%
@@ -748,7 +612,59 @@ onestep_loglik <- function(
   results
 }
 
+#' Score agreement between two ctmm models via integrated absolute difference
+#' of their model-implied semi-variance functions.
+#'
+#' Returns a value in roughly [0, 1] where 1 = curves identical at every lag
+#' and 0 = curves maximally different. Time-lag grid is taken from
+#' variogram(ref) so the comparison spans the timescales actually probed by
+#' the data; integration is done in log-Δt so all timescales weigh equally.
+#'
+#' @param ms_a   First fitted ctmm model
+#' @param ms_b   Second fitted ctmm model
+#' @param ref    Telemetry object used to determine the time-lag grid
+#'               (typically the observed track)
+#' @return Numeric scalar; NA if the curves are identically zero
+svf_score <- function(ms_a, ms_b, ref) {
+  # Time lags to evaluate at — bin midpoints from the empirical variogram
+  # of the reference telemetry (drop zero lags).
+  v <- ctmm::variogram(ref)
+  dt_grid <- v$lag[v$lag > 0]
+
+  if (length(dt_grid) < 2) {
+    return(NA_real_)
+  }
+
+  # Model-implied SVF functions (ctmm internal accessor)
+  svf_a <- ctmm:::svf.func(ms_a, moment = TRUE)$svf
+  svf_b <- ctmm:::svf.func(ms_b, moment = TRUE)$svf
+
+  curve_a <- vapply(dt_grid, svf_a, numeric(1))
+  curve_b <- vapply(dt_grid, svf_b, numeric(1))
+
+  # Integrate in log-Δt so short and long timescales weigh equally
+  log_dt <- log(dt_grid)
+  diff_curve <- abs(curve_a - curve_b)
+  mean_curve <- (curve_a + curve_b) / 2
+
+  # Trapezoidal integration on (possibly uneven) x-grid
+  trap <- function(x, y) sum(diff(x) * (y[-1] + y[-length(y)]) / 2)
+
+  iad <- trap(log_dt, diff_curve)
+  norm <- trap(log_dt, mean_curve)
+
+  if (norm == 0 || !is.finite(norm)) {
+    return(NA_real_)
+  }
+
+  1 - iad / (2 * norm)
+}
+
 #' Estimate overlap of utilization distributions
+#' @param data Observed paths
+#' @param sim Simulated paths
+#' @param n_sim number of simulated paths
+#' Estimate UD overlap and SVF agreement between observed and simulated paths.
 #' @param data Observed paths
 #' @param sim Simulated paths
 #' @param n_sim number of simulated paths
@@ -756,7 +672,7 @@ overlap_ud <- function(data, sim, n_sim) {
   z1 <- data |>
     dplyr::select("x1_", "y1_", "t1_") |>
     sf::st_as_sf(coords = c("x1_", "y1_"), crs = 6610) |>
-    sf::st_transform(4326) |> # Transform to WGS84 lat/long
+    sf::st_transform(4326) |>
     dplyr::mutate(
       longitude = sf::st_coordinates(geometry)[, 1],
       latitude = sf::st_coordinates(geometry)[, 2],
@@ -771,7 +687,7 @@ overlap_ud <- function(data, sim, n_sim) {
       dplyr::filter(nsim == k) |>
       dplyr::select("x_", "y_", "t_") |>
       sf::st_as_sf(coords = c("x_", "y_"), crs = 6610) |>
-      sf::st_transform(4326) |> # Transform to WGS84 lat/long
+      sf::st_transform(4326) |>
       dplyr::mutate(
         longitude = sf::st_coordinates(geometry)[, 1],
         latitude = sf::st_coordinates(geometry)[, 2],
@@ -782,51 +698,49 @@ overlap_ud <- function(data, sim, n_sim) {
       ctmm::as.telemetry()
 
     ctmm::projection(tel) <- ctmm::projection(z1)
-
     tel
   })
 
-  # Fit single guestimated ctmm model (silenced)
+  # Fit ctmm to observed track (still needed for AKDE bandwidth + SVF curve)
   invisible(capture.output(
     ms1 <- ctmm::ctmm.select(
       z1,
       ctmm::ctmm.guess(z1, interactive = FALSE),
-      verbose = F,
+      verbose = FALSE,
       cores = 1
     )
   ))
 
+  # Fit each simulated track using ms1's structure as a guess
   ms2 <- purrr::map(z2, function(z) {
     tryCatch(
       {
-        invisible(capture.output(
-          fit <- ctmm::ctmm.fit(z, ms1)
-        ))
+        invisible(capture.output(fit <- ctmm::ctmm.fit(z, ms1)))
         fit
       },
       error = function(e) NULL
     )
   })
 
-  # Remove failed fits and their corresponding telemetry data
   keep <- !purrr::map_lgl(ms2, is.null)
   ms2 <- ms2[keep]
   z2 <- z2[keep]
   invisible(capture.output(ms2_avg <- mean(ms2)))
 
+  # ---- UD overlap (unchanged) ----------------------------------------------
   z1_uds <- ctmm::akde(z1, ms1)
   invisible(capture.output(
     z2_uds <- ctmm::akde(z2, ms2, grid = list(r = z1_uds$r, dr = z1_uds$dr)) |>
       mean()
   ))
-
-  # Estimate the overlap of UDs
   bat_uds <- ctmm::overlap(list(z1_uds, z2_uds))$CI[1, 2, 2]
-  bat_ctmm <- ctmm::overlap(list(ms1, ms2_avg))$CI[1, 2, 2]
+
+  # ---- SVF score (replaces bat_ctmm) ---------------------------------------
+  svf <- svf_score(ms1, ms2_avg, ref = z1)
 
   list(
     bat_uds = bat_uds,
-    bat_ctmm = bat_ctmm
+    svf_score = svf
   )
 }
 

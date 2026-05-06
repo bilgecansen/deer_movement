@@ -10,7 +10,7 @@
 #' Configuration: edit `overwrite` below before running.
 
 # Configuration ---------------------------------------------------------------
-overwrite <- FALSE   # set to TRUE to refit deer that already have output
+overwrite <- TRUE # set to TRUE to refit deer that already have output
 
 # Load packages ---------------------------------------------------------------
 library(amt)
@@ -67,15 +67,15 @@ cat(sprintf("Found %d wrangled deer in data/tracks/\n", length(track_files)))
 dir.create("results", showWarnings = FALSE)
 
 # Loop ------------------------------------------------------------------------
-n_done    <- 0L
+n_done <- 0L
 n_skipped <- 0L
-n_failed  <- 0L
+n_failed <- 0L
 
 start_time <- Sys.time()
 
 for (i in seq_along(track_files)) {
-  key      <- keys[i]
-  in_path  <- track_files[i]
+  key <- keys[i]
+  in_path <- track_files[i]
   out_path <- sprintf("results/results_issf_%s.rds", key)
 
   # Skip: output already exists and we're not overwriting

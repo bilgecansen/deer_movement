@@ -14,7 +14,7 @@
 #' Configuration: edit `overwrite` below before running.
 
 # Configuration ---------------------------------------------------------------
-overwrite <- FALSE   # set to TRUE to reprocess deer that already have output
+overwrite <- TRUE # set to TRUE to reprocess deer that already have output
 
 # Load packages ---------------------------------------------------------------
 library(amt)
@@ -66,15 +66,15 @@ cat(sprintf("Total qualifying deer: %d\n", nrow(deer_mvt)))
 dir.create("data/tracks", recursive = TRUE, showWarnings = FALSE)
 
 # Loop --------------------------------------------------------------------------
-n_done    <- 0L
+n_done <- 0L
 n_skipped <- 0L
-n_failed  <- 0L
+n_failed <- 0L
 
 for (i in seq_len(nrow(deer_mvt))) {
   one_deer <- deer_mvt[i, ]
-  key      <- sprintf("%s_%s_%d", one_deer$id, one_deer$season, one_deer$year)
+  key <- sprintf("%s_%s_%d", one_deer$id, one_deer$season, one_deer$year)
   out_path <- sprintf("data/tracks/data_%s.rds", key)
-  hr_path  <- sprintf("data/HR/HRbin_%s.tif",  key)
+  hr_path <- sprintf("data/HR/HRbin_%s.tif", key)
 
   # Skip: HR raster missing -> can't run extract_step_variables
   if (!file.exists(hr_path)) {
@@ -95,16 +95,16 @@ for (i in seq_len(nrow(deer_mvt))) {
   ok <- tryCatch(
     {
       one_deer <- make_random_pt_extraction(
-        data       = one_deer,
-        n_pts      = 10,
-        water      = water_binary,
-        stp_col    = "stp",
+        data = one_deer,
+        n_pts = 10,
+        water = water_binary,
+        stp_col = "stp",
         output_col = "stp.random"
       )
       one_deer <- extract_step_variables(
-        data       = one_deer,
-        env        = env_raster,
-        ndvi_list  = ndvi_rasters,
+        data = one_deer,
+        env = env_raster,
+        ndvi_list = ndvi_rasters,
         random_col = "stp.random",
         output_col = "stp.var"
       )

@@ -1,20 +1,27 @@
 #' @description
-#' One-step-ahead log-likelihood for a single deer across all models.
+#' One-step-ahead log score for a single deer, computed for every fitted model
+#' in results/results_issf_<key>.rds.
 #'
-#' Usage: Rscript run_loglik.R <row_number>
-#'   row_number — deer index (row in data_deer_1_119.rds)
+#' Usage: Rscript run_logscore.R <id> <season> <year>
+#'   id     — deer ID
+#'   season — season string (e.g. "fa", "nb")
+#'   year   — year (integer)
 
 # Parse command line arguments -------------------------------------------------
 args <- commandArgs(trailingOnly = TRUE)
 
-if (length(args) != 1) {
+if (length(args) != 3) {
   stop(
-    "Usage: Rscript run_loglik.R <row_number>\nExample: Rscript run_loglik.R 5"
+    "Usage: Rscript run_logscore.R <id> <season> <year>\nExample: Rscript run_logscore.R 5000 fa 2017"
   )
 }
 
-row_no <- as.integer(args[1])
-cat(sprintf("Running log-likelihood for deer %d\n", row_no))
+id <- args[1]
+season <- args[2]
+year <- as.integer(args[3])
+
+key <- sprintf("%s_%s_%d", id, season, year)
+cat(sprintf("Running log score for deer %s\n", key))
 
 # Load packages ----------------------------------------------------------------
 library(amt)
@@ -26,17 +33,16 @@ library(furrr)
 library(parallel)
 
 # helper functions
-source("helper_functions.R")
+source("scripts/helper_functions.R")
 
 # Load data --------------------------------------------------------------------
 start_time <- Sys.time()
 
-# Deer movement data
-deer_mvt <- readRDS("data_deer_1_119.rds") %>%
-  dplyr::slice(row_no)
+# Deer movement data — single-row per-deer file
+deer_mvt <- readRDS(sprintf("data/tracks/data_%s.rds", key))
 
 # landscape data
-env_raster <- terra::rast("env/wiscland/wiscland2_binary.tif")
+env_raster <- terra::rast("data/env/wiscland/wiscland2_binary.tif")
 env_old <- terra::rast("Example_code/Env_2017.tif")
 env_raster <- terra::crop(env_raster, env_old) %>%
   terra::resample(env_old)
@@ -48,25 +54,20 @@ env_raster$north <- env_old$northness
 env_raster$dist <- env_old$fe.dist
 
 # NDVI data
-ndvi_year <- terra::rast(paste(
-  paste("NDVI", deer_mvt$year, sep = "_"),
-  ".tif",
-  sep = ""
-))
+ndvi_year <- terra::rast(sprintf("data/NDVI_year/NDVI_%d.tif", year))
 
 # issf models
-results_issf <- readRDS(sprintf("results/results_issf_%d.rds", row_no))
+results_issf <- readRDS(sprintf("results/results_issf_%s.rds", key))
 
+# Score every fitted model — null/failed models filtered out automatically
+# inside the precompute step (returns NULL for those).
 n_models <- length(results_issf)
+models_to_run <- seq_len(n_models)
 
-# TEMP: restrict this run to the null model (2) and the HR_edge model (3).
-# Revert by setting: models_to_run <- seq_len(n_models)
-models_to_run <- c(2L, 3L)
-
-# Pre-crop rasters for this deer -----------------------------------------------
+# Pre-crop rasters for this single deer ---------------------------------------
 crop_extent <- sf::st_buffer(
   sf::st_as_sf(
-    deer_mvt$stp_test[[1]],
+    deer_mvt$stp[[1]],
     coords = c('x1_', 'y1_'),
     crs = 6610
   ),
@@ -74,34 +75,30 @@ crop_extent <- sf::st_buffer(
 )
 
 env_cropped <- terra::crop(env_raster, crop_extent)
-env_cropped$HR_bin <- load_hr_raster(row_no, env_cropped)
-env_cropped$HR_edge <- load_hr_edge_raster(row_no, env_cropped)
+
+# HR rasters — no HR_bin (no model uses it). HR_edge stays in metres; for
+# HR_center we also build the log1p transformed layer the formulas reference.
+env_cropped$HR_edge <- load_hr_edge_raster(id, season, year, env_cropped)
+env_cropped$HR_center <- load_hr_center_raster(id, season, year, env_cropped)
+env_cropped$HR_center_log <- log1p(env_cropped$HR_center)
 
 deer_input <- list(
   crop_env = terra::wrap(env_cropped),
   crop_ndvi = terra::wrap(terra::crop(ndvi_year, crop_extent)),
-  stp_test = deer_mvt$stp_test[[1]],
-  x_median = deer_mvt$x_median,
-  y_median = deer_mvt$y_median
+  stp = deer_mvt$stp[[1]]
 )
 
-# Precompute all models --------------------------------------------------------
+# Precompute simulation models ------------------------------------------------
 cat("Precomputing simulation models...\n")
 
 model_sims <- purrr::map(models_to_run, function(m) {
-  coeff_i <- results_issf[[m]]$coeff
-
-  if (length(coeff_i) == 1 && is.na(coeff_i)) {
-    return(NULL)
-  }
-
   iss_i <- results_issf[[m]]$iss
 
   if (is.character(iss_i)) {
     return(NULL)
   }
 
-  train_i <- deer_mvt$stp.var.train[[1]]
+  train_i <- deer_mvt$stp.var[[1]]
 
   coefs <- iss_i$model$coefficients
   names(coefs) <- rename_landcover_coefs(names(coefs))
@@ -139,15 +136,15 @@ names(model_sims) <- as.character(models_to_run)
 rm(env_raster, ndvi_year, env_old, results_issf, deer_mvt)
 gc()
 
-# Run log-likelihood across all models in parallel -----------------------------
-cat("Computing one-step log-likelihoods...\n")
+# Run log score across all models in parallel ---------------------------------
+cat("Computing one-step log scores...\n")
 
 future::plan(
   multisession,
   workers = min(length(models_to_run), parallel::detectCores() - 1)
 )
 
-results_loglik <- furrr::future_map(
+results_logscore <- furrr::future_map(
   models_to_run,
   function(m) {
     cat("  Model:", m, "\n")
@@ -165,10 +162,8 @@ results_loglik <- furrr::future_map(
     env_local <- terra::unwrap(deer_input$crop_env)
     ndvi_local <- terra::unwrap(deer_input$crop_ndvi)
 
-    ll_df <- onestep_loglik(
-      stp_data = deer_input$stp_test,
-      x_median = deer_input$x_median,
-      y_median = deer_input$y_median,
+    ll_df <- onestep_logscore(
+      stp_data = deer_input$stp,
       env_test = env_local,
       ndvi_test = ndvi_local,
       issf_train = model_sim
@@ -191,7 +186,7 @@ future::plan(sequential)
 gc()
 
 # Combine and compute delta_logp relative to model 2 --------------------------
-results <- dplyr::bind_rows(results_loglik)
+results <- dplyr::bind_rows(results_logscore)
 
 null_logp <- results$total_logp[results$model == 2]
 
@@ -201,8 +196,9 @@ results <- results %>%
 cat("Results:\n")
 print(results)
 
-# Save results -----------------------------------------------------------------
-saveRDS(results, sprintf("results/results_loglik_%d.rds", row_no))
+# Save -------------------------------------------------------------------------
+dir.create("filters", showWarnings = FALSE)
+saveRDS(results, sprintf("filters/logscore_%s.rds", key))
 
 elapsed <- difftime(Sys.time(), start_time, units = "mins")
-cat(sprintf("Deer %d completed in %.1f minutes\n", row_no, elapsed))
+cat(sprintf("Deer %s completed in %.1f minutes\n", key, elapsed))
