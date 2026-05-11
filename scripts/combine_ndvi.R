@@ -1,9 +1,28 @@
+#' @description
+#' Merge raw monthly HLS NDVI tiles into one 12-layer raster per year, aligned
+#' to the working env grid. Pre-aligning here means downstream scripts
+#' (simulate_movement, onestep_loglik, extract_step_variables) don't need to
+#' resample NDVI again at runtime.
+
 library(terra)
 library(tidyverse)
 library(foreach)
 
-merge_NDVI <- function(ndvi_folder = "HLS_NDVI_monthly/", year) {
-  # Load and merge NDVI rasters
+# warp_to_template() lives in helper_functions.R
+source("scripts/helper_functions.R")
+
+# Spatial template — final NDVI grid matches this so downstream scripts can
+# stack NDVI directly into the env raster without further resampling.
+template <- terra::rast("data/env/wiscland/wiscland2.tif")
+
+
+merge_NDVI <- function(
+  year,
+  template,
+  outfile,
+  ndvi_folder = "data/NDVI_month/"
+) {
+  # Load and merge raw monthly tiles
   idx <- stringr::str_detect(list.files(ndvi_folder), as.character(year))
 
   ndvi_files <- paste(
@@ -35,15 +54,24 @@ merge_NDVI <- function(ndvi_folder = "HLS_NDVI_monthly/", year) {
   months <- seq(as.Date(start_month), by = "month", length.out = 12)
 
   time(z_all) <- months
-  z_all
+
+  # Warp onto the working grid AND write the output in one shot. Layer names
+  # and time stamps travel via the .aux.xml sidecar that warp_to_template
+  # copies from the temp input to the final output.
+  warp_to_template(
+    r = z_all,
+    template = template,
+    outfile = outfile,
+    method = "near",
+    datatype = "FLT4S"
+  )
 }
 
-for (i in 2017:2018) {
-  r <- merge_NDVI(year = i)
 
-  writeRaster(
-    r,
-    filename = paste("NDVI", paste(i, ".tif", sep = ""), sep = "_"),
-    overwrite = T
-  )
+for (i in 2016:2021) {
+  cat(sprintf("Merging NDVI for %d\n", i))
+
+  outfile <- sprintf("data/NDVI_year/NDVI_%d.tif", i)
+
+  merge_NDVI(year = i, template = template, outfile = outfile)
 }

@@ -16,9 +16,9 @@ if (length(args) != 3) {
   )
 }
 
-id     <- args[1]
+id <- args[1]
 season <- args[2]
-year   <- as.integer(args[3])
+year <- as.integer(args[3])
 
 key <- sprintf("%s_%s_%d", id, season, year)
 cat(sprintf("Running UD overlap for deer %s\n", key))
@@ -47,7 +47,7 @@ results_sim <- readRDS(sprintf("sims/sims_%s.rds", key))
 
 # Model numbers actually present in results_sim
 model_nums <- as.integer(names(results_sim))
-n_sim      <- 10
+n_sim <- 10
 
 # Compute UD overlap + SVF score per model in parallel ------------------------
 cat("Computing UD overlap and SVF score per model...\n")
@@ -72,8 +72,8 @@ results_ud <- suppressMessages(suppressWarnings(
     },
     .options = furrr_options(
       packages = c("sf", "tidyverse", "ctmm"),
-      stdout   = TRUE,
-      seed     = TRUE
+      stdout = TRUE,
+      seed = TRUE
     )
   )
 ))
