@@ -17,7 +17,8 @@ args <- commandArgs(trailingOnly = TRUE)
 
 if (length(args) != 3) {
   stop(
-    "Usage: Rscript run_udoverlap_test.R <id> <season> <year>\nExample: Rscript run_udoverlap_test.R 5000 fa 2017"
+    "Usage: Rscript run_udoverlap_test.R <id> <season> <year>\n
+    Example: Rscript run_udoverlap_test.R 5000 fa 2017"
   )
 }
 
