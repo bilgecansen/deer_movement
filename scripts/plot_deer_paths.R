@@ -1,103 +1,151 @@
+#' @description
+#' Per-deer plots of observed track vs. simulated paths, faceted by model.
+#' Reads `filters/filter_combined.rds` (which carries a `dropped_at` column
+#' marking the gate that eliminated each row; NA = survived all four).
+#'
+#' Outputs five PDFs in plots/, all with the same aesthetic:
+#'   deer_paths_selected.pdf            — models that passed every gate
+#'   deer_paths_step1_eliminated.pdf    — failed bat_uds    gate
+#'   deer_paths_step2_eliminated.pdf    — failed svf_score  gate
+#'   deer_paths_step3_eliminated.pdf    — failed delta_logp gate (incl. null
+#'                                         model when an alt passed)
+#'   deer_paths_step4_eliminated.pdf    — failed p_excd     gate
+
 library(tidyverse)
-source("helper_functions.R")
 
-model_selection <- readRDS("results_sel.rds")
+annotated <- readRDS("filters/filter_combined.rds")
 
-selected <- model_selection %>%
-  filter(step4) %>%
-  group_by(deer) %>%
-  filter(energy_skill == max(energy_skill)) %>%
-  ungroup() %>%
-  select(deer, model, bat_uds, bat_ctmm, delta_aic, energy_skill)
+dir.create("plots", showWarnings = FALSE)
 
-no_selection <- model_selection %>%
-  group_by(deer) %>%
-  summarize(
-    passed_step1 = sum(step1, na.rm = TRUE),
-    passed_step2 = sum(step2, na.rm = TRUE),
-    passed_step3 = sum(step3, na.rm = TRUE),
-    passed_step4 = sum(step4, na.rm = TRUE)
-  ) %>%
-  filter(passed_step4 == 0)
+# Plot one deer: observed path (orange) + simulated paths from the chosen
+# models (black, low alpha), faceted by model. Returns NULL if track or sim
+# file is missing, or if no requested model has usable simulations.
+plot_deer_models <- function(key, model_info, title, sim_alpha = 0.25) {
+  track_file <- sprintf("data/tracks/data_%s.rds", key)
+  sim_file <- sprintf("sims/sims_%s.rds", key)
 
-# Selected deers
-selected[which.max(selected$bat_uds), ]
-plot_deer_paths(48)
-ggsave("plots/deer_paths_48.png", width = 10, height = 8, dpi = 300)
+  if (!file.exists(track_file) || !file.exists(sim_file)) {
+    return(NULL)
+  }
 
-selected[which.min(selected$bat_uds), ]
-plot_deer_paths(71)
-ggsave("plots/deer_paths_71.png", width = 10, height = 8, dpi = 300)
+  one_deer <- readRDS(track_file)
+  obs <- one_deer$stp[[1]] |>
+    dplyr::select(x_ = x1_, y_ = y1_, t_ = t1_, burst_)
 
-selected[which.max(selected$energy_skill), ]
-plot_deer_paths(10)
-ggsave("plots/deer_paths_10.png", width = 10, height = 8, dpi = 300)
+  results_sim <- readRDS(sim_file)
+  keep_models <- as.character(model_info$model)
 
-# Filtered out deers
-no_selection
-plot_deer_paths(7)
-ggsave("plots/deer_paths_7.png", width = 10, height = 8, dpi = 300)
+  sim_df <- purrr::imap_dfr(results_sim, function(sim_m, m) {
+    if (!m %in% keep_models) {
+      return(NULL)
+    }
+    if (is.null(sim_m) || (length(sim_m) == 1 && is.na(sim_m))) {
+      return(NULL)
+    }
+    sim_m |>
+      dplyr::as_tibble() |>
+      dplyr::mutate(model = as.integer(m))
+  })
 
-plot_deer_paths(85)
-ggsave("plots/deer_paths_85.png", width = 10, height = 8, dpi = 300)
+  if (nrow(sim_df) == 0) {
+    return(NULL)
+  }
 
-# All deers in pdf
-# Best model per selected deer (highest energy_skill among passing models)
-best_selected <- selected %>%
-  group_by(deer) %>%
-  slice_max(p_excd, n = 1, with_ties = FALSE) %>%
-  ungroup()
+  sim_df <- sim_df |>
+    dplyr::mutate(path_id = paste(model, nsim, sep = "_"))
 
-pdf("plots/deer_paths_selected.pdf", width = 10, height = 8)
-for (r in sort(best_selected$deer)) {
-  info <- best_selected %>% filter(deer == r)
-  subtitle <- sprintf(
-    "Selected model: %s | BA-UDS: %.3f | BA-CTMM: %.3f | P(sl > es): %.3f",
-    info$model,
-    info$bat_uds,
-    info$bat_ctmm,
-    info$p_excd
+  # Facet strip: model number + the four filter metrics so the reader can see
+  # which one failed. NA prints as "NA" — no special casing needed.
+  fmt <- function(x, d) ifelse(is.na(x), "NA", sprintf(sprintf("%%.%df", d), x))
+  strip_lbl <- stats::setNames(
+    sprintf(
+      "model %d\nUD %s | SVF %s | dlogp %s | P(sl>es) %s",
+      model_info$model,
+      fmt(model_info$bat_uds, 2),
+      fmt(model_info$svf_score, 2),
+      fmt(model_info$delta_logp, 1),
+      fmt(model_info$p_excd, 2)
+    ),
+    as.character(model_info$model)
   )
-  p <- plot_deer_paths(r) + labs(subtitle = subtitle)
-  print(p)
+
+  ggplot() +
+    geom_path(
+      data = obs,
+      aes(x = x_, y = y_, group = burst_),
+      colour = "orange",
+      linewidth = 0.7
+    ) +
+    geom_path(
+      data = sim_df,
+      aes(x = x_, y = y_, group = path_id),
+      colour = "black",
+      alpha = sim_alpha,
+      linewidth = 0.3
+    ) +
+    coord_equal() +
+    facet_wrap(~model, labeller = ggplot2::as_labeller(strip_lbl)) +
+    labs(title = title) +
+    theme_minimal() +
+    theme(
+      axis.text = element_blank(),
+      axis.title = element_blank(),
+      strip.text = element_text(size = 8)
+    )
 }
-dev.off()
 
-pdf(
-  "plots/deer_paths_no_selection.pdf",
-  width = 10,
-  height = 8,
-  onefile = TRUE
-)
-for (r in sort(unique(no_selection$deer))) {
-  print(plot_deer_paths(r))
+# Write one PDF, one page per deer, faceted across the rows of `subset_df`.
+write_pdf <- function(subset_df, outfile, title_prefix) {
+  keys <- sort(unique(subset_df$key))
+  cat(sprintf(
+    "%s: %d deer, %d (deer, model) pairs -> %s\n",
+    title_prefix,
+    length(keys),
+    nrow(subset_df),
+    outfile
+  ))
+
+  if (length(keys) == 0) {
+    cat("  [skip] nothing to plot\n")
+    return(invisible(NULL))
+  }
+
+  pdf(outfile, width = 10, height = 8, onefile = TRUE)
+  for (k in keys) {
+    model_info <- subset_df |>
+      dplyr::filter(key == k) |>
+      dplyr::arrange(model)
+    p <- plot_deer_models(
+      k,
+      model_info,
+      title = sprintf(
+        "%s — %s (%d model%s)",
+        title_prefix,
+        k,
+        nrow(model_info),
+        if (nrow(model_info) == 1) "" else "s"
+      )
+    )
+    if (!is.null(p)) {
+      print(p)
+    } else {
+      cat(sprintf("  [skip] %s: no usable sims for requested models\n", k))
+    }
+  }
+  dev.off()
 }
-dev.off()
 
-# Animations
-deer_mvt <- readRDS("data_deer_1_119.rds")
-row_no <- 11
-obs <- deer_mvt$stp_test[[row_no]]
-
-results_sim <- readRDS(sprintf("results/results_sim_%d.rds", row_no))
-sim_one <- results_sim[[8]] %>%
-  dplyr::filter(nsim == 1) %>%
-  dplyr::rename(x1_ = x_, y1_ = y_, t1_ = t_)
-
-sim_two <- results_sim[[2]] %>%
-  dplyr::filter(nsim == 1) %>%
-  dplyr::rename(x1_ = x_, y1_ = y_, t1_ = t_)
-
-
-# Compare observed vs one simulated replicate from a chosen model
-animate_deer_path(
-  path = obs,
-  path2 = sim_one,
-  path3 = sim_two,
-  step_duration = 0.7,
-  wake_length = 0.01,
-  file = "plots/deer_11-(2,8)_obs_vs_sim.mp4"
+# Five outputs ----------------------------------------------------------------
+write_pdf(
+  annotated |> dplyr::filter(is.na(dropped_at)),
+  "plots/deer_paths_selected.pdf",
+  "Selected"
 )
 
-# Single Deer
-animate_deer_path(obs, file = "plots/deer_48.mp4", step_duration = 0.5)
+for (s in 1:4) {
+  write_pdf(
+    annotated |> dplyr::filter(dropped_at == s),
+    sprintf("plots/deer_paths_step%d_eliminated.pdf", s),
+    sprintf("Step %d eliminated", s)
+  )
+}
