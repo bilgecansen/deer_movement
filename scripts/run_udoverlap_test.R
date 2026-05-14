@@ -76,7 +76,17 @@ results_ud <- suppressMessages(suppressWarnings(
         return(list(bat_uds = NA_real_, svf_score = NA_real_))
       }
 
-      overlap_ud(deer_mvt$stp[[1]], sim_m, n_sim = n_sim)
+      tryCatch(
+        overlap_ud(deer_mvt$stp[[1]], sim_m, n_sim = n_sim),
+        error = function(e) {
+          message(sprintf(
+            "    Model %d failed: %s",
+            m,
+            conditionMessage(e)
+          ))
+          list(bat_uds = NA_real_, svf_score = NA_real_)
+        }
+      )
     },
     .options = furrr_options(
       packages = c("sf", "tidyverse", "ctmm"),
