@@ -24,18 +24,56 @@
 
 library(tidyverse)
 
+# Pipeline mode ---------------------------------------------------------------
+# FALSE: use in-sample filter outputs (filters/udoverlap_*.rds,
+#        filters/logscore_*.rds, filters/es.rds) and write filter_combined.rds
+#        / filter_selected.rds + non-suffixed plot files.
+# TRUE:  use out-of-sample (test) filter outputs (filters/udoverlap_test_*.rds,
+#        filters/logscore_test_*.rds, filters/es_test.rds) and write
+#        filter_combined_test.rds / filter_selected_test.rds + _test plot files.
+test_mode <- FALSE
+
 null_model <- 2L
 delta_logp_min <- -3
 ud_min <- 0.8
 svf_min <- 0.8
 p_excd_min <- 0.5
 
+# File-naming derived from test_mode -----------------------------------------
+suffix <- if (test_mode) "_test" else ""
+udov_prefix <- sprintf("udoverlap%s_", suffix)
+logs_prefix <- sprintf("logscore%s_", suffix)
+es_file <- sprintf("filters/es%s.rds", suffix)
+combined_out <- sprintf("filters/filter_combined%s.rds", suffix)
+selected_out <- sprintf("filters/filter_selected%s.rds", suffix)
+plot_pre <- sprintf("plots/filter_violins_pre%s.png", suffix)
+plot_post <- sprintf("plots/filter_violins_post%s.png", suffix)
+
 # Discover keys ---------------------------------------------------------------
+# Broad listing matches both test and non-test files (the regex
+# `^udoverlap_.*` happily eats `udoverlap_test_…`); narrow to the requested
+# mode explicitly.
 udov_files <- list.files("filters", "^udoverlap_.*\\.rds$", full.names = TRUE)
 logs_files <- list.files("filters", "^logscore_.*\\.rds$", full.names = TRUE)
 
-keys_udov <- gsub("^udoverlap_(.*)\\.rds$", "\\1", basename(udov_files))
-keys_logs <- gsub("^logscore_(.*)\\.rds$", "\\1", basename(logs_files))
+if (test_mode) {
+  udov_files <- udov_files[grepl("^udoverlap_test_", basename(udov_files))]
+  logs_files <- logs_files[grepl("^logscore_test_", basename(logs_files))]
+} else {
+  udov_files <- udov_files[!grepl("^udoverlap_test_", basename(udov_files))]
+  logs_files <- logs_files[!grepl("^logscore_test_", basename(logs_files))]
+}
+
+keys_udov <- gsub(
+  sprintf("^%s(.*)\\.rds$", udov_prefix),
+  "\\1",
+  basename(udov_files)
+)
+keys_logs <- gsub(
+  sprintf("^%s(.*)\\.rds$", logs_prefix),
+  "\\1",
+  basename(logs_files)
+)
 keys <- intersect(keys_udov, keys_logs)
 
 cat(sprintf(
@@ -56,8 +94,8 @@ parse_key <- function(k) {
 
 # Load udoverlap + logscore per deer ------------------------------------------
 per_deer_df <- purrr::map_dfr(keys, function(k) {
-  ud <- readRDS(file.path("filters", sprintf("udoverlap_%s.rds", k)))
-  ls <- readRDS(file.path("filters", sprintf("logscore_%s.rds", k)))
+  ud <- readRDS(file.path("filters", sprintf("%s%s.rds", udov_prefix, k)))
+  ls <- readRDS(file.path("filters", sprintf("%s%s.rds", logs_prefix, k)))
 
   ud_df <- purrr::imap_dfr(ud, function(x, m) {
     if (length(x) == 1 && is.na(x)) {
@@ -84,7 +122,7 @@ per_deer_df <- purrr::map_dfr(keys, function(k) {
 })
 
 # Energy scores (one combined file for all deer) ------------------------------
-es_df <- readRDS("filters/es.rds") |>
+es_df <- readRDS(es_file) |>
   dplyr::mutate(
     key = paste(id, season, year, sep = "_"),
     model = as.integer(model)
@@ -188,8 +226,8 @@ all_df <- all_df |>
   )
 
 # Save ------------------------------------------------------------------------
-saveRDS(all_df, "filters/filter_combined.rds")
-saveRDS(step4, "filters/filter_selected.rds")
+saveRDS(all_df, combined_out)
+saveRDS(step4, selected_out)
 
 cat(sprintf(
   "\nDeer-model rows: %d total -> step1 %d -> step2 %d -> step3 %d -> step4 %d\n",
@@ -302,14 +340,14 @@ panels_post <- panels_post +
 
 dir.create("plots", showWarnings = FALSE)
 ggplot2::ggsave(
-  "plots/filter_violins_pre.png",
+  plot_pre,
   panels_pre,
   width = 10,
   height = 7,
   dpi = 300
 )
 ggplot2::ggsave(
-  "plots/filter_violins_post.png",
+  plot_post,
   panels_post,
   width = 10,
   height = 7,
