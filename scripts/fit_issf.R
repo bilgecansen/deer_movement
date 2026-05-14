@@ -26,28 +26,28 @@ formulas <- c(
 
   "case_ ~ (log(sl_) + cos(ta_)):tod_start_ + HR_edge_end",
 
-  "case_ ~ (log(sl_) + cos(ta_)):tod_start_ + HR_center_log_end",
+  "case_ ~ (log(sl_) + cos(ta_)):tod_start_ + HR_center_end",
 
   "case_ ~ (log(sl_) + cos(ta_)):tod_start_ +
-    (log(sl_) + cos(ta_)):HR_center_log_start",
+    (log(sl_) + cos(ta_)):HR_center_start",
 
-  "case_ ~ (log(sl_) + cos(ta_)):tod_start_:HR_center_log_start",
+  "case_ ~ (log(sl_) + cos(ta_)):tod_start_:HR_center_start",
 
-  "case_ ~ (log(sl_) + cos(ta_)):tod_start_ + HR_center_log_end +
+  "case_ ~ (log(sl_) + cos(ta_)):tod_start_ + HR_center_end +
     east_end + east2_end + north_end + dist_end + wiscland_end + ndvi_end +
     wiscland_end:ndvi_end",
 
   "case_ ~ log(sl_) + cos(ta_) + east_end + east2_end +
     north_end + dist_end + wiscland_end + ndvi_end + wiscland_end:ndvi_end",
 
-  "case_ ~ (log(sl_) + cos(ta_)):tod_start_ + HR_center_log_end +
+  "case_ ~ (log(sl_) + cos(ta_)):tod_start_ + HR_center_end +
     east_end + east2_end + north_end + dist_end + wiscland_end",
 
   "case_ ~ (log(sl_) + cos(ta_)):tod_start_ + east_end + east2_end +
     north_end + dist_end + wiscland_end",
 
-  "case_ ~ (log(sl_) + cos(ta_)):tod_start_ + HR_center_log_end + dist_end +
-    wiscland_end + HR_center_log_end:dist_end + HR_center_log_end:wiscland_end"
+  "case_ ~ (log(sl_) + cos(ta_)):tod_start_ + HR_center_end + dist_end +
+    wiscland_end + HR_center_end:dist_end + HR_center_end:wiscland_end"
 )
 
 formulas <- paste(formulas, "+ strata(step_id_)")
