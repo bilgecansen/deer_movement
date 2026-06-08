@@ -28,32 +28,12 @@ source("scripts/helper_functions.R")
 # Load shared inputs ----------------------------------------------------------
 start_time <- Sys.time()
 
-# landscape data
-env_raster <- terra::rast("data/env/wiscland/wiscland2_binary.tif")
-env_old <- terra::rast("Example_code/Env_2017.tif")
-env_raster <- terra::crop(env_raster, env_old) %>%
-  terra::resample(env_old)
-
-env_raster$ele <- env_old$ele
-env_raster$east <- env_old$eastness
-env_raster$east2 <- env_old$eastness2
-env_raster$north <- env_old$northness
-env_raster$dist <- env_old$fe.dist
-
-water_binary <- terra::ifel(env_raster$wiscland == "water", 1, 0)
-names(water_binary) <- "Water"
-
-# NDVI data
-ndvi_rasters <- list(
-  ndvi_2017 = terra::rast('data/NDVI_year/NDVI_2017.tif'),
-  ndvi_2018 = terra::rast('data/NDVI_year/NDVI_2018.tif'),
-  ndvi_2019 = terra::rast('data/NDVI_year/NDVI_2019.tif'),
-  ndvi_2020 = terra::rast('data/NDVI_year/NDVI_2020.tif'),
-  ndvi_2021 = terra::rast('data/NDVI_year/NDVI_2021.tif')
-)
+# landscape data — landcover and NDVI are now annual, so both are loaded per
+# deer inside the loop (see load_landcover / make_water_mask / load_ndvi).
+# No env_old.
 
 # Deer movement data
-sw_deer_tracks <- readRDS('data/SW_filtered_deer.RData')
+sw_deer_tracks <- readRDS('library/SW_filtered_deer.RData')
 
 # Filter — must match create_hr_rasters.R so the HR rasters line up by deer key
 deer_mvt <- sw_deer_tracks %>%
@@ -94,17 +74,21 @@ for (i in seq_len(nrow(deer_mvt))) {
   cat(sprintf("[run]              %s\n", key))
   ok <- tryCatch(
     {
+      # Season-specific annual landcover (+ open-water mask) for this deer
+      landcover <- load_landcover(one_deer$year, one_deer$season)
+      water <- make_water_mask(landcover)
+
       one_deer <- make_random_pt_extraction(
         data = one_deer,
         n_pts = 10,
-        water = water_binary,
+        water = water,
         stp_col = "stp",
         output_col = "stp.random"
       )
       one_deer <- extract_step_variables(
         data = one_deer,
-        env = env_raster,
-        ndvi_list = ndvi_rasters,
+        env = landcover,
+        ndvi = load_ndvi(one_deer$year),
         random_col = "stp.random",
         output_col = "stp.var"
       )

@@ -50,18 +50,11 @@ source("scripts/helper_functions.R")
 # Load data --------------------------------------------------------------------
 deer_mvt <- readRDS(sprintf("data/tracks/data_%s.rds", key))
 
-env_raster <- terra::rast("data/env/wiscland/wiscland2_binary.tif")
-env_old <- terra::rast("Example_code/Env_2017.tif")
-env_raster <- terra::crop(env_raster, env_old) %>%
-  terra::resample(env_old)
+# Season-specific annual landcover (categorical band + per-class binary
+# indicator layers). env_old terrain covariates are dropped.
+env_raster <- load_landcover(year, season)
 
-env_raster$ele <- env_old$ele
-env_raster$east <- env_old$eastness
-env_raster$east2 <- env_old$eastness2
-env_raster$north <- env_old$northness
-env_raster$dist <- env_old$fe.dist
-
-ndvi_year <- terra::rast(sprintf("data/NDVI_year/NDVI_%d.tif", year))
+ndvi_year <- load_ndvi(year)
 
 results_issf <- readRDS(sprintf("results/results_issf_%s.rds", key))
 
@@ -70,7 +63,7 @@ stp_data <- deer_mvt$stp[[1]]
 
 crop_extent <- sf::st_buffer(
   sf::st_as_sf(stp_data, coords = c('x1_', 'y1_'), crs = 6610),
-  5000
+  CROP_BUFFER_M
 )
 
 env_cropped <- terra::crop(env_raster, crop_extent)

@@ -15,11 +15,15 @@ library(sf)
 library(furrr)
 library(parallel)
 
+# Shared constants (CROP_BUFFER_M). future auto-exports it to workers, the same
+# way it captures env_template referenced in the map function below.
+source("scripts/helper_functions.R")
+
 # Load data --------------------------------------------------------------------
 cat("Loading data...\n")
 
 # Deer movement data
-sw_deer_tracks <- readRDS('data/SW_filtered_deer.RData')
+sw_deer_tracks <- readRDS('library/SW_filtered_deer.RData')
 
 # Filter to the rows we want to model
 deer_mvt <- sw_deer_tracks %>%
@@ -41,15 +45,12 @@ step_list <- lapply(seq_len(nrow(deer_mvt)), function(i) {
 rm(sw_deer_tracks, deer_mvt)
 gc()
 
-# Load env_raster — used only as spatial template (CRS + resolution)
-env_raster <- terra::rast("data/env/wiscland/wiscland2_binary.tif")
-env_old <- terra::rast("Example_code/Env_2017.tif")
-env_raster <- terra::crop(env_raster, env_old) %>%
-  terra::resample(env_old)
-
-# Wrap a single layer for sending to parallel workers
-env_template <- terra::wrap(env_raster[[1]])
-rm(env_raster, env_old)
+# Spatial template (grid only — CRS + resolution + origin). The first band of
+# any annual landcover raster works: all years share the same EPSG:6610 / 30 m
+# grid as the NDVI and HR rasters built downstream.
+env_template <- terra::wrap(
+  terra::rast("library/landcover/landcover_2017.tif")[[1]]
+)
 gc()
 
 # Create output directory
@@ -151,12 +152,12 @@ furrr::future_map(
         gc()
 
         # Step 6: Create binary raster -----------------------------------------
-        # Crop extent: 5000m buffer around all step start locations (full
+        # Crop extent: CROP_BUFFER_M around all step start locations (full
         # track), so the resulting HR rasters cover both training and test
         # buffers used downstream.
         crop_extent <- sf::st_buffer(
           sf::st_as_sf(stp_all, coords = c("x1_", "y1_"), crs = 6610),
-          5000
+          CROP_BUFFER_M
         )
 
         env_local <- terra::unwrap(env_template) %>%

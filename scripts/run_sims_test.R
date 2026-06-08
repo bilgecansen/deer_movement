@@ -56,20 +56,12 @@ start_time <- Sys.time()
 # Deer movement data — single-row per-deer file for the TEST year
 deer_mvt <- readRDS(test_track_path)
 
-# landscape data (static layers — year-independent)
-env_raster <- terra::rast("data/env/wiscland/wiscland2_binary.tif")
-env_old <- terra::rast("Example_code/Env_2017.tif")
-env_raster <- terra::crop(env_raster, env_old) %>%
-  terra::resample(env_old)
-
-env_raster$ele <- env_old$ele
-env_raster$east <- env_old$eastness
-env_raster$east2 <- env_old$eastness2
-env_raster$north <- env_old$northness
-env_raster$dist <- env_old$fe.dist
+# landscape data — TEST-year season-specific landcover (categorical band + per-
+# class binary indicator layers). env_old terrain covariates are dropped.
+env_raster <- load_landcover(test_year, season)
 
 # NDVI data — TEST year
-ndvi_year <- terra::rast(sprintf("data/NDVI_year/NDVI_%d.tif", test_year))
+ndvi_year <- load_ndvi(test_year)
 
 # issf models — fitted on TRAIN year
 results_issf <- readRDS(sprintf("results/results_issf_%s.rds", train_key))
@@ -87,7 +79,7 @@ crop_extent <- sf::st_buffer(
     coords = c('x1_', 'y1_'),
     crs = 6610
   ),
-  5000
+  CROP_BUFFER_M
 )
 
 env_cropped <- terra::crop(env_raster, crop_extent)
@@ -158,7 +150,7 @@ model_sims <- purrr::map(models_to_sim, function(m) {
 names(model_sims) <- as.character(models_to_sim)
 
 # Free large objects
-rm(env_raster, ndvi_year, env_old, results_issf, deer_mvt)
+rm(env_raster, ndvi_year, results_issf, deer_mvt)
 gc()
 
 # Simulate across models in parallel ------------------------------------------

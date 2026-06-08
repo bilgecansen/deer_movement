@@ -1,5 +1,125 @@
 # Helper functions -------------------------------------------------------------
 
+# Landcover factor levels, reference (intercept) level first. Sourced from the
+# annual `library/landcover/landcover_<year>.tif` rasters, whose seasonal bands
+# carry 11 categories. `open_water` is intentionally omitted: it is the water /
+# step-exclusion mask (see make_water_mask), not a predictor. `forest` is the
+# reference level, so it gets no indicator layer and no coefficient.
+LANDCOVER_LEVELS <- c(
+  "forest",
+  "corn",
+  "soybeans",
+  "alfalfa_hay",
+  "small_grains",
+  "other_ag",
+  "wetland_forested",
+  "wetland_open",
+  "grassland",
+  "developed"
+)
+
+# Crop buffer (metres, CRS 6610) added around each deer's track when cropping
+# rasters for random-step generation, covariate extraction, HR raster creation,
+# simulation, and scoring. Sized to clear the longest single observed/simulated
+# step (~2.3 km max) plus room for simulated-path drift before the HR_center /
+# HR_edge terms pull the path back. Keep create_hr_rasters' buffer >= this so HR
+# rasters fully cover the runtime crop window.
+CROP_BUFFER_M <- 3000
+
+#' Load a season-specific annual landcover stack
+#'
+#' Reads library/landcover/landcover_<year>.tif, selects the band matching the
+#' deer's `season`, and returns a SpatRaster carrying:
+#'   * `wiscland` — the categorical landcover band (factor; drives the iSSF
+#'     `wiscland_*` design columns at fit time)
+#'   * one binary indicator layer per non-reference predictor class, each named
+#'     exactly like the class so the redistribution kernel can read
+#'     `<class>_end` covariates at simulation / scoring time.
+#'
+#' `open_water` is the water/exclusion class and `forest` is the reference
+#' level; neither gets an indicator layer.
+#'
+#' @param year   Year (integer); selects landcover_<year>.tif
+#' @param season Deer season code: one of "br", "nb", "fa", "pf"
+#' @param folder Folder of annual landcover rasters
+#' @param ref    Reference (intercept) class — emitted with no indicator layer
+#' @return SpatRaster: `wiscland` + one binary layer per non-reference class
+load_landcover <- function(
+  year,
+  season,
+  folder = "library/landcover",
+  ref = "forest"
+) {
+  band_for <- c(
+    br = "breeding",
+    nb = "non_breeding",
+    fa = "fawning",
+    pf = "post_fawning"
+  )
+  if (!season %in% names(band_for)) {
+    stop(sprintf("Unknown season '%s' (expected one of br/nb/fa/pf)", season))
+  }
+
+  fname <- sprintf("landcover_%d.tif", year)
+  lc <- terra::rast(file.path(folder, fname))[[band_for[[season]]]]
+  names(lc) <- "wiscland"
+
+  # One binary indicator per predictor class (everything except the reference
+  # level and the water class). terra is lazy here, so these per-class layers
+  # are only materialised over the window callers later crop to.
+  pred_levels <- setdiff(LANDCOVER_LEVELS, ref)
+  bins <- lapply(pred_levels, function(lv) {
+    b <- terra::ifel(lc == lv, 1, 0)
+    names(b) <- lv
+    b
+  })
+
+  do.call(c, c(list(lc), bins))
+}
+
+#' Binary open-water mask from a landcover stack (1 = water, 0 = land)
+#'
+#' Built from the `open_water` class of the categorical `wiscland` band. Used to
+#' drop random/available steps that land on water in make_random_pt_extraction.
+#'
+#' @param landcover SpatRaster from load_landcover (must carry `wiscland`)
+#' @return SpatRaster with a single layer named "Water"
+make_water_mask <- function(landcover) {
+  w <- terra::ifel(landcover[["wiscland"]] == "open_water", 1, 0)
+  names(w) <- "Water"
+  w
+}
+
+#' Load a year's NDVI as a 12-layer monthly stack
+#'
+#' Reads the twelve library/ndvi/ndvi_<year>_<MM>.tif single-band files for
+#' `year` and stacks them in calendar order (layer i = month i), with per-layer
+#' `time()` set to the first of each month. Drop-in replacement for the old
+#' data/NDVI_year/NDVI_<year>.tif 12-band rasters:
+#'   * indexable by month integer (`ndvi[[mo]]`) for simulate_movement /
+#'     onestep_logscore / plot_kernel_grid, and
+#'   * time-stamped for amt::extract_covariates_var_time in
+#'     extract_step_variables.
+#'
+#' @param year   Year (integer)
+#' @param folder Folder of monthly NDVI rasters
+#' @return SpatRaster with 12 layers (Jan..Dec), time() set
+load_ndvi <- function(year, folder = "library/ndvi") {
+  files <- file.path(folder, sprintf("ndvi_%d_%02d.tif", year, 1:12))
+  missing <- !file.exists(files)
+  if (any(missing)) {
+    stop(sprintf(
+      "Missing NDVI files for %d: %s",
+      year,
+      paste(basename(files[missing]), collapse = ", ")
+    ))
+  }
+  r <- terra::rast(files)
+  names(r) <- month.abb
+  terra::time(r) <- as.Date(sprintf("%d-%02d-01", year, 1:12))
+  r
+}
+
 #' Generate random steps with environmental covariates (single-deer)
 #'
 #' Operates on a single-row tibble. Generates `n_pts` water-free random
@@ -12,7 +132,7 @@
 make_random_pt_extraction <- function(
   data,
   n_pts,
-  water = water_binary,
+  water,
   stp_col = "stp",
   output_col = "random.stp"
 ) {
@@ -22,7 +142,7 @@ make_random_pt_extraction <- function(
   data_step <- data[[stp_col]][[1]]
   crop_extent <- sf::st_buffer(
     sf::st_as_sf(data_step, coords = c('x1_', 'y1_'), crs = 6610),
-    5000
+    CROP_BUFFER_M
   )
   water_local <- terra::crop(water, crop_extent)
 
@@ -79,13 +199,13 @@ make_random_pt_extraction <- function(
 #'   random-steps column named by `random_col`. The HR raster files
 #'   `HRbin_<id>_<season>_<year>.tif`, `HRedge_<id>_<season>_<year>.tif`, and
 #'   `HRcenter_<id>_<season>_<year>.tif` must exist in `hr_folder`.
-#' @param env Environmental rasters
-#' @param ndvi_list NDVI rasters
+#' @param env Landcover stack for the deer's year+season (from load_landcover)
+#' @param ndvi 12-layer monthly NDVI stack for the deer's year (from load_ndvi)
 #' @param hr_folder Folder containing per-deer HR rasters
 extract_step_variables <- function(
   data,
-  env = env_raster,
-  ndvi_list = ndvi_rasters,
+  env,
+  ndvi,
   hr_folder = "data/HR",
   random_col = "random.stp",
   output_col = "stp.var"
@@ -96,12 +216,11 @@ extract_step_variables <- function(
 
   crop_extent <- sf::st_buffer(
     sf::st_as_sf(data_step, coords = c('x1_', 'y1_'), crs = 6610),
-    5000
+    CROP_BUFFER_M
   )
 
   env_cropped <- terra::crop(env, crop_extent)
-  ndvi_year <- ndvi_list[[paste0('ndvi_', data$year)]]
-  ndvi_local <- terra::crop(ndvi_year, crop_extent)
+  ndvi_local <- terra::crop(ndvi, crop_extent)
 
   # Per-deer HR rasters, aligned to env_cropped via the load_hr_*_raster
   # helpers (which handle resample + NA fill)
@@ -131,13 +250,7 @@ extract_step_variables <- function(
   hr_center_log <- log1p(hr_center)
   names(hr_center_log) <- "HR_center_log"
 
-  lc_levels <- c(
-    "central.hardwoods",
-    "oak",
-    "agriculture",
-    "grassland",
-    "other"
-  )
+  lc_levels <- LANDCOVER_LEVELS
 
   data_ssf <- data_step |>
     amt::extract_covariates(env_cropped, where = 'both') |>
@@ -674,13 +787,7 @@ simulate_movement <- function(
 rename_landcover_coefs <- function(
   coef_names,
   prefix = "wiscland_end",
-  levels = c(
-    "central.hardwoods",
-    "oak",
-    "agriculture",
-    "grassland",
-    "other"
-  )
+  levels = setdiff(LANDCOVER_LEVELS, "forest")
 ) {
   # Sort levels longest first to avoid partial matches
   levels <- levels[order(nchar(levels), decreasing = TRUE)]
