@@ -31,7 +31,7 @@ library(tidyverse)
 # TRUE:  use out-of-sample (test) filter outputs (filters/udoverlap_test_*.rds,
 #        filters/logscore_test_*.rds, filters/es_test.rds) and write
 #        filter_combined_test.rds / filter_selected_test.rds + _test plot files.
-test_mode <- FALSE
+test_mode <- F
 
 null_model <- 2L
 delta_logp_min <- -3
@@ -114,7 +114,8 @@ per_deer_df <- purrr::map_dfr(keys, function(k) {
   })
 
   ls_df <- tibble::as_tibble(ls) |>
-    dplyr::select(model, total_logp, n_steps, delta_logp)
+    dplyr::select(model, total_logp, n_steps, delta_logp) |>
+    dplyr::mutate(perplexity = exp(-total_logp / n_steps))
 
   dplyr::full_join(ud_df, ls_df, by = "model") |>
     dplyr::bind_cols(parse_key(k)) |>
@@ -221,7 +222,7 @@ all_df <- all_df |>
       !in_s2 ~ 2L,
       !in_s3 ~ 3L,
       !in_s4 ~ 4L,
-      TRUE   ~ NA_integer_
+      TRUE ~ NA_integer_
     )
   )
 
@@ -323,13 +324,10 @@ panels_pre <- (violin_panel(all_df, "bat_uds", ud_min, "#FF644E") |
     violin_panel(all_df, "p_excd", p_excd_min, "#61D836")) +
   patchwork::plot_annotation(title = "Pre-filter (all deer x model rows)")
 
-panels_post <- (
-  violin_panel_diff(all_df, step1, "bat_uds",    ud_min,         "#FF644E") |
-  violin_panel_diff(step1,  step2, "svf_score",  svf_min,        "#16E7CF")
-) / (
-  violin_panel_diff(step2,  step3, "delta_logp", delta_logp_min, "#BF5AF2") |
-  violin_panel_diff(step3,  step4, "p_excd",     p_excd_min,     "#61D836")
-) +
+panels_post <- (violin_panel_diff(all_df, step1, "bat_uds", ud_min, "#FF644E") |
+  violin_panel_diff(step1, step2, "svf_score", svf_min, "#16E7CF")) /
+  (violin_panel_diff(step2, step3, "delta_logp", delta_logp_min, "#BF5AF2") |
+    violin_panel_diff(step3, step4, "p_excd", p_excd_min, "#61D836")) +
   patchwork::plot_layout(guides = "collect") &
   ggplot2::theme(legend.position = "bottom")
 
@@ -351,5 +349,213 @@ ggplot2::ggsave(
   panels_post,
   width = 10,
   height = 7,
+  dpi = 300
+)
+
+# Per-deer pass/fail vs. covariates ------------------------------------------
+# A deer "passed" iff at least one environmental-variable model (models 6..10)
+# survived all four gates. Deer with only null models surviving (2 or 3), or
+# with nothing surviving, are counted as failed.
+env_models <- 6:10
+
+passed_keys <- step4 |>
+  dplyr::filter(model %in% env_models) |>
+  dplyr::pull(key) |>
+  unique()
+
+deer_status <- purrr::map_dfr(keys, parse_key) |>
+  dplyr::mutate(
+    key = keys,
+    id = as.character(id),
+    status = factor(
+      ifelse(key %in% passed_keys, "passed", "failed"),
+      levels = c("failed", "passed")
+    )
+  )
+
+# Join sex / age covariates from the curated deer track table.
+sw_meta <- readRDS("library/SW_filtered_deer.RData") |>
+  tibble::as_tibble() |>
+  dplyr::transmute(
+    id = as.character(id),
+    season = as.character(season),
+    year = as.integer(year),
+    sex = sex,
+    age = `age.at.col1`
+  ) |>
+  dplyr::distinct(id, season, year, .keep_all = TRUE)
+
+deer_status <- deer_status |>
+  dplyr::left_join(sw_meta, by = c("id", "season", "year"))
+
+cat(sprintf(
+  "\nPer-deer pass/fail (env models %d..%d): passed %d / failed %d (of %d)\n",
+  min(env_models),
+  max(env_models),
+  sum(deer_status$status == "passed"),
+  sum(deer_status$status == "failed"),
+  nrow(deer_status)
+))
+
+# Proportion bar charts: stacked-to-100% so passed/failed shares are
+# directly comparable across categories with very different sample sizes.
+# Per-category total n is printed above each bar so the reader can still see
+# how much data drives each proportion.
+# (Sex column stays in deer_status above; just not plotted here.)
+status_fill <- c(failed = "grey60", passed = "#1F77B4")
+
+make_status_prop <- function(df, var, x_label, fills = status_fill) {
+  d <- df |> dplyr::filter(!is.na(.data[[var]]))
+
+  summ <- d |>
+    dplyr::count(.data[[var]], status, name = "n", .drop = FALSE) |>
+    dplyr::group_by(.data[[var]]) |>
+    dplyr::mutate(prop = n / sum(n), total_n = sum(n)) |>
+    dplyr::ungroup()
+
+  n_per <- summ |>
+    dplyr::distinct(.data[[var]], total_n)
+
+  ggplot2::ggplot(
+    summ,
+    ggplot2::aes(x = .data[[var]], y = prop, fill = status)
+  ) +
+    ggplot2::geom_col() +
+    ggplot2::geom_text(
+      ggplot2::aes(
+        label = ifelse(prop > 0, scales::percent(prop, accuracy = 1), "")
+      ),
+      position = ggplot2::position_stack(vjust = 0.5),
+      colour = "white",
+      size = 3
+    ) +
+    ggplot2::geom_text(
+      data = n_per,
+      ggplot2::aes(
+        x = .data[[var]],
+        y = 1.02,
+        label = sprintf("n = %d", total_n)
+      ),
+      inherit.aes = FALSE,
+      size = 3,
+      vjust = 0
+    ) +
+    ggplot2::scale_y_continuous(
+      labels = scales::percent,
+      limits = c(0, 1.12),
+      breaks = seq(0, 1, 0.25),
+      expand = ggplot2::expansion(mult = c(0.01, 0))
+    ) +
+    ggplot2::scale_fill_manual(values = fills, drop = FALSE) +
+    ggplot2::labs(x = x_label, y = "Proportion of deer", fill = NULL) +
+    ggplot2::theme_minimal() +
+    ggplot2::theme(legend.position = "bottom")
+}
+
+p_season <- make_status_prop(deer_status, "season", "Season")
+p_age <- make_status_prop(deer_status, "age", "Age")
+# Cast year to factor so it discretizes on the x-axis (otherwise geom_col with
+# an integer x renders ungrouped bars on a continuous scale).
+p_year <- make_status_prop(
+  deer_status |> dplyr::mutate(year = factor(year)),
+  "year",
+  "Year"
+)
+
+panels_cov <- (p_season | p_age | p_year) +
+  patchwork::plot_layout(guides = "collect") &
+  ggplot2::theme(legend.position = "bottom")
+
+panels_cov <- panels_cov +
+  patchwork::plot_annotation(
+    title = "Per-deer pass/fail by covariate",
+    subtitle = sprintf(
+      "Passed = >=1 surviving model in formulas %d-%d; failed = none or only null (2, 3).",
+      min(env_models),
+      max(env_models)
+    )
+  )
+
+ggplot2::ggsave(
+  sprintf("plots/filter_covariates%s.png", suffix),
+  panels_cov,
+  width = 13,
+  height = 5,
+  dpi = 300
+)
+
+# Null vs env among deer that did pass the filters ---------------------------
+# "Did pass" here = at least one model survived all four gates (i.e. the deer
+# has rows in step4). Deer with nothing in step4 are dropped entirely. Among
+# the rest, classify the deer by whether any surviving model is an env model
+# (6-10); otherwise its only survivor(s) are null (models 2 and/or 3).
+null_models <- c(2L, 3L)
+
+deer_compare <- step4 |>
+  dplyr::group_by(key) |>
+  dplyr::summarize(
+    has_env = any(model %in% env_models),
+    .groups = "drop"
+  ) |>
+  dplyr::mutate(
+    status = factor(
+      ifelse(has_env, "env", "null"),
+      levels = c("null", "env")
+    )
+  ) |>
+  dplyr::select(key, status) |>
+  dplyr::left_join(
+    deer_status |> dplyr::select(key, season, year, sex, age),
+    by = "key"
+  )
+
+cat(sprintf(
+  "Null vs env among passing deer: env %d / null-only %d (of %d)\n",
+  sum(deer_compare$status == "env"),
+  sum(deer_compare$status == "null"),
+  nrow(deer_compare)
+))
+
+null_env_fill <- c(null = "grey60", env = "#1F77B4")
+
+p_season_c <- make_status_prop(
+  deer_compare,
+  "season",
+  "Season",
+  fills = null_env_fill
+)
+p_age_c <- make_status_prop(
+  deer_compare,
+  "age",
+  "Age",
+  fills = null_env_fill
+)
+p_year_c <- make_status_prop(
+  deer_compare |> dplyr::mutate(year = factor(year)),
+  "year",
+  "Year",
+  fills = null_env_fill
+)
+
+panels_compare <- (p_season_c | p_age_c | p_year_c) +
+  patchwork::plot_layout(guides = "collect") &
+  ggplot2::theme(legend.position = "bottom")
+
+panels_compare <- panels_compare +
+  patchwork::plot_annotation(
+    title = "Null vs env among deer with surviving models",
+    subtitle = sprintf(
+      "Deer with nothing in step4 excluded. env = >=1 surviving model in %d-%d; null = only models %s.",
+      min(env_models),
+      max(env_models),
+      paste(null_models, collapse = ", ")
+    )
+  )
+
+ggplot2::ggsave(
+  sprintf("plots/filter_null_vs_env%s.png", suffix),
+  panels_compare,
+  width = 13,
+  height = 5,
   dpi = 300
 )
