@@ -129,13 +129,25 @@ load_ndvi <- function(year, folder = "library/ndvi") {
 #' @param data Single-row dataframe with movement steps
 #' @param n_pts Number of random points per step
 #' @param water Binary raster for water bodies
+#' @param model Sampling design for the random points:
+#'   * "issf" — step lengths / turning angles drawn from gamma and von Mises
+#'     distributions fitted to the data (amt defaults). Movement covariates are
+#'     then corrections to these tentative distributions (the standard iSSF).
+#'     Also usable for GAMs with a *parametric* movement kernel.
+#'   * "nonp" — points drawn uniformly over a disc of radius R = max observed
+#'     step length (turning angle ~ Unif(-pi, pi), step length =
+#'     sqrt(Unif(0, R^2))), the availability required for *non-parametric*
+#'     movement smooths s(sl_) / s(ta_) (Klappstein et al. 2024, Section 3.1).
+#'     (Also valid for parametric kernels, just less efficient.)
 make_random_pt_extraction <- function(
   data,
   n_pts,
   water,
+  model = c("issf", "nonp"),
   stp_col = "stp",
   output_col = "random.stp"
 ) {
+  model <- match.arg(model)
   stopifnot(nrow(data) == 1)
 
   # Crop water raster to this deer's buffer
@@ -149,9 +161,23 @@ make_random_pt_extraction <- function(
   # Start with buffer for water removal
   n_random <- ceiling(n_pts * 10)
 
-  # Generate random steps
-  random_pts <- data_step |>
-    amt::random_steps(n_control = n_random) |>
+  # Generate random steps. "issf" samples from fitted gamma / von Mises
+  # distributions (amt defaults); "nonp" samples uniformly over a disc of
+  # radius R = max observed step length (amt draws from the rand_* pools with
+  # replacement, so a fixed pool gives good coverage at any step count).
+  rs <- if (model == "issf") {
+    amt::random_steps(data_step, n_control = n_random)
+  } else {
+    R <- max(data_step$sl_, na.rm = TRUE)
+    amt::random_steps(
+      data_step,
+      n_control = n_random,
+      rand_sl = sqrt(stats::runif(1e5, 0, R^2)),
+      rand_ta = stats::runif(1e5, -pi, pi)
+    )
+  }
+
+  random_pts <- rs |>
     amt::extract_covariates(water_local, where = "end")
 
   # Filter and select final random points
@@ -274,6 +300,9 @@ extract_step_variables <- function(
     dplyr::mutate(
       tod_start_day = as.integer(tod_start_ == "day"),
       tod_start_night = as.integer(tod_start_ == "night"),
+      # Continuous time of day at the step start (decimal hour, 0-24) for the
+      # GAM cyclic spline s(tod_, bs = "cc"); complements the day/night factor.
+      tod_ = lubridate::hour(t1_) + lubridate::minute(t1_) / 60,
       days = lubridate::yday(t2_) - min(lubridate::yday(t2_)) + 1
     )
 
@@ -609,6 +638,72 @@ fit_mod <- function(ssf_data, formula) {
   aic <- if (is.character(iss)) NA_real_ else AIC(iss$model)
 
   list(iss = iss, coeff = coeff, aic = aic)
+}
+
+#' Reshape iSSF step data into mgcv Cox-PH (GAM-SSF) form
+#'
+#' Following Klappstein et al. (2024), an (integrated) SSF is fit as a
+#' stratified Cox proportional-hazards model in mgcv. This adds the three
+#' columns that the cox.ph fit needs, leaving every existing covariate column
+#' (sl_, ta_, wiscland_end, ndvi_end, HR_*, tod_*, ...) untouched:
+#'   * times   — constant "event time" (all strata share it; the within-stratum
+#'               tie of one event + N censored points reproduces conditional
+#'               logistic regression).
+#'   * stratum — integer stratification index (one per observed step + its
+#'               random points), from step_id_.
+#'   * obs     — used/available indicator (1 = observed step, 0 = random),
+#'               passed to gam() as `weights` (the cox.ph censoring indicator).
+#'
+#' @param ssf_data Step-selection data for one deer (a deer's stp.var tibble)
+#' @return The same data with `times`, `stratum`, `obs` columns added
+prepare_gam_data <- function(ssf_data) {
+  ssf_data$times <- 1
+  ssf_data$stratum <- as.integer(factor(ssf_data$step_id_))
+  ssf_data$obs <- as.integer(ssf_data$case_)
+  ssf_data
+}
+
+#' Fit a single GAM-SSF model for one individual (mgcv cox.ph)
+#'
+#' GAM analogue of fit_mod(). `formula` is the RHS only (e.g.
+#' "s(sl_) + s(ta_, bs = 'cc') + s(ndvi_end)"); the
+#' "cbind(times, stratum) ~" Cox-PH response is prepended here, and the
+#' used/available indicator `obs` is passed as the cox.ph censoring weight.
+#' Fitting is via REML, as recommended in Klappstein et al. (2024).
+#'
+#' The cyclic time-of-day spline s(tod_, bs = "cc") is given explicit knots at
+#' 0 and 24 so the curve wraps at midnight; the knot is ignored for formulas
+#' without a tod_ smooth.
+#'
+#' @param gam_data Output of prepare_gam_data() for one deer
+#' @param formula  RHS-only model formula string
+#' @return List with gam (fitted model or "Error"), coeff (tidy parametric
+#'   terms), aic (AIC value)
+fit_gam_mod <- function(gam_data, formula) {
+  full_formula <- stats::as.formula(
+    paste("cbind(times, stratum) ~", formula)
+  )
+
+  gfit <- tryCatch(
+    mgcv::gam(
+      full_formula,
+      data = gam_data,
+      family = mgcv::cox.ph(),
+      weights = obs,
+      method = "REML",
+      knots = list(tod_ = c(0, 24))
+    ),
+    error = function(err) "Error"
+  )
+
+  coeff <- if (is.character(gfit)) {
+    NA
+  } else {
+    tryCatch(broom::tidy(gfit, parametric = TRUE), error = function(e) NA)
+  }
+  aic <- if (is.character(gfit)) NA_real_ else AIC(gfit)
+
+  list(gam = gfit, coeff = coeff, aic = aic)
 }
 
 #' Simulate a single movement path

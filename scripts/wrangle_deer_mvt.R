@@ -74,23 +74,46 @@ for (i in seq_len(nrow(deer_mvt))) {
   cat(sprintf("[run]              %s\n", key))
   ok <- tryCatch(
     {
-      # Season-specific annual landcover (+ open-water mask) for this deer
+      # Season-specific annual landcover (+ open-water mask) and NDVI stack
       landcover <- load_landcover(one_deer$year, one_deer$season)
       water <- make_water_mask(landcover)
+      ndvi <- load_ndvi(one_deer$year)
 
+      # Gamma / von Mises design (parametric): used by iSSF and by parametric
+      # GAMs -> stp.random / stp.var. 25 random points (Klappstein et al. 2024).
       one_deer <- make_random_pt_extraction(
         data = one_deer,
-        n_pts = 10,
+        n_pts = 25,
         water = water,
+        model = "issf",
         stp_col = "stp",
         output_col = "stp.random"
       )
       one_deer <- extract_step_variables(
         data = one_deer,
         env = landcover,
-        ndvi = load_ndvi(one_deer$year),
+        ndvi = ndvi,
         random_col = "stp.random",
         output_col = "stp.var"
+      )
+
+      # Non-parametric design: uniform-disc random steps (required for
+      # non-parametric movement smooths s(sl_)/s(ta_); also usable for any GAM)
+      # -> stp.random.nonp / stp.var.nonp
+      one_deer <- make_random_pt_extraction(
+        data = one_deer,
+        n_pts = 50,
+        water = water,
+        model = "nonp",
+        stp_col = "stp",
+        output_col = "stp.random.nonp"
+      )
+      one_deer <- extract_step_variables(
+        data = one_deer,
+        env = landcover,
+        ndvi = ndvi,
+        random_col = "stp.random.nonp",
+        output_col = "stp.var.nonp"
       )
       saveRDS(one_deer, out_path)
       TRUE
