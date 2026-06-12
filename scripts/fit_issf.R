@@ -21,33 +21,43 @@ library(tidyverse)
 source("scripts/helper_functions.R")
 
 # Formulas --------------------------------------------------------------------
-formulas <- c(
-  "case_ ~ (log(sl_) + cos(ta_)):tod_start_",
+# make_formulas() returns the 6 candidate models for one deer, named by model
+# number ("1","2","3","4","5","8"). Slots 4 & 5 are the resource-selection
+# models and depend on season: non-breeding (winter) deer have no valid MODIS
+# NDVI (snow / dormancy -> all-or-mostly NA), so the NDVI models (4 & 5) can't
+# be fit. For those deer we substitute the landcover-only models (6 & 7) and
+# record them in slots 4 & 5. Either way the result holds 6 models and slots
+# 4/5 always mean "the resource-selection model" — models 6 & 7 never appear
+# under their own numbers, and model 8 keeps its number (hence the 1,2,3,4,5,8
+# gap). Mirrors make_formulas() in fit_GAM.R.
+make_formulas <- function(season) {
+  move <- "case_ ~ (sl_):tod_start_ + log(sl_) + cos(ta_)"
 
-  "case_ ~ (log(sl_) + cos(ta_)):tod_start_ + HR_edge_end",
+  f1 <- move # 1 movement only
+  f2 <- paste(move, "+ HR_edge_end") # 2 + HR edge
+  f3 <- paste(move, "+ HR_center_end") # 3 + HR center
+  f8 <- paste(
+    move,
+    "+ HR_center_end + wiscland_end + HR_center_end:wiscland_end"
+  ) # 8 + HR-center x LC
 
-  "case_ ~ (log(sl_) + cos(ta_)):tod_start_ + HR_center_end",
+  if (season == "nb") {
+    f4 <- paste(move, "+ HR_center_end + wiscland_end") # model 6 -> slot 4
+    f5 <- paste(move, "+ wiscland_end") # model 7 -> slot 5
+  } else {
+    f4 <- paste(
+      move,
+      "+ HR_center_end + wiscland_end + ndvi_end + wiscland_end:ndvi_end"
+    ) # model 4
+    f5 <- paste(
+      move,
+      "+ wiscland_end + ndvi_end + wiscland_end:ndvi_end"
+    ) # model 5
+  }
 
-  "case_ ~ (log(sl_) + cos(ta_)):tod_start_ +
-    (log(sl_) + cos(ta_)):HR_center_start",
-
-  "case_ ~ (log(sl_) + cos(ta_)):tod_start_:HR_center_start",
-
-  "case_ ~ (log(sl_) + cos(ta_)):tod_start_ + HR_center_end +
-    wiscland_end + ndvi_end + wiscland_end:ndvi_end",
-
-  "case_ ~ log(sl_) + cos(ta_) + wiscland_end + ndvi_end +
-    wiscland_end:ndvi_end",
-
-  "case_ ~ (log(sl_) + cos(ta_)):tod_start_ + HR_center_end + wiscland_end",
-
-  "case_ ~ (log(sl_) + cos(ta_)):tod_start_ + wiscland_end",
-
-  "case_ ~ (log(sl_) + cos(ta_)):tod_start_ + HR_center_end +
-    wiscland_end + HR_center_end:wiscland_end"
-)
-
-formulas <- paste(formulas, "+ strata(step_id_)")
+  f <- paste(c(f1, f2, f3, f4, f5, f8), "+ strata(step_id_)")
+  stats::setNames(f, c("1", "2", "3", "4", "5", "8"))
+}
 
 # Discover deer from data/tracks/ ---------------------------------------------
 track_files <- list.files(
@@ -92,10 +102,12 @@ for (i in seq_along(track_files)) {
       one_deer <- readRDS(in_path)
       ssf_data <- one_deer$stp.var[[1]]
 
-      results_issf <- purrr::map(seq_along(formulas), function(j) {
-        cat(sprintf("  Formula %d\n", j))
-        fit_mod(ssf_data, formulas[j])
-      })
+      # Season picks the slot-4/5 resource models (NDVI vs landcover; see
+      # make_formulas). results_issf is named by model number ("1".."5","8").
+      season <- strsplit(key, "_")[[1]][2]
+      formulas <- make_formulas(season)
+
+      results_issf <- purrr::map(formulas, function(f) fit_mod(ssf_data, f))
 
       saveRDS(results_issf, out_path)
       TRUE

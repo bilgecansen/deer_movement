@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The redistribution-kernel exponent, with nothing hidden</title>
+<style>
+  :root{
+    --bg:#fbfbfa; --fg:#1e2125; --muted:#6b7280; --line:#e3e3e0; --card:#ffffff;
+    --h:#0f766e;      /* h / phi  (baseline we sampled from)  */
+    --eta:#4338ca;    /* eta      (the fit)                   */
+    --jac:#b45309;    /* Jacobian (geometry)                 */
+    --hab:#64748b;    /* habitat                              */
+  }
+  @media (prefers-color-scheme: dark){
+    :root{ --bg:#16181c; --fg:#e6e7ea; --muted:#9aa1ab; --line:#2c2f36; --card:#1d2025;
+           --h:#2dd4bf; --eta:#a5b4fc; --jac:#fbbf24; --hab:#94a3b8; }
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0; background:var(--bg); color:var(--fg);
+    font:16px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    -webkit-font-smoothing:antialiased;
+  }
+  main{max-width:820px; margin:0 auto; padding:48px 24px 72px}
+  h1{font-size:1.6rem; line-height:1.25; margin:0 0 .2em; letter-spacing:-.01em}
+  .sub{color:var(--muted); margin:0 0 2rem; font-size:1.02rem}
+  h2{font-size:1.18rem; margin:2.4rem 0 .7rem; letter-spacing:-.01em}
+  p{margin:.7rem 0}
+  var{font-style:normal; font-family:"SF Mono",SFMono-Regular,Menlo,Consolas,monospace; font-size:.95em}
+  .tilde{position:relative}
+  .tilde::after{content:"~"; position:absolute; left:50%; top:-.72em; transform:translateX(-50%) scaleX(1.25); font-size:.72em; line-height:1}
+
+  /* the three colour-coded sources */
+  .sources{display:grid; gap:12px; margin:1.2rem 0 .4rem}
+  .src{background:var(--card); border:1px solid var(--line); border-left-width:4px;
+       border-radius:10px; padding:12px 16px; display:flex; flex-wrap:wrap;
+       align-items:baseline; gap:.4rem .8rem}
+  .src .tag{font-weight:650; font-size:.82rem; letter-spacing:.02em; text-transform:uppercase}
+  .src .eq{font-family:"SF Mono",SFMono-Regular,Menlo,Consolas,monospace; font-size:.95rem}
+  .src .note{color:var(--muted); font-size:.85rem; width:100%}
+  .s-eta{border-left-color:var(--eta)} .s-eta .tag{color:var(--eta)}
+  .s-h{border-left-color:var(--h)}     .s-h .tag{color:var(--h)}
+  .s-jac{border-left-color:var(--jac)} .s-jac .tag{color:var(--jac)}
+
+  .c-eta{color:var(--eta)} .c-h{color:var(--h)} .c-jac{color:var(--jac)} .c-hab{color:var(--hab)}
+
+  /* the centrepiece table */
+  .wrap{overflow-x:auto; margin:1.1rem 0}
+  table{border-collapse:collapse; width:100%; font-size:.95rem; background:var(--card);
+        border:1px solid var(--line); border-radius:10px; overflow:hidden}
+  th,td{padding:11px 14px; text-align:left; border-bottom:1px solid var(--line);
+        font-family:"SF Mono",SFMono-Regular,Menlo,Consolas,monospace}
+  thead th{font-family:inherit; font-size:.8rem; text-transform:uppercase; letter-spacing:.03em;
+           background:color-mix(in srgb,var(--fg) 4%,transparent)}
+  tbody tr:last-child td{border-bottom:none}
+  td.cov{font-weight:650}
+  td.total{font-weight:650; background:color-mix(in srgb,var(--fg) 3%,transparent)}
+  .dash{color:var(--muted)}
+
+  .legend{display:flex; flex-wrap:wrap; gap:14px; margin:.4rem 0 0; font-size:.84rem; color:var(--muted)}
+  .legend span{display:inline-flex; align-items:center; gap:.4rem}
+  .dot{width:10px; height:10px; border-radius:3px; display:inline-block}
+
+  .callout{background:color-mix(in srgb,var(--h) 9%,var(--card)); border:1px solid color-mix(in srgb,var(--h) 30%,var(--line));
+           border-radius:10px; padding:14px 18px; margin:1.3rem 0; font-size:.95rem}
+  .callout b{color:var(--h)}
+  .q{margin-top:1.4rem}
+  .q h3{font-size:1.02rem; margin:0 0 .25rem}
+  .final{background:var(--card); border:1px solid var(--line); border-radius:10px;
+         padding:16px 18px; margin:1.4rem 0; text-align:center; font-size:1.05rem;
+         font-family:"SF Mono",SFMono-Regular,Menlo,Consolas,monospace}
+  footer{margin-top:2.6rem; padding-top:1.2rem; border-top:1px solid var(--line);
+          color:var(--muted); font-size:.86rem}
+  code{font-family:"SF Mono",SFMono-Regular,Menlo,Consolas,monospace; font-size:.9em;
+       background:color-mix(in srgb,var(--fg) 6%,transparent); padding:.1em .35em; border-radius:4px}
+</style>
+</head>
+<body>
+<main>
+
+  <h1>The redistribution-kernel exponent, with nothing hidden</h1>
+  <p class="sub">For each grid cell, the kernel weight is <var>exp(&hellip;)</var> of a single sum.
+     Here is that sum, fully decomposed — every term traced back to where it came from.</p>
+
+  <p>Three sources are added together inside the exponent. <var>L</var> is the step length
+     (distance from the animal to the cell) and <var>&alpha;</var> the turn angle to reach it.
+     <span class="c-h">shape</span>, <span class="c-h">scale</span> and
+     <span class="c-h">&kappa;</span> are the parameters of <var>h</var> — the
+     Gamma&times;von&nbsp;Mises cloud the random points were sampled from.</p>
+
+  <div class="sources">
+    <div class="src s-eta">
+      <span class="tag">&eta; &nbsp;the fit</span>
+      <span class="eq c-eta"><var><span class="tilde">&beta;</span><sub>L</sub>&middot;L
+        + <span class="tilde">&beta;</span><sub>logL</sub>&middot;log(L)
+        + <span class="tilde">&beta;</span><sub>cos</sub>&middot;cos(&alpha;)
+        + (habitat)</var></span>
+      <span class="note">the linear predictor returned by the model — adjustments relative to <var>h</var>, plus habitat</span>
+    </div>
+    <div class="src s-h">
+      <span class="tag">phi &nbsp;h&rsquo;s baseline</span>
+      <span class="eq c-h"><var>(shape &minus; 1)&middot;log(L)
+        &minus; (1/scale)&middot;L
+        + &kappa;&middot;cos(&alpha;)</var></span>
+      <span class="note">the log of the very cloud we sampled from — puts <var>h</var> back in</span>
+    </div>
+    <div class="src s-jac">
+      <span class="tag">Jacobian &nbsp;geometry</span>
+      <span class="eq c-jac"><var>&minus;1&middot;log(L)</var></span>
+      <span class="note">converts a length-and-angle density into a per-map-area density (the ring-circumference factor)</span>
+    </div>
+  </div>
+
+  <h2>Grouped by covariate — so nothing disappears</h2>
+  <p>Collect the terms above by <em>which covariate each one multiplies</em>. This is the step that
+     usually gets skipped, which makes it look like terms vanish or transform into one another.
+     They don&rsquo;t — each lands in its own row.</p>
+
+  <div class="wrap">
+  <table>
+    <thead>
+      <tr>
+        <th>covariate</th>
+        <th class="c-h">from phi (h)</th>
+        <th class="c-eta">from the fit (&eta;)</th>
+        <th class="c-jac">Jacobian</th>
+        <th>total coefficient</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td class="cov">log(L)</td>
+        <td class="c-h">shape &minus; 1</td>
+        <td class="c-eta"><span class="tilde">&beta;</span><sub>logL</sub></td>
+        <td class="c-jac">&minus;1</td>
+        <td class="total">shape &minus; 2 + <span class="tilde">&beta;</span><sub>logL</sub></td>
+      </tr>
+      <tr>
+        <td class="cov">L</td>
+        <td class="c-h">&minus;1/scale</td>
+        <td class="c-eta"><span class="tilde">&beta;</span><sub>L</sub></td>
+        <td class="dash">&mdash;</td>
+        <td class="total">&minus;1/scale + <span class="tilde">&beta;</span><sub>L</sub></td>
+      </tr>
+      <tr>
+        <td class="cov">cos(&alpha;)</td>
+        <td class="c-h">&kappa;</td>
+        <td class="c-eta"><span class="tilde">&beta;</span><sub>cos</sub></td>
+        <td class="dash">&mdash;</td>
+        <td class="total">&kappa; + <span class="tilde">&beta;</span><sub>cos</sub></td>
+      </tr>
+      <tr>
+        <td class="cov">habitat</td>
+        <td class="dash">&mdash;</td>
+        <td class="c-eta"><span class="tilde">&beta;</span><sub>habitat</sub></td>
+        <td class="dash">&mdash;</td>
+        <td class="total"><span class="tilde">&beta;</span><sub>habitat</sub></td>
+      </tr>
+    </tbody>
+  </table>
+  </div>
+
+  <div class="legend">
+    <span><i class="dot" style="background:var(--h)"></i> phi — the baseline cloud <var>h</var></span>
+    <span><i class="dot" style="background:var(--eta)"></i> &eta; — the fitted adjustments</span>
+    <span><i class="dot" style="background:var(--jac)"></i> Jacobian — geometry only</span>
+  </div>
+
+  <div class="callout">
+    <b>Concrete, for deer 5004_fa_2017:</b> <var>h</var> is Gamma(shape&nbsp;1.49, scale&nbsp;91.2&nbsp;m)
+    for step length and von&nbsp;Mises(&kappa;&nbsp;0.48) for angle. So at any cell,
+    <var>phi = 0.49&middot;log(L) &minus; L/91.2 + 0.48&middot;cos(&alpha;)</var> — these coefficients are
+    <em>known</em>, not estimated.
+  </div>
+
+  <h2>The three things that look like sleight of hand</h2>
+
+  <div class="q">
+    <h3>&ldquo;Why subtract 1 from shape?&rdquo;</h3>
+    <p>That <var>&minus;1</var> isn&rsquo;t a correction — it&rsquo;s <em>what a Gamma density is</em>.
+       A Gamma with shape <var>a</var> has the form <var>L<sup>a&minus;1</sup>&middot;e<sup>&minus;L/scale</sup></var>;
+       take the log and the power on <var>log(L)</var> is literally <var>a&minus;1</var>. There is also a
+       <em>separate</em> <var>&minus;1</var> on that same row from the Jacobian — two different &minus;1&rsquo;s,
+       from two different places, that happen to land on the same covariate. That pair is exactly why
+       Klappstein&nbsp;Table&nbsp;1 recovers the step-length shape with a <var>+2</var>.</p>
+  </div>
+
+  <div class="q">
+    <h3>&ldquo;Why <var>L/scale</var> in one but <var><span class="tilde">&beta;</span>&middot;log(L)</var> in the other?&rdquo;</h3>
+    <p><var>L</var> and <var>log(L)</var> are <strong>two different covariates</strong>, on two different rows.
+       A Gamma needs both: the <var>log(L)</var> coefficient carries the <strong>shape</strong>, the
+       <var>L</var> coefficient carries the <strong>rate</strong> (<var>1/scale</var>). Separate knobs, so they never mix.</p>
+  </div>
+
+  <div class="q">
+    <h3>&ldquo;Why did <var>&kappa;&middot;cos(&alpha;)</var> become <var>&minus;1</var>?&rdquo;</h3>
+    <p>It didn&rsquo;t — it is sitting untouched in the <var>cos(&alpha;)</var> row. The <var>&minus;1</var>
+       belongs only to the <var>log(L)</var> row (the Jacobian). Showing just one row and calling it
+       &ldquo;phi&rdquo; is what made the <var>L</var> and <var>cos(&alpha;)</var> rows look like they vanished.</p>
+  </div>
+
+  <h2>Put it back together</h2>
+  <p>Written as a product instead of a sum-of-logs, the cell weight is simply:</p>
+  <div class="final">
+    <span class="c-h">h(L,&alpha;)</span> &middot; <span class="c-eta">exp(&eta;)</span> / <span class="c-jac">L</span>
+  </div>
+  <p>&hellip; then <strong>normalize</strong>: add up the weights over every cell and divide each by that
+     total. Now the grid sums to 1 and each cell is a probability.</p>
+
+  <footer>
+    <p><strong>Connection to the GAM.</strong> Nothing in this decomposition changes for a GAM — the only
+       difference is how <span class="c-eta">&eta;</span> is obtained: <code>predict(gam, type="link")</code>
+       in place of a <code>model.matrix %&times;% coefs</code> multiply, because the effects can be smooth
+       rather than straight lines. The <span class="c-h">phi</span> baseline (from <var>h</var>) and the
+       <span class="c-jac">&minus;log(L)</span> geometry are identical. This is exactly
+       <code>amt::ssf_weights(&hellip;, compensate.movement = TRUE)</code>.</p>
+    <p>Deer movement project &middot; redistribution-kernel notes</p>
+  </footer>
+
+</main>
+</body>
+</html>
