@@ -487,7 +487,8 @@ warp_to_template <- function(
 
     if (is.finite(data_min) && data_min < bounds[1]) {
       stop(sprintf(
-        "Input min %g is below datatype %s lower bound %g — would silently clip. Pick a wider datatype.",
+        "Input min %g is below datatype %s lower bound %g — 
+        would silently clip. Pick a wider datatype.",
         data_min,
         datatype,
         bounds[1]
@@ -495,7 +496,8 @@ warp_to_template <- function(
     }
     if (is.finite(data_max) && data_max > bounds[2]) {
       stop(sprintf(
-        "Input max %g is above datatype %s upper bound %g — would silently clip. Pick a wider datatype.",
+        "Input max %g is above datatype %s upper bound %g — 
+        would silently clip. Pick a wider datatype.",
         data_max,
         datatype,
         bounds[2]
@@ -511,7 +513,8 @@ warp_to_template <- function(
         has_fractional <- any(mm != round(mm), na.rm = TRUE)
         if (has_fractional) {
           warning(sprintf(
-            "Input has float storage (%s) with fractional values; target datatype %s is integer — values will be truncated.",
+            "Input has float storage (%s) with fractional values; 
+            target datatype %s is integer — values will be truncated.",
             paste(unique(in_dtype), collapse = ","),
             datatype
           ))
@@ -742,7 +745,9 @@ gam_smooth_diag <- function(
   linear_edf = 1.5,
   removed_edf = 0.5
 ) {
-  kc <- tryCatch(suppressWarnings(mgcv::k.check(gfit)), error = function(e) NULL)
+  kc <- tryCatch(suppressWarnings(mgcv::k.check(gfit)), error = function(e) {
+    NULL
+  })
   if (is.null(kc) || nrow(kc) == 0) {
     return(NULL)
   }
@@ -798,7 +803,8 @@ gam_smooth_diag <- function(
 gam_movement_kernel <- function(xy, sl_distr, ta_distr = NULL) {
   phi <- switch(
     sl_distr$name,
-    gamma = -(1 / sl_distr$params$scale) * xy$sl_ +
+    gamma = -(1 / sl_distr$params$scale) *
+      xy$sl_ +
       log(xy$sl_) * (sl_distr$params$shape - 1),
     exp = -xy$sl_ * sl_distr$params$rate,
     stop("Unsupported step-length distribution: ", sl_distr$name)
@@ -943,9 +949,11 @@ redistribution_kernel_gam <- function(
   }
 
   # --- Candidate grid: disc of radius max.dist around the start (kernel_setup) -
-  pt <- sf::st_sf(geom = sf::st_sfc(sf::st_point(
-    as.numeric(start[1, c("x_", "y_")])
-  )))
+  pt <- sf::st_sf(
+    geom = sf::st_sfc(sf::st_point(
+      as.numeric(start[1, c("x_", "y_")])
+    ))
+  )
   disc <- sf::st_buffer(pt, dist = max.dist)
   r1 <- terra::rasterize(terra::vect(disc), terra::crop(map, disc))
   xy_crds <- terra::crds(r1)
@@ -1009,57 +1017,215 @@ redistribution_kernel_gam <- function(
   res
 }
 
-#' Simulate a single movement path
+#' Simulate a movement path from a GAM redistribution kernel
 #'
-#' Builds a redistribution kernel from `issf_train` and `env_test` and
-#' simulates one path that follows the observed step timing in `stp_data`.
-#' The caller is responsible for ensuring `env_test` already carries every
-#' covariate layer the model formula references (HR_edge, HR_center_log, etc.).
+#' Standalone GAM analogue of amt::simulate_path(). Given a kernel built by
+#' redistribution_kernel_gam(..., as.rast = FALSE), it walks `n.steps` forward,
+#' rebuilding the kernel at each new position + bearing and drawing one
+#' endpoint. The per-step rebuild is essential: the kernel depends on the
+#' current location (covariates change) and the previous turning angle (the von
+#' Mises correction is relative to the last heading), so a path is *not* a
+#' repeated draw from one static kernel.
+#'
+#' I/O mirrors amt::simulate_path exactly, so the two are interchangeable inside
+#' simulate_movement(): it returns an (n.steps + 1)-row tibble (x_, y_, t_, dt)
+#' whose first row is the start, with the time grid spaced by the start's dt. If
+#' a rebuilt kernel runs off the map or has no mass (redistribution_kernel_gam
+#' returns NULL), the walk stops early and the path so far is returned (trailing
+#' rows stay NA) — again matching amt.
+#'
+#' @param kernel  A redistribution_kernel_gam object (built with as.rast =
+#'   FALSE). Its `args` carry everything needed to rebuild the kernel each step
+#'   (x, map, fun, sl_distr, ta_distr, compensate.movement, ...).
+#' @param n.steps Number of steps to simulate
+#' @param start   sim_start to begin from (default: the kernel's own start)
+#' @param verbose Warn when the walk stops early (default FALSE)
+#' @return tibble(x_, y_, t_, dt) with n.steps + 1 rows
+simulate_path_gam <- function(
+  kernel,
+  n.steps = 100,
+  start = kernel$args$start,
+  verbose = FALSE
+) {
+  mod <- kernel$args
+
+  xy <- tibble::tibble(
+    x_ = rep(NA_real_, n.steps + 1),
+    y_ = NA_real_,
+    t_ = start$t_ + start$dt * (0:n.steps),
+    dt = start$dt
+  )
+  xy$x_[1] <- start$x_
+  xy$y_[1] <- start$y_
+
+  for (i in 1:n.steps) {
+    # Rebuild the kernel at the current (position, bearing) and draw one point.
+    rk <- redistribution_kernel_gam(
+      x = mod$x,
+      map = mod$map,
+      start = start,
+      fun = mod$fun,
+      sl_distr = mod$sl_distr,
+      ta_distr = mod$ta_distr,
+      max.dist = mod$max.dist,
+      compensate.movement = mod$compensate.movement,
+      normalize = TRUE,
+      as.rast = FALSE,
+      n.sample = 1,
+      tolerance.outside = mod$tolerance.outside
+    )
+
+    if (is.null(rk)) {
+      if (verbose) {
+        warning(sprintf(
+          "Simulation stopped after %d steps: kernel ran off the map or had no mass.",
+          i - 1
+        ))
+      }
+      return(xy)
+    }
+
+    rk <- rk$redistribution.kernel
+    new.ta <- atan2(rk$y_[1] - start$y_[1], rk$x_[1] - start$x_[1])
+    xy$x_[i + 1] <- rk$x_[1]
+    xy$y_[i + 1] <- rk$y_[1]
+
+    # Next start: the point just drawn, with bearing = the realised turn angle.
+    # dt / crs mirror amt::simulate_path (dt falls back to make_start's default;
+    # the output time grid above already uses the original start's dt).
+    start <- amt::make_start(
+      as.numeric(xy[i + 1, c("x_", "y_")]),
+      new.ta,
+      time = xy$t_[i],
+      crs = attr(kernel$args$start, "crs")
+    )
+  }
+
+  xy
+}
+
+#' Simulate a single movement path (iSSF or GAM)
+#'
+#' Builds a redistribution kernel from `model` and `env_test` and simulates one
+#' path that follows the observed step timing in `stp_data`. The caller is
+#' responsible for ensuring `env_test` already carries every covariate layer the
+#' model references (HR_edge, HR_center_log, the per-class landcover indicators,
+#' etc.).
+#'
+#' `method` picks the route; the burst / month orchestration below is shared,
+#' only the kernel builder and path simulator differ:
+#'   * "issf" — amt::redistribution_kernel() + amt::simulate_path(); `model` is a
+#'     fitted iSSF (amt make_issf_model / fit_clogit).
+#'   * "gam"  — redistribution_kernel_gam() + simulate_path_gam(); `model` is an
+#'     mgcv cox.ph GAM, and the tentative movement distributions sl_distr /
+#'     ta_distr (e.g. attr(stp.var, "sl_") / attr(stp.var, "ta_")) are needed
+#'     when compensate.movement = TRUE (the parametric design).
 #'
 #' Two code paths inside, chosen automatically based on whether the model has
-#' any NDVI coefficients:
-#'   * NDVI path — for each burst, walks month-by-month, swapping
-#'     `env_test$ndvi` to that month's layer before building a fresh kernel.
-#'     Required because NDVI is the only time-varying covariate.
+#' any NDVI term:
+#'   * NDVI path — for each burst, walks month-by-month, swapping `env_test$ndvi`
+#'     to that month's layer before building a fresh kernel. Required because
+#'     NDVI is the only time-varying covariate.
 #'   * Simple path — for each burst, builds one kernel and simulates every step
-#'     in the burst in a single call. Avoids redundant kernel rebuilds when
-#'     the model has no NDVI terms (model-formula coefficients drive the
-#'     detection).
+#'     in the burst in a single call. Avoids redundant kernel rebuilds when the
+#'     model has no NDVI terms.
 #'
 #' @param stp_data Step data dataframe (provides timestamps + burst structure)
 #' @param env_test Environmental rasters for the simulation extent
 #' @param ndvi_test NDVI rasters indexed by month (ignored if the model has no
 #'   NDVI terms)
-#' @param issf_train Fitted iSSF model
+#' @param model Fitted movement model — an iSSF (method = "issf") or an mgcv
+#'   cox.ph GAM (method = "gam")
+#' @param method Which kernel / simulator to use: "issf" (default) or "gam"
+#' @param sl_distr Tentative step-length distribution for the GAM kernel
+#'   (attr(stp.var, "sl_")); required for method = "gam" with
+#'   compensate.movement = TRUE
+#' @param ta_distr Tentative turning-angle distribution for the GAM kernel
+#'   (attr(stp.var, "ta_")) or NULL
+#' @param compensate.movement GAM only: re-add the tentative kernel + Jacobian
+#'   (TRUE for the parametric gamma / von Mises design)
 simulate_movement <- function(
   stp_data,
   env_test,
   ndvi_test,
-  issf_train
+  model,
+  method = c("issf", "gam"),
+  sl_distr = NULL,
+  ta_distr = NULL,
+  compensate.movement = TRUE
 ) {
-  # Detect whether this model needs monthly NDVI swaps. If no coefficient name
-  # mentions "ndvi", the month sub-loop is wasted work and we use the simple
+  method <- match.arg(method)
+
+  # Route-specific pieces. `model_formula` feeds the NDVI check below;
+  # `build_kernel` makes a sampled-endpoint kernel at a start point; `run_path`
+  # simulates a path from it. Everything after this block (burst / month
+  # orchestration) is shared, so the two routes never duplicate that logic.
+  if (method == "issf") {
+    model_formula <- model$model$formula
+
+    cov_fun <- function(xy, map) {
+      xy |>
+        amt::extract_covariates(map, where = "both") |>
+        amt::time_of_day(include.crepuscule = FALSE, where = "both") |>
+        dplyr::mutate(
+          tod_start_day = as.integer(tod_start_ == "day"),
+          tod_start_night = as.integer(tod_start_ == "night"),
+          days = lubridate::yday(t2_) - min(lubridate::yday(t2_)) + 1
+        )
+    }
+
+    build_kernel <- function(map, start) {
+      amt::redistribution_kernel(
+        x = model,
+        map = map,
+        fun = cov_fun,
+        start = start,
+        landscape = "discrete",
+        as.rast = FALSE
+      )
+    }
+
+    run_path <- function(kernel, n_steps) {
+      amt::simulate_path(kernel, n = n_steps)
+    }
+  } else {
+    if (compensate.movement && is.null(sl_distr)) {
+      stop(
+        "method = 'gam' with compensate.movement = TRUE needs sl_distr (the tentative step-length distribution, e.g. attr(stp.var, 'sl_'))."
+      )
+    }
+
+    model_formula <- model$formula
+
+    build_kernel <- function(map, start) {
+      redistribution_kernel_gam(
+        x = model,
+        map = map,
+        start = start,
+        fun = gam_cov_fun,
+        sl_distr = sl_distr,
+        ta_distr = ta_distr,
+        compensate.movement = compensate.movement,
+        as.rast = FALSE
+      )
+    }
+
+    run_path <- function(kernel, n_steps) {
+      simulate_path_gam(kernel, n.steps = n_steps)
+    }
+  }
+
+  # Detect whether this model needs monthly NDVI swaps. If no term mentions
+  # "ndvi", the month sub-loop is wasted work and we use the simple
   # one-kernel-per-burst path.
   needs_ndvi <- any(grepl(
     "ndvi",
-    all.vars(issf_train$model$formula),
+    all.vars(model_formula),
     ignore.case = TRUE
   ))
 
   data_step <- stp_data
   bursts <- unique(data_step$burst_)
-
-  # Covariate-extraction callback used by both code paths
-  cov_fun <- function(xy, map) {
-    xy |>
-      amt::extract_covariates(map, where = "both") |>
-      amt::time_of_day(include.crepuscule = FALSE, where = "both") |>
-      dplyr::mutate(
-        tod_start_day = as.integer(tod_start_ == "day"),
-        tod_start_night = as.integer(tod_start_ == "night"),
-        days = lubridate::yday(t2_) - min(lubridate::yday(t2_)) + 1
-      )
-  }
 
   # Simulate each burst separately, then combine
   sim_all_bursts <- foreach(b = bursts, .combine = "rbind") %do%
@@ -1110,17 +1276,10 @@ simulate_movement <- function(
             amt::make_start() |>
             amt::mutate(dt = lubridate::hours(4))
 
-          kernel <- amt::redistribution_kernel(
-            x = issf_train,
-            map = env_test,
-            fun = cov_fun,
-            start = start_pt,
-            landscape = "discrete",
-            as.rast = FALSE
-          )
+          kernel <- build_kernel(env_test, start_pt)
 
           sim_result <- tryCatch(
-            amt::simulate_path(kernel, n = n_steps),
+            run_path(kernel, n_steps),
             error = function(err) NA
           )
 
@@ -1150,17 +1309,10 @@ simulate_movement <- function(
           amt::make_start() |>
           amt::mutate(dt = lubridate::hours(4))
 
-        kernel <- amt::redistribution_kernel(
-          x = issf_train,
-          map = env_test,
-          fun = cov_fun,
-          start = start_pt,
-          landscape = "discrete",
-          as.rast = FALSE
-        )
+        kernel <- build_kernel(env_test, start_pt)
 
         sim_result <- tryCatch(
-          amt::simulate_path(kernel, n = n_steps),
+          run_path(kernel, n_steps),
           error = function(err) NA
         )
 
@@ -1314,6 +1466,120 @@ onestep_logscore <- function(
             },
             start = start_pt,
             landscape = "discrete",
+            as.rast = TRUE
+          ),
+          error = function(e) NULL
+        )
+
+        if (is.null(kernel_rast)) {
+          step_results[[i]] <- data.frame(
+            burst_ = b,
+            step_index = i,
+            t1_ = burst_data$t1_[i],
+            logp = NA_real_
+          )
+          next
+        }
+
+        # Extract probability at observed endpoint
+        obs_pt <- cbind(burst_data$x2_[i], burst_data$y2_[i])
+        p <- terra::extract(kernel_rast$redistribution.kernel, obs_pt)[1, 1]
+
+        lp <- if (!is.na(p) && p > 0) log(p) else NA_real_
+
+        step_results[[i]] <- data.frame(
+          burst_ = b,
+          step_index = i,
+          t1_ = burst_data$t1_[i],
+          logp = lp
+        )
+      }
+
+      dplyr::bind_rows(step_results)
+    }
+
+  results
+}
+
+#' One-step-ahead log score of observed path under a fitted GAM
+#'
+#' GAM analogue of onestep_logscore(). For each observed step it builds the GAM
+#' redistribution kernel (redistribution_kernel_gam) anchored at the observed
+#' start, evaluates it as a normalised raster, and reads off the kernel value at
+#' the observed endpoint to give a per-step log probability. Structure, NDVI
+#' month-swapping, and the NA / out-of-disc handling all mirror the iSSF version
+#' exactly; only the kernel builder differs (redistribution_kernel_gam +
+#' gam_cov_fun, with the tentative gamma / von Mises distributions for the
+#' parametric movement compensation). The caller is responsible for ensuring
+#' `env_test` already carries every covariate layer the model references
+#' (HR_edge, HR_center_log, the landcover band, etc.).
+#'
+#' @param stp_data Observed step data for one deer (x1_, y1_, t1_, x2_, y2_, t2_, burst_)
+#' @param env_test Cropped environmental rasters (with all model covariates as layers)
+#' @param ndvi_test Cropped NDVI rasters (indexed by month)
+#' @param gam_train Fitted mgcv cox.ph GAM (results_gam[[m]]$gam)
+#' @param sl_distr Tentative step-length distribution (attr(stp.var, "sl_"));
+#'   required when compensate.movement = TRUE
+#' @param ta_distr Tentative turning-angle distribution (attr(stp.var, "ta_")) or NULL
+#' @param compensate.movement Re-add the tentative kernel + Jacobian (TRUE for the
+#'   parametric gamma / von Mises design; FALSE for a uniform-disc / nonp design)
+#' @return data.frame with burst_, step_index, t1_, logp
+onestep_logscore_gam <- function(
+  stp_data,
+  env_test,
+  ndvi_test,
+  gam_train,
+  sl_distr = NULL,
+  ta_distr = NULL,
+  compensate.movement = TRUE
+) {
+  if (compensate.movement && is.null(sl_distr)) {
+    stop(
+      "compensate.movement = TRUE needs sl_distr (the tentative step-length distribution, e.g. attr(stp.var, 'sl_'))."
+    )
+  }
+
+  bursts <- unique(stp_data$burst_)
+
+  results <- foreach(b = bursts, .combine = "rbind") %do%
+    {
+      burst_data <- stp_data |> dplyr::filter(burst_ == b)
+      current_month <- NULL
+      step_results <- vector("list", nrow(burst_data))
+
+      for (i in seq_len(nrow(burst_data))) {
+        # Update NDVI only when month changes
+        mo <- lubridate::month(burst_data$t1_[i])
+        if (is.null(current_month) || mo != current_month) {
+          env_test$ndvi <- terra::resample(
+            ndvi_test[[mo]],
+            env_test,
+            method = "near"
+          )
+          current_month <- mo
+        }
+
+        # Build start point from observed location
+        start_pt <- burst_data[i, c("x1_", "y1_", "t1_")] |>
+          amt::make_track(
+            .x = x1_,
+            .y = y1_,
+            .t = t1_,
+            crs = terra::crs(env_test)
+          ) |>
+          amt::make_start() |>
+          amt::mutate(dt = lubridate::hours(4))
+
+        # Build GAM redistribution kernel as raster
+        kernel_rast <- tryCatch(
+          redistribution_kernel_gam(
+            x = gam_train,
+            map = env_test,
+            start = start_pt,
+            fun = gam_cov_fun,
+            sl_distr = sl_distr,
+            ta_distr = ta_distr,
+            compensate.movement = compensate.movement,
             as.rast = TRUE
           ),
           error = function(e) NULL

@@ -1,0 +1,431 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>simulate_movement() — function explanation</title>
+<style>
+  :root {
+    --bg: #fafafa;
+    --fg: #1f1f1f;
+    --muted: #6b6b6b;
+    --accent: #c64116;
+    --code-bg: #f0eee9;
+    --code-fg: #1f1f1f;
+    --rule: #d6d3cc;
+    --aside: #e8efe6;
+    --warn-bg: #faeee0;
+    --warn-fg: #5a3000;
+  }
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--fg);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    line-height: 1.55;
+    font-size: 16px;
+  }
+  main {
+    max-width: 780px;
+    margin: 0 auto;
+    padding: 48px 24px 96px;
+  }
+  h1 { font-size: 1.9rem; margin: 0 0 6px; line-height: 1.2; }
+  h1 .small { color: var(--muted); font-weight: 400; font-size: 0.95rem; }
+  h2 {
+    font-size: 1.25rem;
+    margin: 36px 0 12px;
+    padding-bottom: 6px;
+    border-bottom: 1px solid var(--rule);
+  }
+  h3 { font-size: 1.05rem; margin: 24px 0 6px; }
+  p, ul, ol { margin: 10px 0; }
+  ul, ol { padding-left: 22px; }
+  li { margin: 4px 0; }
+  code {
+    font-family: "SF Mono", Menlo, Consolas, monospace;
+    font-size: 0.92em;
+    background: var(--code-bg);
+    color: var(--code-fg);
+    padding: 1px 5px;
+    border-radius: 3px;
+  }
+  pre {
+    background: var(--code-bg);
+    color: var(--code-fg);
+    padding: 14px 16px;
+    border-radius: 5px;
+    overflow-x: auto;
+    margin: 12px 0;
+    font-family: "SF Mono", Menlo, Consolas, monospace;
+    font-size: 0.88em;
+    line-height: 1.45;
+  }
+  pre code { background: transparent; padding: 0; }
+  .lede {
+    color: var(--muted);
+    font-size: 1.05rem;
+    margin: 6px 0 24px;
+  }
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 12px 0 8px;
+    font-size: 0.95rem;
+  }
+  th, td {
+    text-align: left;
+    padding: 7px 10px;
+    border-bottom: 1px solid var(--rule);
+    vertical-align: top;
+  }
+  th { font-weight: 600; }
+  tr:last-child td { border-bottom: none; }
+  .aside {
+    background: var(--aside);
+    border-left: 3px solid #6c8a5d;
+    padding: 12px 16px;
+    border-radius: 4px;
+    margin: 14px 0;
+    font-size: 0.95rem;
+  }
+  .warn {
+    background: var(--warn-bg);
+    color: var(--warn-fg);
+    border-left: 3px solid #b16800;
+    padding: 12px 16px;
+    border-radius: 4px;
+    margin: 14px 0;
+    font-size: 0.95rem;
+  }
+  .nav {
+    background: #fff;
+    border: 1px solid var(--rule);
+    border-radius: 5px;
+    padding: 10px 16px;
+    margin: 0 0 24px;
+    font-size: 0.92rem;
+  }
+  .nav a { color: var(--accent); text-decoration: none; }
+  .nav a:hover { text-decoration: underline; }
+  .small-rule { color: var(--muted); font-size: 0.88em; }
+  .pill {
+    display: inline-block;
+    padding: 2px 7px;
+    border-radius: 10px;
+    background: #ece7df;
+    font-size: 0.78em;
+    margin-right: 6px;
+    color: #4a4a4a;
+  }
+</style>
+</head>
+<body>
+<main>
+
+<h1>simulate_movement() <span class="small">— function explanation</span></h1>
+<p class="lede">
+  How a single simulated trajectory is produced from a fitted iSSF and an
+  environmental raster stack, with a fast path for models that don't need
+  monthly NDVI updates.
+</p>
+
+<div class="nav">
+  <strong>Contents</strong>:
+  <a href="#role">Role</a> ·
+  <a href="#signature">Signature</a> ·
+  <a href="#paths">Two paths</a> ·
+  <a href="#walkthrough">Walkthrough</a> ·
+  <a href="#detection">NDVI detection</a> ·
+  <a href="#kernel">Kernel structure</a> ·
+  <a href="#subtle">Subtle behaviors</a>
+</div>
+
+<h2 id="role">Role in the pipeline</h2>
+<p>
+  <code>simulate_movement()</code> produces <em>one</em> simulated trajectory of
+  a deer across the same time window the observed track covers. Higher up in
+  <code>run_sims.R</code>, this function is called <code>n_sim</code> times per
+  model per deer, building an ensemble of replicate paths.
+</p>
+<p>
+  The function walks <strong>burst-by-burst</strong> (continuous GPS
+  sequences). Within a burst it either runs a single kernel (when the model
+  has no NDVI terms) or walks <strong>month-by-month</strong> (when NDVI
+  matters), swapping in the appropriate monthly NDVI layer before building
+  each kernel.
+</p>
+
+<h2 id="signature">Signature</h2>
+<pre><code>simulate_movement &lt;- function(
+  stp_data,    # observed step data (drives timing + burst structure)
+  env_test,    # SpatRaster stack with every layer the model formula uses
+  ndvi_test,   # 12-layer SpatRaster (monthly NDVI) — ignored if model has no NDVI
+  issf_train   # fitted iSSF (made by amt::make_issf_model)
+)</code></pre>
+
+<p>
+  No spatial covariate computation happens in this function. The caller
+  (<code>run_sims.R</code>) loads <code>HR_edge</code>, <code>HR_center</code>,
+  <code>HR_center_log</code>, etc. onto <code>env_test</code> <em>before</em>
+  invoking, so this function never has to know which covariates exist.
+</p>
+
+<h2 id="paths">Two code paths</h2>
+
+<table>
+  <thead>
+    <tr><th>Path</th><th>When taken</th><th>Cost per burst</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><span class="pill">NDVI</span></td>
+      <td>Model has any coefficient name containing <code>"ndvi"</code></td>
+      <td>One kernel build per month (~4–10 builds for a season-long burst)</td>
+    </tr>
+    <tr>
+      <td><span class="pill">Simple</span></td>
+      <td>Model has no NDVI coefficients</td>
+      <td>One kernel build per burst</td>
+    </tr>
+  </tbody>
+</table>
+
+<p>
+  Both paths share an identical <em>covariate-extraction callback</em>
+  (<code>cov_fun</code>) hoisted to a single local definition. They differ only
+  in whether they decompose the burst by month and refresh
+  <code>env_test$ndvi</code>.
+</p>
+
+<h2 id="detection">NDVI detection</h2>
+<pre><code>needs_ndvi &lt;- any(grepl(
+  "ndvi",
+  names(issf_train$model$coefficients),
+  ignore.case = TRUE
+))</code></pre>
+<p>
+  Cheap, robust, and self-contained. The model carries its own metadata about
+  whether NDVI matters, so the caller doesn't need to know.
+</p>
+
+<h2 id="walkthrough">Walkthrough</h2>
+
+<h3>Setup</h3>
+<pre><code>data_step &lt;- stp_data
+bursts    &lt;- unique(data_step$burst_)</code></pre>
+<p>
+  Bursts are continuous GPS sequences separated by data gaps. Simulating
+  burst-by-burst gives two benefits:
+</p>
+<ul>
+  <li>No need to invent inter-burst connectivity across GPS dropouts.</li>
+  <li>Each burst re-anchors on observed truth at its start, so simulated
+      drift can't compound across the whole season.</li>
+</ul>
+
+<h3>Covariate callback (shared by both paths)</h3>
+<pre><code>cov_fun &lt;- function(xy, map) {
+  xy |&gt;
+    amt::extract_covariates(map, where = "both") |&gt;
+    amt::time_of_day(include.crepuscule = FALSE, where = "both") |&gt;
+    dplyr::mutate(
+      tod_start_day   = as.integer(tod_start_ == "day"),
+      tod_start_night = as.integer(tod_start_ == "night"),
+      days = lubridate::yday(t2_) - min(lubridate::yday(t2_)) + 1
+    )
+}</code></pre>
+<p>
+  This is what amt calls at every candidate step the redistribution kernel
+  considers. It pulls every layer in <code>map</code> at the candidate's start
+  and end (producing columns like <code>HR_edge_start</code>,
+  <code>ndvi_end</code>, etc.), tags day/night, and adds a within-burst
+  <code>days</code> counter.
+</p>
+
+<h3>Outer foreach over bursts</h3>
+<pre><code>sim_all_bursts &lt;- foreach(b = bursts, .combine = "rbind") %do% {
+  burst_data &lt;- data_step |&gt; dplyr::filter(burst_ == b)
+  if (needs_ndvi) {
+    # NDVI path …
+  } else {
+    # Simple path …
+  }
+}</code></pre>
+<p>
+  Sequential loop. <code>.combine = "rbind"</code> stacks per-burst data
+  frames into one. Equivalent to <code>purrr::map_dfr</code>; uses
+  <code>foreach</code> historically.
+</p>
+
+<h3>NDVI path</h3>
+<pre><code>burst_data$month_group &lt;- lubridate::month(burst_data$t1_)
+months &lt;- unique(burst_data$month_group)
+sim_burst &lt;- NULL
+
+for (mo in months) {
+  mo_data &lt;- burst_data |&gt; dplyr::filter(month_group == mo)
+  n_steps &lt;- nrow(mo_data)
+
+  # 1. Swap in this month's NDVI layer
+  env_test$ndvi &lt;- terra::resample(ndvi_test[[mo]], env_test, method = 'near')
+
+  # 2. Pick a starting point
+  if (is.null(sim_burst)) {
+    # First month: anchor on observed (x1_, y1_, t1_)
+    start_row &lt;- mo_data[1, c('x1_', 'y1_', 't1_')]
+    start_pt  &lt;- amt::make_track(start_row, .x = x1_, .y = y1_, .t = t1_,
+                                  crs = terra::crs(env_test))
+  } else {
+    # Subsequent months: continue from last simulated point
+    start_row &lt;- sim_burst[nrow(sim_burst), ]
+    start_pt  &lt;- amt::make_track(start_row, .x = x_, .y = y_, .t = t_,
+                                  crs = terra::crs(env_test))
+  }
+  start_pt &lt;- start_pt |&gt; amt::make_start() |&gt; amt::mutate(dt = lubridate::hours(4))
+
+  # 3. Build kernel + draw n_steps
+  kernel     &lt;- amt::redistribution_kernel(x = issf_train, map = env_test,
+                                            fun = cov_fun, start = start_pt,
+                                            landscape = "discrete", as.rast = FALSE)
+  sim_result &lt;- tryCatch(amt::simulate_path(kernel, n = n_steps),
+                          error = function(err) NA)
+  if (any(is.na(sim_result))) return(NULL)
+
+  sim_burst &lt;- dplyr::bind_rows(sim_burst, sim_result |&gt; dplyr::select(x_, y_, t_))
+}
+
+sim_burst |&gt; dplyr::mutate(burst_ = b)</code></pre>
+<p>
+  Notes specific to this path:
+</p>
+<ul>
+  <li>The trajectory is <em>continuous within a burst</em> — month boundaries
+      only refresh NDVI; they do not reset to truth.</li>
+  <li><code>terra::resample(..., method = 'near')</code> is appropriate for
+      NDVI because nearest-neighbor preserves sharp habitat edges.</li>
+  <li>If <code>simulate_path</code> errors mid-burst, the <code>return(NULL)</code>
+      drops the whole burst from this simulation. Other bursts are
+      independent.</li>
+</ul>
+
+<h3>Simple path</h3>
+<pre><code>n_steps &lt;- nrow(burst_data)
+
+start_row &lt;- burst_data[1, c('x1_', 'y1_', 't1_')]
+start_pt  &lt;- amt::make_track(start_row, .x = x1_, .y = y1_, .t = t1_,
+                              crs = terra::crs(env_test)) |&gt;
+              amt::make_start() |&gt; amt::mutate(dt = lubridate::hours(4))
+
+kernel     &lt;- amt::redistribution_kernel(x = issf_train, map = env_test,
+                                          fun = cov_fun, start = start_pt,
+                                          landscape = "discrete", as.rast = FALSE)
+sim_result &lt;- tryCatch(amt::simulate_path(kernel, n = n_steps),
+                        error = function(err) NA)
+if (any(is.na(sim_result))) return(NULL)
+
+sim_result |&gt; dplyr::select(x_, y_, t_) |&gt; dplyr::mutate(burst_ = b)</code></pre>
+<p>
+  No <code>env_test$ndvi</code> assignment, no inner loop. One kernel build,
+  one <code>simulate_path</code> call, all steps in the burst at once.
+</p>
+
+<h2 id="kernel">Inside the kernel construction</h2>
+<pre><code>kernel &lt;- amt::redistribution_kernel(
+  x          = issf_train,
+  map        = env_test,
+  fun        = cov_fun,
+  start      = start_pt,
+  landscape  = "discrete",
+  as.rast    = FALSE
+)</code></pre>
+<table>
+  <tr>
+    <td><code>x</code></td>
+    <td>The fitted iSSF — supplies coefficients, the gamma step-length
+        distribution, and the von Mises turning-angle distribution.</td>
+  </tr>
+  <tr>
+    <td><code>map</code></td>
+    <td>The env raster stack. Every layer here becomes available to
+        <code>cov_fun</code>.</td>
+  </tr>
+  <tr>
+    <td><code>fun</code></td>
+    <td>Called by amt at every candidate step to produce the design-matrix row
+        the kernel scores against the model coefficients.</td>
+  </tr>
+  <tr>
+    <td><code>start</code></td>
+    <td>1-row track giving the kernel its anchor and timestep.</td>
+  </tr>
+  <tr>
+    <td><code>landscape = "discrete"</code></td>
+    <td>Discretizes candidate space onto the raster grid. Appropriate when env
+        is rasterized.</td>
+  </tr>
+  <tr>
+    <td><code>as.rast = FALSE</code></td>
+    <td>Returns the kernel as an internal amt object (we only need to draw
+        from it; no need to inspect per-cell weights).</td>
+  </tr>
+</table>
+
+<h2 id="subtle">Subtle behaviors worth remembering</h2>
+
+<div class="aside">
+  <strong>Re-anchoring at burst boundaries.</strong>
+  Simulated drift accumulates only within a burst — between bursts we re-anchor
+  on the observed start point.
+</div>
+
+<div class="aside">
+  <strong>Re-anchoring at month boundaries (NDVI path only).</strong>
+  Within a burst, the trajectory is continuous: kernel rebuilds happen at
+  month boundaries, but the <em>position</em> continues from the previous
+  simulated point.
+</div>
+
+<div class="aside">
+  <strong>Failure mode propagation.</strong>
+  If <code>simulate_path</code> errors inside any month of a burst, the
+  <code>return(NULL)</code> drops the entire burst from this simulation. This
+  is intentional — partial bursts are harder to reason about than missing
+  bursts. Other bursts proceed unaffected.
+</div>
+
+<div class="aside">
+  <strong>Kernel-rebuild cost.</strong>
+  NDVI path: roughly one rebuild per month per burst (typically 4–10 rebuilds
+  per season). Simple path: one rebuild per burst, full stop. For models
+  without NDVI, the simple path is the cost reduction this dual-path design
+  exists for.
+</div>
+
+<div class="warn">
+  <strong>Caller contract.</strong>
+  <code>env_test</code> must already carry every layer the model formula
+  references. If the formula uses <code>HR_edge_end</code> and the layer is
+  absent, the kernel will silently produce no <code>HR_edge_*</code> column,
+  the design-matrix row will be missing that column, and amt's scoring may
+  either error or produce wrong values. <code>run_sims.R</code> handles this
+  correctly today by adding HR_edge / HR_center / HR_center_log layers before
+  calling.
+</div>
+
+<h2 id="diff">What changed from the previous version</h2>
+<p>
+  Previously the function unconditionally walked month-by-month, even for
+  models without any NDVI terms. This version keeps that path when needed and
+  adds a simple "one kernel per burst" path otherwise. Detection is automatic
+  via inspection of the fitted model's coefficient names.
+</p>
+<p>
+  No change to the function signature; no change to the caller. Only the
+  <em>internal</em> branching is new.
+</p>
+
+</main>
+</body>
+</html>

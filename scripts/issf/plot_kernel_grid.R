@@ -9,7 +9,7 @@
 #' grids when writing to a file device.
 #'
 #' Usage:
-#'   Rscript scripts/plot_kernel_grid.R <id> <season> <year> [model_num]
+#'   Rscript scripts/issf/plot_kernel_grid.R <id> <season> <year> [model_num]
 #'     id        — deer ID
 #'     season    — season string (e.g. "fa", "nb")
 #'     year      — year (integer)
@@ -22,7 +22,7 @@ args <- commandArgs(trailingOnly = TRUE)
 
 if (length(args) < 3 || length(args) > 4) {
   stop(
-    "Usage: Rscript scripts/plot_kernel_grid.R <id> <season> <year> [model_num]"
+    "Usage: Rscript scripts/issf/plot_kernel_grid.R <id> <season> <year> [model_num]"
   )
 }
 

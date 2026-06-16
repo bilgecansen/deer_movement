@@ -1,14 +1,20 @@
 #' @description
-#' Compute one-step energy scores for every deer with simulations and every
-#' model that was simulated. Writes a single combined data frame to
-#' filters/es.rds.
+#' Out-of-sample one-step energy scores: for every deer with test-year
+#' simulations in sims/sims_test_*.rds, compute per-model energy scores
+#' against the test-year (year + 1) observed track.
 #'
-#' By default, deer that already appear in the existing filters/es.rds are
-#' skipped (resumable reruns). Pass --overwrite to reprocess everything.
+#' Iterating off the test sims means deer with no test data are excluded by
+#' construction (they have no sims_test_*.rds file). The (id, season, year)
+#' columns in the output identify the TRAIN key — i.e. the model that
+#' produced the simulations — matching the keying used by
+#' filters/udoverlap_test_*.rds and filters/logscore_test_*.rds.
+#'
+#' By default, deer that already appear in the existing filters/es_test.rds
+#' are skipped (resumable reruns). Pass --overwrite to reprocess everything.
 #'
 #' Usage:
-#'   Rscript scripts/compute_es.R              # resumable (default)
-#'   Rscript scripts/compute_es.R --overwrite  # reprocess every deer
+#'   Rscript scripts/issf/compute_es_test.R              # resumable (default)
+#'   Rscript scripts/issf/compute_es_test.R --overwrite  # reprocess every deer
 
 # Parse CLI args ---------------------------------------------------------------
 args <- commandArgs(trailingOnly = TRUE)
@@ -24,7 +30,7 @@ source("scripts/helper_functions.R")
 
 # Setup ------------------------------------------------------------------------
 dir.create("filters", showWarnings = FALSE)
-out_path <- "filters/es.rds"
+out_path <- "filters/es_test.rds"
 
 existing <- if (!overwrite && file.exists(out_path)) {
   readRDS(out_path)
@@ -38,11 +44,15 @@ existing <- if (!overwrite && file.exists(out_path)) {
   )
 }
 
-# Discover deer with simulations
-sim_files <- list.files("sims", pattern = "^sims_.*\\.rds$", full.names = TRUE)
-keys      <- gsub("^sims_(.*)\\.rds$", "\\1", basename(sim_files))
+# Discover deer with test simulations
+sim_files <- list.files(
+  "sims",
+  pattern = "^sims_test_.*\\.rds$",
+  full.names = TRUE
+)
+keys <- gsub("^sims_test_(.*)\\.rds$", "\\1", basename(sim_files))
 
-cat(sprintf("Found %d deer with simulations\n", length(sim_files)))
+cat(sprintf("Found %d deer with test simulations\n", length(sim_files)))
 
 if (overwrite) {
   cat("[--overwrite] Recomputing ES for every deer.\n")
@@ -50,39 +60,43 @@ if (overwrite) {
 
 # Loop ------------------------------------------------------------------------
 start_time <- Sys.time()
-n_done    <- 0L
+n_done <- 0L
 n_skipped <- 0L
-n_failed  <- 0L
+n_failed <- 0L
 
 acc <- list()
 
 for (i in seq_along(sim_files)) {
-  key <- keys[i]
-  parts  <- strsplit(key, "_")[[1]]
-  id     <- parts[1]
+  train_key <- keys[i]
+  parts <- strsplit(train_key, "_")[[1]]
+  id <- parts[1]
   season <- parts[2]
-  year   <- as.integer(parts[3])
+  year <- as.integer(parts[3])
+  test_year <- year + 1L
+  test_key <- sprintf("%s_%s_%d", id, season, test_year)
 
   # Skip if this deer's rows already exist in `existing` (and not overwriting)
-  if (!overwrite &&
-    nrow(existing) > 0 &&
-    any(
-      existing$id == id &
-        existing$season == season &
-        existing$year == year
-    )) {
-    cat(sprintf("[skip-exists] %s\n", key))
+  if (
+    !overwrite &&
+      nrow(existing) > 0 &&
+      any(
+        existing$id == id &
+          existing$season == season &
+          existing$year == year
+      )
+  ) {
+    cat(sprintf("[skip-exists] %s\n", train_key))
     n_skipped <- n_skipped + 1L
     next
   }
 
-  cat(sprintf("[run]         %s\n", key))
+  cat(sprintf("[run]         %s (test on %s)\n", train_key, test_key))
 
   one <- tryCatch(
     {
       results_sim <- readRDS(sim_files[i])
-      one_deer    <- readRDS(sprintf("data/tracks/data_%s.rds", key))
-      obs         <- one_deer$stp[[1]]
+      one_deer <- readRDS(sprintf("data/tracks/data_%s.rds", test_key))
+      obs <- one_deer$stp[[1]]
 
       per_model <- purrr::map_dfr(names(results_sim), function(m_chr) {
         sim_m <- results_sim[[m_chr]]
@@ -93,21 +107,21 @@ for (i in seq_along(sim_files)) {
           ))
         }
         tibble::tibble(
-          model        = as.integer(m_chr),
+          model = as.integer(m_chr),
           energy_score = calc_energy_score(obs = obs, sim = sim_m)
         )
       })
 
       per_model |>
         dplyr::mutate(
-          id     = id,
+          id = id,
           season = season,
-          year   = year,
+          year = year,
           .before = 1
         )
     },
     error = function(e) {
-      cat(sprintf("[fail]        %s: %s\n", key, conditionMessage(e)))
+      cat(sprintf("[fail]        %s: %s\n", train_key, conditionMessage(e)))
       NULL
     }
   )

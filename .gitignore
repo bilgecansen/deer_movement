@@ -1,0 +1,17 @@
+.Rproj.user
+.Rhistory
+.RData
+.Ruserdata
+GEDI_L2Btracks_Wisconsin/
+HLS_NDVI_monthly/
+results/
+data/
+prez/
+archive/
+plots/
+Example_code/
+sims/
+filters/
+library/
+.DS_Store
+.claude/

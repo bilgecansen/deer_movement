@@ -1,0 +1,709 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Deer movement pipeline — overview</title>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+<style>
+  :root {
+    --bg: #fafafa;
+    --fg: #1f1f1f;
+    --muted: #6b6b6b;
+    --accent: #c64116;
+    --code-bg: #f0eee9;
+    --code-fg: #1f1f1f;
+    --rule: #d6d3cc;
+    --aside: #e8efe6;
+    --warn-bg: #faeee0;
+    --warn-fg: #5a3000;
+    --stage-data: #cde7f0;
+    --stage-fit: #f0e6cd;
+    --stage-sim: #e6d6ee;
+    --stage-eval: #d6e7c5;
+    --stage-agg: #fce4d6;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--fg);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    line-height: 1.55;
+    font-size: 15px;
+  }
+  main {
+    max-width: 980px;
+    margin: 0 auto;
+    padding: 48px 24px 96px;
+  }
+  h1 { font-size: 1.9rem; margin: 0 0 6px; line-height: 1.2; }
+  h1 .small { color: var(--muted); font-weight: 400; font-size: 0.95rem; }
+  h2 {
+    font-size: 1.25rem;
+    margin: 36px 0 12px;
+    padding-bottom: 6px;
+    border-bottom: 1px solid var(--rule);
+  }
+  h3 { font-size: 1.05rem; margin: 24px 0 6px; }
+  p, ul, ol { margin: 10px 0; }
+  ul, ol { padding-left: 22px; }
+  li { margin: 4px 0; }
+  code {
+    font-family: "SF Mono", Menlo, Consolas, monospace;
+    font-size: 0.92em;
+    background: var(--code-bg);
+    color: var(--code-fg);
+    padding: 1px 5px;
+    border-radius: 3px;
+  }
+  pre {
+    background: var(--code-bg);
+    color: var(--code-fg);
+    padding: 14px 16px;
+    border-radius: 5px;
+    overflow-x: auto;
+    margin: 12px 0;
+    font-family: "SF Mono", Menlo, Consolas, monospace;
+    font-size: 0.86em;
+    line-height: 1.45;
+  }
+  pre code { background: transparent; padding: 0; }
+  .lede {
+    color: var(--muted);
+    font-size: 1.05rem;
+    margin: 6px 0 24px;
+  }
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 12px 0 8px;
+    font-size: 0.92rem;
+  }
+  th, td {
+    text-align: left;
+    padding: 7px 10px;
+    border-bottom: 1px solid var(--rule);
+    vertical-align: top;
+  }
+  th { font-weight: 600; background: #efedea; }
+  tr:last-child td { border-bottom: none; }
+  td.script { font-family: "SF Mono", Menlo, Consolas, monospace; font-size: 0.88em; }
+  td.script code { background: transparent; padding: 0; font-size: 0.95em; }
+  .nav {
+    background: #fff;
+    border: 1px solid var(--rule);
+    border-radius: 5px;
+    padding: 10px 16px;
+    margin: 0 0 24px;
+    font-size: 0.92rem;
+  }
+  .nav a { color: var(--accent); text-decoration: none; }
+  .nav a:hover { text-decoration: underline; }
+  .stage {
+    border-radius: 6px;
+    padding: 16px 20px;
+    margin: 16px 0;
+  }
+  .stage-1 { background: var(--stage-data); }
+  .stage-2 { background: var(--stage-fit); }
+  .stage-3 { background: var(--stage-sim); }
+  .stage-4 { background: var(--stage-eval); }
+  .stage-5 { background: var(--stage-agg); }
+  .stage h3 { margin-top: 0; }
+  .stage table th { background: rgba(255,255,255,0.5); }
+  .pill {
+    display: inline-block;
+    padding: 1px 7px;
+    border-radius: 10px;
+    font-size: 0.78em;
+    margin-right: 6px;
+    background: rgba(0,0,0,0.08);
+    color: #2a2a2a;
+  }
+  .todo {
+    color: #a04020;
+    font-style: italic;
+  }
+  .mermaid {
+    background: #fff;
+    border: 1px solid var(--rule);
+    border-radius: 6px;
+    padding: 16px;
+    margin: 16px 0;
+    overflow-x: auto;
+  }
+  .key { font-family: "SF Mono", Menlo, Consolas, monospace; font-size: 0.86em; color: var(--muted); }
+</style>
+</head>
+<body>
+<main>
+
+<h1>Deer movement pipeline <span class="small">— overview</span></h1>
+<p class="lede">
+  Five stages from raw GPS tracks to skill-scored model comparisons. Every
+  per-deer artifact is keyed by <span class="key">&lt;id&gt;_&lt;season&gt;_&lt;year&gt;</span>.
+</p>
+
+<div class="nav">
+  <strong>Contents</strong>:
+  <a href="#overview">High-level overview</a> ·
+  <a href="#detail">Detailed flow</a> ·
+  <a href="#data">Stage 1 — Data prep</a> ·
+  <a href="#fit">Stage 2 — Fitting</a> ·
+  <a href="#sim">Stage 3 — Simulation</a> ·
+  <a href="#eval">Stage 4 — Skill evaluation</a> ·
+  <a href="#agg">Stage 5 — Aggregation</a> ·
+  <a href="#fs">Filesystem layout</a> ·
+  <a href="#run">Run order</a> ·
+  <a href="#util">Utilities</a>
+</div>
+
+<h2 id="overview">High-level overview</h2>
+<p>
+  The pipeline is a directed chain: each stage consumes the previous stage's
+  outputs (plus any external rasters it needs). All stages support resumable
+  reruns and have an <code>overwrite</code> flag to refresh.
+</p>
+
+<div class="mermaid">
+flowchart LR
+  DataPrep["1. Data Preparation<br/><small>raw → wrangled tracks</small>"]
+  Fit["2. Model Fitting<br/><small>iSSF coefficients</small>"]
+  Sim["3. Simulation<br/><small>movement paths</small>"]
+  Eval["4. Skill Evaluation<br/><small>logscore · UD overlap · ES</small>"]
+  Agg["5. Aggregation<br/><small>filter & rank</small>"]
+
+  DataPrep --> Fit --> Sim --> Eval --> Agg
+
+  classDef stage1 fill:#cde7f0,stroke:#3a6b80,color:#1a2d38;
+  classDef stage2 fill:#f0e6cd,stroke:#806c30,color:#3a2f10;
+  classDef stage3 fill:#e6d6ee,stroke:#5e408a,color:#2c1a40;
+  classDef stage4 fill:#d6e7c5,stroke:#5a7240,color:#1f3010;
+  classDef stage5 fill:#fce4d6,stroke:#a04020,color:#5a1f0a,stroke-dasharray: 5 5;
+
+  class DataPrep stage1;
+  class Fit stage2;
+  class Sim stage3;
+  class Eval stage4;
+  class Agg stage5;
+</div>
+
+<h2 id="detail">Detailed data flow</h2>
+<p>
+  Boxes are scripts; rounded boxes are files / directories. Stage 5 is dashed
+  (planned, not yet rewritten for the new keying).
+</p>
+
+<div class="mermaid">
+flowchart TB
+  %% Raw inputs
+  raw_tracks(["data/sw_deer_tracks.rda<br/><small>raw GPS tracks</small>"])
+  raw_ndvi(["data/NDVI_month/<br/><small>HLS monthly tiles</small>"])
+  raw_landcover(["wiscland2.tif<br/><small>categorical raw</small>"])
+  env_2017(["Example_code/Env_2017.tif<br/><small>spatial template + ele/east/north/dist</small>"])
+
+  %% Stage 1 scripts
+  combine_ndvi["combine_ndvi.R"]
+  wrangle_wiscland["wrangle_wiscland.R"]
+  create_hr["create_hr_rasters.R"]
+  wrangle_mvt["wrangle_deer_mvt.R"]
+
+  %% Stage 1 outputs
+  ndvi_year(["data/NDVI_year/<br/>NDVI_&lt;year&gt;.tif"])
+  wiscland_proc(["data/env/wiscland/<br/>wiscland2_binary.tif"])
+  hr_files(["data/HR/<br/>HRbin_&lt;key&gt;.tif<br/>HRedge_&lt;key&gt;.tif<br/>HRcenter_&lt;key&gt;.tif"])
+  tracks(["data/tracks/<br/>data_&lt;key&gt;.rds"])
+
+  raw_ndvi --> combine_ndvi --> ndvi_year
+  raw_landcover --> wrangle_wiscland --> wiscland_proc
+  raw_tracks --> create_hr
+  env_2017 --> create_hr
+  wiscland_proc --> create_hr
+  create_hr --> hr_files
+
+  raw_tracks --> wrangle_mvt
+  ndvi_year --> wrangle_mvt
+  wiscland_proc --> wrangle_mvt
+  env_2017 --> wrangle_mvt
+  hr_files --> wrangle_mvt
+  wrangle_mvt --> tracks
+
+  %% Stage 2
+  fit["fit_issf.R<br/><small>loops in R</small>"]
+  issf(["results/<br/>results_issf_&lt;key&gt;.rds"])
+  tracks --> fit --> issf
+
+  %% Stage 3
+  run_sims["run_sims.R<br/><small>+ run_sims_all.sh</small>"]
+  sims(["sims/<br/>sims_&lt;key&gt;.rds"])
+  tracks --> run_sims
+  issf --> run_sims
+  hr_files --> run_sims
+  ndvi_year --> run_sims
+  wiscland_proc --> run_sims
+  env_2017 --> run_sims
+  run_sims --> sims
+
+  %% Stage 4
+  logscore_R["run_logscore.R<br/><small>+ run_logscore_all.sh</small>"]
+  udoverlap_R["run_udoverlap.R<br/><small>+ run_udoverlap_all.sh</small>"]
+  compute_es_R["compute_es.R<br/><small>single-batch</small>"]
+
+  filt_logscore(["filters/<br/>logscore_&lt;key&gt;.rds"])
+  filt_udoverlap(["filters/<br/>udoverlap_&lt;key&gt;.rds"])
+  filt_es(["filters/es.rds<br/><small>one combined file</small>"])
+
+  tracks --> logscore_R
+  issf --> logscore_R
+  hr_files --> logscore_R
+  ndvi_year --> logscore_R
+  wiscland_proc --> logscore_R
+  logscore_R --> filt_logscore
+
+  tracks --> udoverlap_R
+  sims --> udoverlap_R
+  udoverlap_R --> filt_udoverlap
+
+  tracks --> compute_es_R
+  sims --> compute_es_R
+  compute_es_R --> filt_es
+
+  %% Stage 5 (TODO)
+  agg["filter_models.R<br/><small>TODO — rewrite for new keying</small>"]
+  final(["final analysis<br/>tables / plots"])
+  filt_logscore --> agg
+  filt_udoverlap --> agg
+  filt_es --> agg
+  agg --> final
+
+  classDef raw fill:#f5e6cf,stroke:#a07c50,color:#3a2a18;
+  classDef intermediate fill:#cde7f0,stroke:#3a6b80,color:#1a2d38;
+  classDef output fill:#d6e7c5,stroke:#5a7240,color:#1f3010;
+  classDef todo fill:#fce4d6,stroke:#a04020,color:#5a1f0a,stroke-dasharray: 5 5;
+
+  class raw_tracks,raw_ndvi,raw_landcover,env_2017 raw;
+  class ndvi_year,wiscland_proc,hr_files,tracks,issf,sims intermediate;
+  class filt_logscore,filt_udoverlap,filt_es output;
+  class agg,final todo;
+</div>
+
+<h2 id="data">Stage 1 — Data preparation</h2>
+<div class="stage stage-1">
+  <p>
+    Convert raw inputs into per-deer wrangled track files keyed by
+    <code>(id, season, year)</code>. The four scripts run roughly independently
+    apart from <code>create_hr_rasters.R → wrangle_deer_mvt.R</code>: HR rasters
+    must exist before per-deer track wrangling can extract their values into
+    the design matrix.
+  </p>
+
+  <table>
+    <thead>
+      <tr><th>Script</th><th>Inputs</th><th>Outputs</th><th>Notes</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td class="script"><code>combine_ndvi.R</code></td>
+        <td>
+          <code>data/NDVI_month/</code><br>(HLS tiles)
+        </td>
+        <td>
+          <code>data/NDVI_year/NDVI_&lt;year&gt;.tif</code><br>
+          <span class="key">12 monthly layers per year</span>
+        </td>
+        <td>One-time. Mosaics monthly tiles, names layers Jan–Dec, sets time stamps.</td>
+      </tr>
+      <tr>
+        <td class="script"><code>wrangle_wiscland.R</code></td>
+        <td>
+          <code>wiscland2.tif</code> (categorical)
+        </td>
+        <td>
+          <code>data/env/wiscland/wiscland2_binary.tif</code>
+        </td>
+        <td>One-time. Reclassifies, builds binary indicator layers per landcover class.</td>
+      </tr>
+      <tr>
+        <td class="script"><code>create_hr_rasters.R</code></td>
+        <td>
+          <code>data/sw_deer_tracks.rda</code><br>
+          <code>data/env/wiscland/wiscland2_binary.tif</code><br>
+          <code>Example_code/Env_2017.tif</code>
+        </td>
+        <td>
+          <code>data/HR/HRbin_&lt;key&gt;.tif</code><br>
+          <code>data/HR/HRedge_&lt;key&gt;.tif</code><br>
+          <code>data/HR/HRcenter_&lt;key&gt;.tif</code>
+        </td>
+        <td>
+          Loops in R. Fits ctmm + AKDE per deer using full track. Three rasters
+          per deer aligned to a 5 km buffer of the track.
+        </td>
+      </tr>
+      <tr>
+        <td class="script"><code>wrangle_deer_mvt.R</code></td>
+        <td>
+          <code>data/sw_deer_tracks.rda</code><br>
+          <code>data/HR/*</code><br>
+          <code>data/NDVI_year/*</code><br>
+          <code>data/env/wiscland/*</code><br>
+          <code>Example_code/Env_2017.tif</code>
+        </td>
+        <td>
+          <code>data/tracks/data_&lt;key&gt;.rds</code><br>
+          <span class="key">single-row tibble per deer with stp, stp.random, stp.var</span>
+        </td>
+        <td>
+          Loops in R with <code>tryCatch</code> per deer. Skips deer with missing
+          HR rasters. <code>overwrite</code> flag at top.
+        </td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+
+<h2 id="fit">Stage 2 — Model fitting</h2>
+<div class="stage stage-2">
+  <p>
+    Fit 10 candidate iSSF formulas to each deer's design matrix.
+    <code>fit_mod()</code> wraps each fit in <code>tryCatch</code>, so a single
+    formula failing on a single deer doesn't kill the deer's run — the failure
+    is recorded as a status object inside the saved list.
+  </p>
+  <table>
+    <thead>
+      <tr><th>Script</th><th>Inputs</th><th>Outputs</th><th>Notes</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td class="script"><code>fit_issf.R</code></td>
+        <td>
+          <code>data/tracks/data_&lt;key&gt;.rds</code>
+        </td>
+        <td>
+          <code>results/results_issf_&lt;key&gt;.rds</code><br>
+          <span class="key">list of 10 (iss, coeff, aic) entries</span>
+        </td>
+        <td>
+          Loops in R over <code>data/tracks/</code> contents.
+          <code>overwrite</code> flag at top.
+        </td>
+      </tr>
+    </tbody>
+  </table>
+  <p>
+    Formulas reference: <code>HR_edge_*</code>, <code>HR_center_log_*</code>,
+    <code>wiscland_*</code>, <code>ndvi_*</code>, <code>tod_start_</code>, plus
+    movement terms (<code>log(sl_)</code>, <code>cos(ta_)</code>). No model uses
+    <code>HR_bin_*</code> in the current set.
+  </p>
+</div>
+
+<h2 id="sim">Stage 3 — Simulation</h2>
+<div class="stage stage-3">
+  <p>
+    For each deer, draw <code>n_sim = 10</code> simulated paths from each
+    fitted model's redistribution kernel. Models are simulated in parallel
+    via <code>furrr::future_map</code>; NDVI-using models take a month-by-month
+    loop; non-NDVI models take a one-kernel-per-burst fast path
+    (auto-detected via <code>all.vars(formula)</code>).
+  </p>
+  <table>
+    <thead>
+      <tr><th>Script</th><th>Inputs</th><th>Outputs</th><th>Notes</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td class="script">
+          <code>run_sims.R</code><br>
+          <code>run_sims_all.sh</code>
+        </td>
+        <td>
+          <code>data/tracks/data_&lt;key&gt;.rds</code><br>
+          <code>results/results_issf_&lt;key&gt;.rds</code><br>
+          <code>data/HR/HRedge_*, HRcenter_*</code><br>
+          <code>data/NDVI_year/*</code><br>
+          <code>data/env/wiscland/*</code><br>
+          <code>Example_code/Env_2017.tif</code>
+        </td>
+        <td>
+          <code>sims/sims_&lt;key&gt;.rds</code><br>
+          <span class="key">named list keyed by model number</span>
+        </td>
+        <td>
+          R script takes <code>&lt;id&gt; &lt;season&gt; &lt;year&gt;</code>.
+          Bash wrapper iterates every deer with iSSF results, skips already-done
+          unless <code>--overwrite</code>.
+        </td>
+      </tr>
+    </tbody>
+  </table>
+  <p>
+    See <a href="simulate_movement.html"><code>docs/simulate_movement.html</code></a>
+    for the per-call function explanation.
+  </p>
+</div>
+
+<h2 id="eval">Stage 4 — Skill evaluation (filters)</h2>
+<div class="stage stage-4">
+  <p>
+    Three independent skill metrics, written as separate scripts so they can
+    be run in any order. All outputs land in <code>filters/</code>.
+  </p>
+  <table>
+    <thead>
+      <tr><th>Script</th><th>Metric</th><th>Inputs</th><th>Outputs</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td class="script">
+          <code>run_logscore.R</code><br>
+          <code>run_logscore_all.sh</code>
+        </td>
+        <td>
+          One-step log score under each fitted model
+          <span class="pill">per deer</span>
+        </td>
+        <td>
+          <code>data/tracks/data_&lt;key&gt;.rds</code><br>
+          <code>results/results_issf_&lt;key&gt;.rds</code><br>
+          <code>data/HR/HRedge_*, HRcenter_*</code><br>
+          <code>data/NDVI_year/*</code><br>
+          <code>data/env/wiscland/*</code>
+        </td>
+        <td>
+          <code>filters/logscore_&lt;key&gt;.rds</code><br>
+          <span class="key">model, total_logp, n_steps, delta_logp</span>
+        </td>
+      </tr>
+      <tr>
+        <td class="script">
+          <code>run_udoverlap.R</code><br>
+          <code>run_udoverlap_all.sh</code>
+        </td>
+        <td>
+          AKDE Bhattacharyya overlap + SVF agreement
+          <span class="pill">per deer × model</span>
+        </td>
+        <td>
+          <code>data/tracks/data_&lt;key&gt;.rds</code><br>
+          <code>sims/sims_&lt;key&gt;.rds</code>
+        </td>
+        <td>
+          <code>filters/udoverlap_&lt;key&gt;.rds</code><br>
+          <span class="key">named list of (bat_uds, svf_score) per model</span>
+        </td>
+      </tr>
+      <tr>
+        <td class="script"><code>compute_es.R</code></td>
+        <td>
+          One-step energy score
+          <span class="pill">all deer · single batch</span>
+        </td>
+        <td>
+          <code>data/tracks/data_*.rds</code><br>
+          <code>sims/sims_*.rds</code>
+        </td>
+        <td>
+          <code>filters/es.rds</code><br>
+          <span class="key">tidy data frame: id, season, year, model, energy_score</span>
+        </td>
+      </tr>
+    </tbody>
+  </table>
+  <p>
+    <strong>Why ES is different:</strong> ES outputs are tiny (one number per
+    deer × model), so per-deer files would be wasteful. Single batch script,
+    one combined file, resumable via <code>--overwrite</code> or the existing
+    deer-key filter.
+  </p>
+</div>
+
+<h2 id="agg">Stage 5 — Aggregation <span style="color:#a04020">(planned)</span></h2>
+<div class="stage stage-5">
+  <p>
+    <code>filter_models.R</code> currently reads the old
+    <code>results/results_skill_*.rds</code> format and is incompatible with
+    the new keying. Slated for rewrite once a full pipeline run lands and you
+    have something to aggregate.
+  </p>
+  <table>
+    <thead>
+      <tr><th>Script</th><th>Inputs</th><th>Outputs</th><th>Status</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td class="script"><code>filter_models.R</code></td>
+        <td>
+          <code>filters/logscore_*.rds</code><br>
+          <code>filters/udoverlap_*.rds</code><br>
+          <code>filters/es.rds</code>
+        </td>
+        <td>
+          analysis-ready data frame<br>
+          (location TBD — likely <code>filters/model_selection.rds</code>)
+        </td>
+        <td class="todo">TODO — rewrite for new keying after first end-to-end run</td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+
+<h2 id="fs">Filesystem layout</h2>
+<pre>deer_movement/
+├── scripts/                       # all R + bash code
+│   ├── helper_functions.R         # sourced by every other script
+│   ├── combine_ndvi.R             # stage 1
+│   ├── wrangle_wiscland.R         # stage 1
+│   ├── create_hr_rasters.R        # stage 1
+│   ├── wrangle_deer_mvt.R         # stage 1
+│   ├── fit_issf.R                 # stage 2
+│   ├── run_sims.R                 # stage 3
+│   ├── run_sims_all.sh            # stage 3 wrapper
+│   ├── run_logscore.R             # stage 4
+│   ├── run_logscore_all.sh        # stage 4 wrapper
+│   ├── run_udoverlap.R            # stage 4
+│   ├── run_udoverlap_all.sh       # stage 4 wrapper
+│   ├── compute_es.R               # stage 4 (single-batch)
+│   ├── filter_models.R            # stage 5 — TODO rewrite
+│   ├── plot_deer_paths.R          # utility
+│   └── scrap_book.R               # sandbox
+│
+├── data/                          # raw + wrangled inputs
+│   ├── sw_deer_tracks.rda
+│   ├── NDVI_month/                # raw HLS tiles
+│   ├── NDVI_year/                 # combined yearly
+│   ├── env/wiscland/              # binary indicator stack
+│   ├── HR/                        # HRbin / HRedge / HRcenter per deer
+│   └── tracks/                    # data_&lt;key&gt;.rds per deer
+│
+├── results/                       # iSSF coefficient sets
+│   └── results_issf_&lt;key&gt;.rds
+│
+├── sims/                          # simulated paths
+│   └── sims_&lt;key&gt;.rds
+│
+├── filters/                       # skill metrics
+│   ├── logscore_&lt;key&gt;.rds
+│   ├── udoverlap_&lt;key&gt;.rds
+│   └── es.rds
+│
+├── docs/                          # explainer pages
+│   ├── pipeline.html              # this page
+│   └── simulate_movement.html
+│
+├── plots/, prez/                  # output artifacts
+├── archive/                       # retired scripts and old data
+└── Example_code/                  # legacy reference rasters</pre>
+
+<h2 id="run">Run order recipe</h2>
+<p>From a clean slate, in order:</p>
+<pre># Stage 1 — data prep (only re-run if raw inputs change)
+Rscript scripts/combine_ndvi.R       # one-time
+Rscript scripts/wrangle_wiscland.R   # one-time
+Rscript scripts/create_hr_rasters.R  # loops in R
+Rscript scripts/wrangle_deer_mvt.R   # loops in R
+
+# Stage 2 — fit
+Rscript scripts/fit_issf.R           # loops in R
+
+# Stage 3 — simulate
+bash scripts/run_sims_all.sh         # iterates every deer with issf
+
+# Stage 4 — evaluate (any order; all three independent)
+bash scripts/run_logscore_all.sh
+bash scripts/run_udoverlap_all.sh
+Rscript scripts/compute_es.R
+
+# Stage 5 — aggregate (TODO)
+Rscript scripts/filter_models.R</pre>
+
+<p>
+  All loops/wrappers skip already-completed deer by default. Any of them can
+  be forced to re-run with <code>--overwrite</code> (bash) or by flipping
+  <code>overwrite &lt;- TRUE</code> at the top of the R script.
+</p>
+
+<h2 id="util">Utilities and helpers</h2>
+<table>
+  <thead>
+    <tr><th>File</th><th>Role</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td class="script"><code>scripts/helper_functions.R</code></td>
+      <td>
+        Single source of every shared function. Sourced by every R script in
+        the pipeline. Notable: <code>make_random_pt_extraction</code>,
+        <code>extract_step_variables</code>, <code>load_hr_*_raster</code>,
+        <code>fit_mod</code>, <code>simulate_movement</code>,
+        <code>onestep_loglik</code>, <code>overlap_ud</code>,
+        <code>svf_score</code>, <code>calc_energy_score</code>,
+        <code>plot_deer_paths</code>, <code>animate_deer_path</code>.
+      </td>
+    </tr>
+    <tr>
+      <td class="script"><code>scripts/plot_deer_paths.R</code></td>
+      <td>
+        Visualization driver. Calls <code>plot_deer_paths()</code> from
+        helpers; uses old <code>row_no</code> + <code>results_sim_&lt;n&gt;.rds</code>
+        keying — will need an update when the full population is reprocessed.
+      </td>
+    </tr>
+    <tr>
+      <td class="script"><code>scripts/scrap_book.R</code></td>
+      <td>Sandbox / experiments. Not part of the production flow.</td>
+    </tr>
+  </tbody>
+</table>
+
+<h2>Conventions to keep in mind</h2>
+<ul>
+  <li>
+    <strong>Deer key</strong>: <code>&lt;id&gt;_&lt;season&gt;_&lt;year&gt;</code>
+    (e.g. <code>5000_fa_2017</code>). Filenames everywhere downstream are built
+    from this.
+  </li>
+  <li>
+    <strong>Filtering criterion</strong>:
+    <code>keep &amp; !excursion &amp; !unstable_hr_center &amp; year %in% 2017:2021</code>.
+    Identical between <code>create_hr_rasters.R</code> and
+    <code>wrangle_deer_mvt.R</code> — keep them in sync if you change either.
+  </li>
+  <li>
+    <strong>CRS</strong>: working CRS is EPSG:6610 (UTM-style equal-area for
+    Wisconsin). NDVI/AKDE machinery transits through 4326 internally and
+    transforms back as needed.
+  </li>
+  <li>
+    <strong>Failure containment</strong>: every loop wraps per-deer work in
+    <code>tryCatch</code> so one bad deer doesn't halt a batch. Inside
+    <code>fit_issf.R</code>, <code>fit_mod</code> additionally returns
+    failure-status objects per formula so partial deer are saved.
+  </li>
+  <li>
+    <strong>Resumability</strong>: every batch script checks
+    <code>file.exists()</code> before running and skips done deer unless
+    <code>overwrite</code> is set. Reruns of an interrupted batch pick up
+    where they left off.
+  </li>
+</ul>
+
+</main>
+<script>
+  mermaid.initialize({
+    startOnLoad: true,
+    theme: 'base',
+    themeVariables: {
+      fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif',
+      fontSize: '14px',
+      primaryColor: '#fff',
+      primaryTextColor: '#222',
+      primaryBorderColor: '#888',
+      lineColor: '#888'
+    },
+    flowchart: { curve: 'basis', useMaxWidth: true }
+  });
+</script>
+</body>
+</html>

@@ -13,7 +13,7 @@
 
 library(tidyverse)
 
-annotated <- readRDS("filters/filter_combined.rds")
+annotated <- readRDS("filters/filter_combined_test.rds")
 
 dir.create("plots", showWarnings = FALSE)
 

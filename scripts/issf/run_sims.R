@@ -157,7 +157,8 @@ results_sim <- furrr::future_map(
           stp_data = deer_input$stp,
           env_test = env_local,
           ndvi_test = ndvi_local,
-          issf_train = model_sim
+          model = model_sim,
+          method = "issf"
         )
         res$nsim <- h
         res
