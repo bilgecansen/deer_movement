@@ -725,6 +725,11 @@ prepare_gam_data <- function(ssf_data) {
 #' that happens (status "near-linear" / "removed") and whether any smooth is
 #' pressed against its basis ceiling (status "k-bound" -> raise k).
 #'
+#' `drop.unused.levels = FALSE` retains every declared landcover level even when
+#' a deer never visited it, so the saved model can be predicted on any class at
+#' simulation / scoring time (unvisited classes fall back to the population
+#' average; see the inline note on the gam() call).
+#'
 #' @param gam_data Output of prepare_gam_data() for one deer
 #' @param formula  RHS-only model formula string
 #' @param select   Use the double-penalty shrinkage (default TRUE)
@@ -744,7 +749,16 @@ fit_gam_mod <- function(gam_data, formula, select = TRUE) {
       weights = obs,
       method = "REML",
       select = select,
-      knots = list(tod_ = c(0, 24))
+      knots = list(tod_ = c(0, 24)),
+      # Keep ALL declared factor levels (LANDCOVER_LEVELS / NDVI_VEG_CLASSES),
+      # not just the ones this deer visited. Classes with no training steps get a
+      # coefficient pinned at ~0 in the re / fs smooths -- which is exactly the
+      # population-average response -- so prediction (simulation / scoring) on a
+      # landcover class the deer never visited works with a plain predict():
+      # the re and per-class fs fall back to 0 and only the shared smooths (e.g.
+      # s(ndvi_veg, by = is_veg)) carry the effect. Verified to leave the fits
+      # for visited classes (coefficients and variance components) unchanged.
+      drop.unused.levels = FALSE
     ),
     error = function(err) "Error"
   )

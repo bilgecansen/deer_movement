@@ -71,7 +71,8 @@ source("scripts/helper_functions.R")
 # make_formulas() builds the candidate RHS vector for a given cyclic-tod basis
 # (k_tod, capped per deer) and NDVI-by-landcover 'fs' basis (k_ndvi). fit_gam_mod
 # prepends the "cbind(times, stratum) ~" Cox-PH response. Each model is the GAM
-# translation of the like-numbered iSSF formula in fit_issf.R.
+# translation of the corresponding iSSF formula in fit_issf.R (numbered 1-6 here;
+# model 6 is fit_issf.R's model 8, which still uses the older 1-5,8 numbering).
 #
 # MOVE = parametric gamma / von Mises movement kernel. The three movement
 # covariates enter both as parametric main effects (sl_ + log(sl_) + cos(ta_))
@@ -105,7 +106,7 @@ make_formulas <- function(k_tod, k_ndvi, season) {
   move <- sprintf(
     paste0(
       "sl_ + log(sl_) + cos(ta_) + ",
-      "s(tod_, bs = 'cc', k = %1$d, by = sl_) + ",
+      "s(tod_, bs = 'cc', k = %1$d, by = sl_)"
     ),
     k_tod
   )
@@ -195,7 +196,7 @@ process_deer <- function(i) {
       k_tod <- max(3L, min(K_TOD, n_tod - 1L))
 
       # Season picks the slot-4/5 resource models (NDVI vs landcover; see
-      # make_formulas). results_gam is named by model number ("1".."5","8").
+      # make_formulas). results_gam is named by model number ("1".."6").
       season <- strsplit(key, "_")[[1]][2]
       formulas <- make_formulas(k_tod, K_NDVI, season)
 
@@ -207,7 +208,7 @@ process_deer <- function(i) {
       saveRDS(results_gam, out_path)
 
       # Per-smooth k / shrinkage diagnostics for the end-of-run audit. imap's
-      # index is the model-number name ("1".."5","8").
+      # index is the model-number name ("1".."6").
       audit <- purrr::imap_dfr(results_gam, function(r, model_no) {
         sd <- r$smooth_diag
         if (is.null(sd)) {
