@@ -32,7 +32,7 @@
 #' Configuration: edit `overwrite` / `gam_input` below before running.
 
 # Configuration ---------------------------------------------------------------
-overwrite <- F # set to TRUE to refit deer that already have output
+overwrite <- T # set to TRUE to refit deer that already have output
 
 # Which per-deer design to fit:
 #   "stp.var"      — gamma / von Mises (parametric movement kernel; default)
@@ -78,60 +78,77 @@ source("scripts/helper_functions.R")
 # AND as cyclic-spline interactions with time of day (zebra model; Klappstein
 # et al. 2024). The main effects carry the baseline correction to the tentative
 # kernel (sl_/log(sl_) -> gamma rate/shape, cos(ta_) -> von Mises concentration);
-# being parametric they are NOT shrunk by SELECT, so the updated movement kernel
-# is always retained, while the by= smooths add the (shrinkable) time-of-day
-# modulation. Without the main effects, SELECT can shrink an entire movement
-# term to zero, degrading the kernel back to the raw tentative distribution.
-# Smooth-cyclic analogue of the iSSF baseline (sl_ + log(sl_) + cos(ta_)):
-# tod_start_ (day/night factor -> smooth tod). k_tod caps wiggliness below each
-# deer's distinct-tod count (4-hour fixes -> ~12 positions, min ~10); REML +
-# SELECT pick the actual smoothness. Landcover interactions use a global smooth
-# plus hierarchical "fs" deviations (Pedersen et al. 2019 "Model GS": one shrunk
-# curve per class around a shared global response) rather than independent by=
-# smooths, which are unidentifiable when a deer visits only a few of the 10
-# landcover classes. The global smooth (s(ndvi_end) / s(HR_center_end)) mirrors
-# the iSSF main effect and lets sparse classes pool toward the shared response
-# instead of toward zero; SELECT drops it when redundant.
+# the by= smooths add the (shrinkable) time-of-day modulation.
+# k_tod caps wiggliness below each deer's distinct-tod count
+# (4-hour fixes -> ~12 positions, min ~10). Landcover interactions use a global
+# smooth plus hierarchical "fs" deviations (Pedersen et al. 2019 "Model GS":
+# one shrunk curve per class around a shared global response) rather than
+# independent by= smooths, which are unidentifiable when a deer visits only a few
+# classes. The global smooth mirrors the iSSF main effect and lets sparse classes
+# pool toward the shared response instead of toward zero.
+#
+# NDVI (models 4 & 5) is biologically meaningful only on the open-canopy classes
+# in NDVI_VEG_CLASSES (corn / soybeans / alfalfa_hay / small_grains / other_ag /
+# grassland); on forest, wetlands and developed it is noise. So its hierarchical
+# block is the GS structure RESTRICTED to those classes: the numeric 0/1 is_veg
+# indicator (prepare_gam_data) is passed as `by=` to both the global veg smooth
+# s(ndvi_veg, by = is_veg) and the per-class deviations
+# s(ndvi_veg, veg_class, bs = 'fs', by = is_veg), zeroing each smooth exactly on
+# non-veg steps (by= multiplies the whole smooth). veg_class carries only the 6
+# veg levels (non-veg rows parked on level 1, made inert by is_veg = 0). The
+# class-level intercept stays a single random effect over ALL classes,
+# s(wiscland_end, bs = 're') = alpha_land[k] ~ N(0, sigma_land) (the SSF has no
+# global intercept, so its mean is absorbed by the baseline hazard). HR_center
+# (model 6) keeps the all-class fs (hc_fs); it is meaningful everywhere.
+
 make_formulas <- function(k_tod, k_ndvi, season) {
   move <- sprintf(
     paste0(
       "sl_ + log(sl_) + cos(ta_) + ",
       "s(tod_, bs = 'cc', k = %1$d, by = sl_) + ",
-      "s(tod_, bs = 'cc', k = %1$d, by = log(sl_)) + ",
-      "s(tod_, bs = 'cc', k = %1$d, by = cos(ta_))"
     ),
     k_tod
   )
-  fs <- sprintf("s(ndvi_end, wiscland_end, bs = 'fs', k = %d)", k_ndvi)
   hc_fs <- sprintf("s(HR_center_end, wiscland_end, bs = 'fs', k = %d)", k_ndvi)
 
   # Always-fit structural models
   f1 <- move # 1 movement only
-  f2 <- paste(move, "+ s(HR_edge_end)") # 2 + HR edge
-  f3 <- paste(move, "+ s(HR_center_end)") # 3 + HR center
-  f8 <- paste(move, "+ s(HR_center_end) +", hc_fs) # 8 + HR-center x LC
+  f2 <- paste(move, "+ s(HR_edge_end)")
+  f3 <- paste(move, "+ s(HR_center_end)")
+  f6 <- paste(move, "+ s(HR_center_end) +", hc_fs)
 
   # Resource models for slots 4 & 5 — season-dependent. Non-breeding (winter)
   # deer have no valid MODIS NDVI (snow / dormancy -> all-or-mostly NA), so the
   # NDVI models (4 & 5) can't be fit; we substitute the landcover-only models
-  # (6 & 7) and record them in slots 4 & 5. Either way the object holds 6 models
-  # and slots 4/5 always mean "the resource-selection model" — models 6 & 7
-  # never appear under their own numbers, and model 8 keeps its number (hence
-  # the 1,2,3,4,5,8 gap).
+  # and record them in slots 4 & 5. Either way the object holds 6 models
+  # and slots 4/5 always mean "the resource-selection model".
   if (season == "nb") {
     # Winter NDVI is unusable; the landcover-only substitutes use a penalised
     # random effect on landcover, s(wiscland_end, bs = 're'), rather than a
     # fixed factor. It shrinks sparse classes and avoids the near-separation
     # that makes the raw factor slow / non-convergent in cox.ph (validated:
     # ~17x faster, no step failures).
-    f4 <- paste(move, "+ s(HR_center_end) + s(wiscland_end, bs = 're')") # model 6 -> slot 4
-    f5 <- paste(move, "+ s(wiscland_end, bs = 're')") # model 7 -> slot 5
+    f4 <- paste(move, "+ s(HR_center_end) + s(wiscland_end, bs = 're')")
+    f5 <- paste(move, "+ s(wiscland_end, bs = 're')")
   } else {
-    f4 <- paste(move, "+ s(HR_center_end) + s(ndvi_end) +", fs) # model 4
-    f5 <- paste(move, "+ s(ndvi_end) +", fs) # model 5
+    # Hierarchical NDVI block, restricted to NDVI_VEG_CLASSES (see the long
+    # comment above and prepare_gam_data for is_veg / ndvi_veg / veg_class): an
+    # all-class landcover random intercept, a shared veg NDVI response, and
+    # per-veg-class 'fs' deviations -- the latter two switched off on non-veg
+    # steps via by = is_veg.
+    ndvi_block <- sprintf(
+      paste0(
+        "s(wiscland_end, bs = 're') + ",
+        "s(ndvi_veg, by = is_veg) + ",
+        "s(ndvi_veg, veg_class, bs = 'fs', k = %d, by = is_veg)"
+      ),
+      k_ndvi
+    )
+    f4 <- paste(move, "+ s(HR_center_end) +", ndvi_block)
+    f5 <- paste(move, "+", ndvi_block)
   }
 
-  stats::setNames(c(f1, f2, f3, f4, f5, f8), c("1", "2", "3", "4", "5", "8"))
+  stats::setNames(c(f1, f2, f3, f4, f5, f6), c("1", "2", "3", "4", "5", "6"))
 }
 
 # Discover deer from data/tracks/ ---------------------------------------------
@@ -213,7 +230,11 @@ process_deer <- function(i) {
 start_time <- Sys.time()
 
 n_workers <- max(1L, parallel::detectCores() - 1L)
-cat(sprintf("Fitting %d deer on %d workers...\n", length(track_files), n_workers))
+cat(sprintf(
+  "Fitting %d deer on %d workers...\n",
+  length(track_files),
+  n_workers
+))
 future::plan(future::multisession, workers = n_workers)
 
 results <- furrr::future_map(
