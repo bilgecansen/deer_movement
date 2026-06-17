@@ -75,11 +75,12 @@ source("scripts/helper_functions.R")
 # model 6 is fit_issf.R's model 8, which still uses the older 1-5,8 numbering).
 #
 # MOVE = parametric gamma / von Mises movement kernel. The three movement
-# covariates enter both as parametric main effects (sl_ + log(sl_) + cos(ta_))
-# AND as cyclic-spline interactions with time of day (zebra model; Klappstein
-# et al. 2024). The main effects carry the baseline correction to the tentative
-# kernel (sl_/log(sl_) -> gamma rate/shape, cos(ta_) -> von Mises concentration);
-# the by= smooths add the (shrinkable) time-of-day modulation.
+# covariates enter as parametric main effects (sl_ + log(sl_) + cos(ta_)), which
+# carry the baseline correction to the tentative kernel (sl_/log(sl_) -> gamma
+# rate/shape, cos(ta_) -> von Mises concentration). Step length sl_ additionally
+# enters as a single cyclic-spline interaction with time of day (zebra model;
+# Klappstein et al. 2024): the by= smooth adds the (shrinkable) time-of-day
+# modulation of movement rate.
 # k_tod caps wiggliness below each deer's distinct-tod count
 # (4-hour fixes -> ~12 positions, min ~10). Landcover interactions use a global
 # smooth plus hierarchical "fs" deviations (Pedersen et al. 2019 "Model GS":
