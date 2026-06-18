@@ -781,10 +781,17 @@ fit_gam_mod <- function(gam_data, formula, select = TRUE) {
 #' k-index and p-value columns: those are residual-based and unreliable for a
 #' cox.ph SSF (the same reason Klappstein et al. 2024 advise against PH
 #' residuals). The trustworthy signal is edf vs k':
-#'   * "removed"     edf <= removed_edf  — shrunk to ~zero (only with select)
+#'   * "removed"     edf <= removed_edf  — shrunk to ~zero. With select = TRUE
+#'                                         any smooth can reach this; with
+#'                                         select = FALSE only smooths with no
+#'                                         unpenalised null space (cc cyclic, re,
+#'                                         fs) can, when REML drives their
+#'                                         variance to ~0 (no time-of-day
+#'                                         modulation / no between-class variance)
 #'   * "near-linear" edf <= linear_edf   — collapsed to the penalty null space
-#'                                         (a straight line, or a constant for
-#'                                         cyclic terms = no time-of-day effect)
+#'                                         (a straight line = no nonlinearity);
+#'                                         the floor for ordinary tp/cr smooths
+#'                                         (HR, global NDVI) when select = FALSE
 #'   * "k-bound"     edf >= k_bound_ratio * k' — pressed against the ceiling;
 #'                                         consider a higher k
 #'   * "ok"          otherwise
