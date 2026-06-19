@@ -18,21 +18,6 @@ LANDCOVER_LEVELS <- c(
   "developed"
 )
 
-# Landcover classes on which NDVI is a biologically meaningful covariate: the
-# open-canopy ag / grassland classes whose greenness tracks forage state. On
-# forest, wetlands and developed land NDVI is noise (closed canopy / standing
-# water / impervious), so the breeding NDVI smooths (fit_GAM models 4 & 5) are
-# switched off there. prepare_gam_data() turns this set into the is_veg /
-# ndvi_veg / veg_class columns the NDVI block consumes.
-NDVI_VEG_CLASSES <- c(
-  "corn",
-  "soybeans",
-  "alfalfa_hay",
-  "small_grains",
-  "other_ag",
-  "grassland"
-)
-
 # Crop buffer (metres, CRS 6610) added around each deer's track when cropping
 # rasters for random-step generation, covariate extraction, HR raster creation,
 # simulation, and scoring. Sized to clear the longest single observed/simulated
@@ -678,32 +663,6 @@ prepare_gam_data <- function(ssf_data) {
   ssf_data$times <- 1
   ssf_data$stratum <- as.integer(factor(ssf_data$step_id_))
   ssf_data$obs <- as.integer(ssf_data$case_)
-
-  # NDVI block support for breeding models 4 & 5 (see make_formulas in
-  # fit_GAM.R). NDVI is meaningful only on NDVI_VEG_CLASSES:
-  #   * is_veg    — 1/0 indicator passed as `by=` to the NDVI smooths so they are
-  #                 exactly zero on non-veg steps (and on steps lacking NDVI).
-  #   * ndvi_veg  — NDVI kept as-is wherever it exists (so the smooth basis is not
-  #                 skewed by a pile of placeholders); only NA is filled with an
-  #                 in-range stand-in, which is_veg zeroes out anyway. This also
-  #                 stops na.omit from dropping NDVI-less steps the movement /
-  #                 landcover terms still need.
-  #   * veg_class — factor with only the veg levels; non-veg / NDVI-less steps are
-  #                 parked on the first level but made inert by is_veg = 0, so they
-  #                 never enter that class's per-class curve.
-  has_ndvi <- ssf_data$wiscland_end %in% NDVI_VEG_CLASSES &
-    !is.na(ssf_data$ndvi_end)
-  ssf_data$is_veg <- as.numeric(has_ndvi)
-  ssf_data$ndvi_veg <- ifelse(
-    is.na(ssf_data$ndvi_end),
-    stats::median(ssf_data$ndvi_end, na.rm = TRUE),
-    ssf_data$ndvi_end
-  )
-  ssf_data$veg_class <- factor(
-    ifelse(has_ndvi, as.character(ssf_data$wiscland_end), NDVI_VEG_CLASSES[1]),
-    levels = NDVI_VEG_CLASSES
-  )
-
   ssf_data
 }
 
@@ -750,14 +709,14 @@ fit_gam_mod <- function(gam_data, formula, select = TRUE) {
       method = "REML",
       select = select,
       knots = list(tod_ = c(0, 24)),
-      # Keep ALL declared factor levels (LANDCOVER_LEVELS / NDVI_VEG_CLASSES),
-      # not just the ones this deer visited. Classes with no training steps get a
-      # coefficient pinned at ~0 in the re / fs smooths -- which is exactly the
-      # population-average response -- so prediction (simulation / scoring) on a
-      # landcover class the deer never visited works with a plain predict():
-      # the re and per-class fs fall back to 0 and only the shared smooths (e.g.
-      # s(ndvi_veg, by = is_veg)) carry the effect. Verified to leave the fits
-      # for visited classes (coefficients and variance components) unchanged.
+      # Keep ALL declared landcover levels (LANDCOVER_LEVELS), not just the ones
+      # this deer visited. A class with no training steps gets its fs / re
+      # coefficients pinned at ~0 -- i.e. the population-average response -- so
+      # prediction (simulation / scoring) on a landcover class the deer never
+      # visited works with a plain predict(): the per-class fs deviation falls
+      # back to 0 and the global s(ndvi_end) carries the response (this is the
+      # Model GS "predict unobserved levels" property). Verified to leave the
+      # fits for visited classes (coefficients and variance components) unchanged.
       drop.unused.levels = FALSE
     ),
     error = function(err) "Error"

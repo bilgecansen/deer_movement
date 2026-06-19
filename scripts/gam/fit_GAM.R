@@ -89,19 +89,15 @@ source("scripts/helper_functions.R")
 # classes. The global smooth mirrors the iSSF main effect and lets sparse classes
 # pool toward the shared response instead of toward zero.
 #
-# NDVI (models 4 & 5) is biologically meaningful only on the open-canopy classes
-# in NDVI_VEG_CLASSES (corn / soybeans / alfalfa_hay / small_grains / other_ag /
-# grassland); on forest, wetlands and developed it is noise. So its hierarchical
-# block is the GS structure RESTRICTED to those classes: the numeric 0/1 is_veg
-# indicator (prepare_gam_data) is passed as `by=` to both the global veg smooth
-# s(ndvi_veg, by = is_veg) and the per-class deviations
-# s(ndvi_veg, veg_class, bs = 'fs', by = is_veg), zeroing each smooth exactly on
-# non-veg steps (by= multiplies the whole smooth). veg_class carries only the 6
-# veg levels (non-veg rows parked on level 1, made inert by is_veg = 0). The
-# class-level intercept stays a single random effect over ALL classes,
-# s(wiscland_end, bs = 're') = alpha_land[k] ~ N(0, sigma_land) (the SSF has no
-# global intercept, so its mean is absorbed by the baseline hazard). HR_center
-# (model 6) keeps the all-class fs (hc_fs); it is meaningful everywhere.
+# Models 4 & 5 (breeding) put NDVI in exactly this GS form over ALL landcover
+# classes: a global s(ndvi_end) plus an fs interaction s(ndvi_end, wiscland_end).
+# The fs carries each class's own intercept AND NDVI curve, so per-class landcover
+# selection is part of the GS term -- no separate random intercept is needed
+# (Pedersen et al. 2019; adding one would double-count the intercept). Where NDVI
+# is uninformative (e.g. forest / wetlands / developed) the shared penalty just
+# shrinks that class's deviation toward the global. GS also lets us predict
+# classes a deer never visited (Model GS supports unobserved levels; GI does not).
+# Model 6 uses the same GS form for HR_center (s(HR_center_end) + hc_fs).
 
 make_formulas <- function(k_tod, k_ndvi, season) {
   move <- sprintf(
@@ -111,6 +107,7 @@ make_formulas <- function(k_tod, k_ndvi, season) {
     ),
     k_tod
   )
+  fs <- sprintf("s(ndvi_end, wiscland_end, bs = 'fs', k = %d)", k_ndvi)
   hc_fs <- sprintf("s(HR_center_end, wiscland_end, bs = 'fs', k = %d)", k_ndvi)
 
   # Always-fit structural models
@@ -133,21 +130,11 @@ make_formulas <- function(k_tod, k_ndvi, season) {
     f4 <- paste(move, "+ s(HR_center_end) + s(wiscland_end, bs = 're')")
     f5 <- paste(move, "+ s(wiscland_end, bs = 're')")
   } else {
-    # Hierarchical NDVI block, restricted to NDVI_VEG_CLASSES (see the long
-    # comment above and prepare_gam_data for is_veg / ndvi_veg / veg_class): an
-    # all-class landcover random intercept, a shared veg NDVI response, and
-    # per-veg-class 'fs' deviations -- the latter two switched off on non-veg
-    # steps via by = is_veg.
-    ndvi_block <- sprintf(
-      paste0(
-        "s(wiscland_end, bs = 're') + ",
-        "s(ndvi_veg, by = is_veg) + ",
-        "s(ndvi_veg, veg_class, bs = 'fs', k = %d, by = is_veg)"
-      ),
-      k_ndvi
-    )
-    f4 <- paste(move, "+ s(HR_center_end) +", ndvi_block)
-    f5 <- paste(move, "+", ndvi_block)
+    # NDVI x landcover, GS form: global s(ndvi_end) + per-class fs deviations
+    # (shared penalty). The fs carries each class's intercept, so landcover
+    # selection rides along with the NDVI smooth -- no separate re needed.
+    f4 <- paste(move, "+ s(HR_center_end) + s(ndvi_end) +", fs)
+    f5 <- paste(move, "+ s(ndvi_end) +", fs)
   }
 
   stats::setNames(c(f1, f2, f3, f4, f5, f6), c("1", "2", "3", "4", "5", "6"))
