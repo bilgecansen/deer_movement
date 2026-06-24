@@ -42,8 +42,14 @@ gam_input <- "stp.var"
 # Basis / penalty settings ----------------------------------------------------
 # K_TOD   max basis dimension for the cyclic time-of-day movement smooths,
 #         capped per deer at (distinct tod values - 1) so the 'cc' smooth stays
-#         identifiable. With 4-hour fixes distinct tod ~12 (min ~10), so the cap
-#         is normally a no-op at 8 (see the MOVE comment below).
+#         identifiable. Raised 8 -> 10: at 8 the tod smooth was k-bound (edf ~6
+#         vs k'=7) on 84 deer; a K_TOD sweep showed edf stabilises at ~6 by k=10
+#         (flags clear), while k>=12 over-parameterises relative to the real ~12
+#         distinct tod positions and triggers convergence step-failures. The
+#         per-deer cap uses the RAW distinct-tod count (~24-50; inflated by
+#         non-4h data gaps shifting the fix phase + ~1-min timestamp jitter), so
+#         it never binds -- the true resolution ceiling is ~12 (see MOVE comment
+#         and doc gam_modeling_decisions.md sec 4).
 # K_NDVI  basis dimension (per landcover class) of the NDVI 'fs' smooths. NDVI is
 #         continuous with rich support, so it is NOT tod-constrained; the k-audit
 #         reports whether it is ever the binding constraint (it has wide headroom
@@ -55,7 +61,7 @@ gam_input <- "stp.var"
 #         REML smoothing penalties still regularise each fit; dropping the extra
 #         null-space penalty is also faster and converges more reliably. (TRUE was
 #         useful during exploration.)
-K_TOD <- 8L
+K_TOD <- 10L
 K_NDVI <- 5L
 SELECT <- FALSE
 
@@ -81,8 +87,10 @@ source("scripts/helper_functions.R")
 # enters as a single cyclic-spline interaction with time of day (zebra model;
 # Klappstein et al. 2024): the by= smooth adds the (shrinkable) time-of-day
 # modulation of movement rate.
-# k_tod caps wiggliness below each deer's distinct-tod count
-# (4-hour fixes -> ~12 positions, min ~10). Landcover interactions use a global
+# k_tod caps wiggliness below each deer's distinct-tod count (the RAW count is
+# ~24-50, inflated by non-4h data gaps that shift the fix phase off the grid plus
+# ~1-min timestamp jitter; the meaningful resolution is ~12). Landcover
+# interactions use a global
 # smooth plus hierarchical "fs" deviations (Pedersen et al. 2019 "Model GS":
 # one shrunk curve per class around a shared global response) rather than
 # independent by= smooths, which are unidentifiable when a deer visits only a few
@@ -178,8 +186,9 @@ process_deer <- function(i) {
       gam_data <- prepare_gam_data(one_deer[[gam_input]][[1]])
 
       # Per-deer cyclic-tod basis cap: k must stay below the number of distinct
-      # times of day this deer was fixed at (cc identifiability). Normally a
-      # no-op at K_TOD = 8 (distinct tod ~12; min ~10 across the dataset).
+      # times of day this deer was fixed at (cc identifiability). Uses the RAW
+      # distinct-tod count (~24-50, inflated by gaps/jitter), so it never binds at
+      # K_TOD = 10; the meaningful tod resolution is ~12.
       n_tod <- length(unique(gam_data$tod_))
       k_tod <- max(3L, min(K_TOD, n_tod - 1L))
 
