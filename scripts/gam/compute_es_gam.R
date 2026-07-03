@@ -1,14 +1,15 @@
 #' @description
-#' Compute one-step energy scores for every deer with simulations and every
+#' Compute one-step energy scores for every deer with GAM simulations and every
 #' model that was simulated. Writes a single combined data frame to
-#' filters/es.rds.
+#' filters/es_gam.rds. GAM analogue of scripts/issf/compute_es.R (reads the
+#' sims_gam_ files, writes es_gam.rds); the score itself is model-agnostic.
 #'
-#' By default, deer that already appear in the existing filters/es.rds are
+#' By default, deer that already appear in the existing filters/es_gam.rds are
 #' skipped (resumable reruns). Pass --overwrite to reprocess everything.
 #'
 #' Usage:
-#'   Rscript scripts/issf/compute_es.R              # resumable (default)
-#'   Rscript scripts/issf/compute_es.R --overwrite  # reprocess every deer
+#'   Rscript scripts/gam/compute_es_gam.R              # resumable (default)
+#'   Rscript scripts/gam/compute_es_gam.R --overwrite  # reprocess every deer
 
 # Parse CLI args ---------------------------------------------------------------
 args <- commandArgs(trailingOnly = TRUE)
@@ -24,7 +25,7 @@ source("scripts/helper_functions.R")
 
 # Setup ------------------------------------------------------------------------
 dir.create("filters", showWarnings = FALSE)
-out_path <- "filters/es.rds"
+out_path <- "filters/es_gam.rds"
 
 existing <- if (!overwrite && file.exists(out_path)) {
   readRDS(out_path)
@@ -38,13 +39,15 @@ existing <- if (!overwrite && file.exists(out_path)) {
   )
 }
 
-# Discover deer with simulations. GAM sims (sims_gam_*) share the sims/ folder
-# but are handled by scripts/gam/compute_es_gam.R, so exclude them here.
-sim_files <- list.files("sims", pattern = "^sims_.*\\.rds$", full.names = TRUE)
-sim_files <- sim_files[!grepl("^sims_gam_", basename(sim_files))]
-keys      <- gsub("^sims_(.*)\\.rds$", "\\1", basename(sim_files))
+# Discover deer with GAM simulations
+sim_files <- list.files(
+  "sims",
+  pattern = "^sims_gam_.*\\.rds$",
+  full.names = TRUE
+)
+keys <- gsub("^sims_gam_(.*)\\.rds$", "\\1", basename(sim_files))
 
-cat(sprintf("Found %d deer with simulations\n", length(sim_files)))
+cat(sprintf("Found %d deer with GAM simulations\n", length(sim_files)))
 
 if (overwrite) {
   cat("[--overwrite] Recomputing ES for every deer.\n")

@@ -1,18 +1,24 @@
 #' @description
-#' Combine per-deer filter outputs (udoverlap, logscore, energy score) plus the
-#' observed median step length from the fitted iSSF results, into one long
-#' (deer x model) data frame, and apply four sequential model-selection gates.
+#' GAM analogue of scripts/issf/filter_models.R. Combine per-deer GAM filter
+#' outputs (udoverlap_gam, logscore_gam, energy score es_gam) plus the observed
+#' step-length distribution (from the track), into one long (deer x model) data
+#' frame, and apply four sequential model-selection gates.
 #'
 #' Inputs:
-#'   filters/udoverlap_<key>.rds  — list keyed by model: list(bat_uds, svf_score)
-#'   filters/logscore_<key>.rds   — df: model, total_logp, n_steps, delta_logp
-#'   filters/es.rds               — df: id, season, year, model, energy_score
-#'   results/results_issf_<key>.rds — used to recover observed sl_
+#'   filters/udoverlap_gam_<key>.rds  — list keyed by model: list(bat_uds, svf_score)
+#'   filters/logscore_gam_<key>.rds   — df: model, total_logp, n_steps, delta_logp
+#'   filters/es_gam.rds               — df: id, season, year, model, energy_score
+#'   data/tracks/data_<key>.rds       — observed steps (stp) -> observed sl_
 #'
 #' Outputs:
-#'   filters/filter_combined.rds  — every (deer, model) with all metrics
-#'   filters/filter_selected.rds  — rows surviving all four gates
-#'   plots/filter_violins_pre.png, plots/filter_violins_post.png
+#'   filters/filter_combined_gam.rds  — every (deer, model) with all metrics
+#'   filters/filter_selected_gam.rds  — rows surviving all four gates
+#'   plots/filter_violins_pre_gam.png, plots/filter_violins_post_gam.png
+#'
+#' GAM model set is numbered 1..6 (see fit_GAM.R): 1 movement, 2 +HR-edge,
+#' 3 +HR-center, 4 & 5 resource (NDVI x landcover / landcover), 6 HR-center x
+#' landcover. The null reference for delta_logp is model 2; the environmental
+#' (resource-selection) models are 4, 5, 6.
 #'
 #' Gates (applied sequentially — only survivors flow into the next step):
 #'   1. bat_uds    >= 0.8
@@ -25,12 +31,12 @@
 library(tidyverse)
 
 # Pipeline mode ---------------------------------------------------------------
-# FALSE: use in-sample filter outputs (filters/udoverlap_*.rds,
-#        filters/logscore_*.rds, filters/es.rds) and write filter_combined.rds
-#        / filter_selected.rds + non-suffixed plot files.
-# TRUE:  use out-of-sample (test) filter outputs (filters/udoverlap_test_*.rds,
-#        filters/logscore_test_*.rds, filters/es_test.rds) and write
-#        filter_combined_test.rds / filter_selected_test.rds + _test plot files.
+# FALSE: use in-sample filter outputs (filters/udoverlap_gam_*.rds,
+#        filters/logscore_gam_*.rds, filters/es_gam.rds) and write
+#        filter_combined_gam.rds / filter_selected_gam.rds + non-suffixed plots.
+# TRUE:  use out-of-sample (test) filter outputs (filters/udoverlap_gam_test_*.rds,
+#        filters/logscore_gam_test_*.rds, filters/es_gam_test.rds) and write
+#        filter_combined_gam_test.rds / filter_selected_gam_test.rds + _test plots.
 test_mode <- F
 
 null_model <- 2L
@@ -41,29 +47,32 @@ p_excd_min <- 0.5
 
 # File-naming derived from test_mode -----------------------------------------
 suffix <- if (test_mode) "_test" else ""
-udov_prefix <- sprintf("udoverlap%s_", suffix)
-logs_prefix <- sprintf("logscore%s_", suffix)
-es_file <- sprintf("filters/es%s.rds", suffix)
-combined_out <- sprintf("filters/filter_combined%s.rds", suffix)
-selected_out <- sprintf("filters/filter_selected%s.rds", suffix)
-plot_pre <- sprintf("plots/filter_violins_pre%s.png", suffix)
-plot_post <- sprintf("plots/filter_violins_post%s.png", suffix)
+udov_prefix <- sprintf("udoverlap_gam%s_", suffix)
+logs_prefix <- sprintf("logscore_gam%s_", suffix)
+es_file <- sprintf("filters/es_gam%s.rds", suffix)
+combined_out <- sprintf("filters/filter_combined_gam%s.rds", suffix)
+selected_out <- sprintf("filters/filter_selected_gam%s.rds", suffix)
+plot_pre <- sprintf("plots/filter_violins_pre_gam%s.png", suffix)
+plot_post <- sprintf("plots/filter_violins_post_gam%s.png", suffix)
 
 # Discover keys ---------------------------------------------------------------
 # Broad listing matches both test and non-test files (the regex
-# `^udoverlap_.*` happily eats `udoverlap_test_…`); narrow to the requested
-# mode explicitly.
-udov_files <- list.files("filters", "^udoverlap_.*\\.rds$", full.names = TRUE)
-logs_files <- list.files("filters", "^logscore_.*\\.rds$", full.names = TRUE)
+# `^udoverlap_gam_.*` happily eats `udoverlap_gam_test_…`); narrow to the
+# requested mode explicitly. The `_gam_` infix keeps iSSF outputs
+# (udoverlap_<key>, logscore_<key>) out of this GAM pipeline entirely.
+udov_files <- list.files(
+  "filters",
+  "^udoverlap_gam_.*\\.rds$",
+  full.names = TRUE
+)
+logs_files <- list.files("filters", "^logscore_gam_.*\\.rds$", full.names = TRUE)
 
 if (test_mode) {
-  udov_files <- udov_files[grepl("^udoverlap_test_", basename(udov_files))]
-  logs_files <- logs_files[grepl("^logscore_test_", basename(logs_files))]
+  udov_files <- udov_files[grepl("^udoverlap_gam_test_", basename(udov_files))]
+  logs_files <- logs_files[grepl("^logscore_gam_test_", basename(logs_files))]
 } else {
-  # Exclude both test outputs and GAM outputs (udoverlap_gam_/logscore_gam_),
-  # which share the filters/ folder but belong to scripts/gam/filter_models_gam.R.
-  udov_files <- udov_files[!grepl("^udoverlap_(test|gam)_", basename(udov_files))]
-  logs_files <- logs_files[!grepl("^logscore_(test|gam)_", basename(logs_files))]
+  udov_files <- udov_files[!grepl("^udoverlap_gam_test_", basename(udov_files))]
+  logs_files <- logs_files[!grepl("^logscore_gam_test_", basename(logs_files))]
 }
 
 keys_udov <- gsub(
@@ -132,32 +141,20 @@ es_df <- readRDS(es_file) |>
   ) |>
   dplyr::select(key, model, energy_score)
 
-# Observed step lengths per deer, from the fitted iSSF model frame -----------
-# The clogit model frame in results_issf carries `log(sl_)` as a column and the
-# response Surv object (which holds case_ as its "status" column). The observed
-# steps are case_ == 1. Same vector for every formula on a deer, so we use the
-# first non-erroring fit. We keep the full vector (list-column) so that p_excd
-# can be computed per (deer, model) against its own energy_score.
+# Observed step lengths per deer, from the track ------------------------------
+# Model-independent (unlike the iSSF filter, which recovers sl_ from the clogit
+# model frame): the observed steps live on data/tracks/data_<key>.rds$stp. We
+# keep the full vector (list-column) so p_excd can be computed per (deer, model)
+# against its own energy_score.
 sl_df <- purrr::map_dfr(unique(per_deer_df$key), function(k) {
-  rfile <- sprintf("results/results_issf_%s.rds", k)
-  if (!file.exists(rfile)) {
+  tfile <- sprintf("data/tracks/data_%s.rds", k)
+  if (!file.exists(tfile)) {
     return(tibble::tibble(key = k, sl_obs = list(NA_real_)))
   }
-  rr <- readRDS(rfile)
-  sl_vec <- NA_real_
-  for (mm in rr) {
-    if (is.character(mm$iss)) {
-      next
-    }
-    frame <- mm$iss$model$model
-    if (is.null(frame) || !"log(sl_)" %in% names(frame)) {
-      next
-    }
-    surv_resp <- frame[[1]]
-    case_vec <- surv_resp[, "status"]
-    log_sl <- frame[["log(sl_)"]]
-    sl_vec <- exp(log_sl[case_vec == 1])
-    break
+  stp <- readRDS(tfile)$stp[[1]]
+  sl_vec <- stp$sl_[!is.na(stp$sl_)]
+  if (length(sl_vec) == 0) {
+    sl_vec <- NA_real_
   }
   tibble::tibble(key = k, sl_obs = list(sl_vec))
 })
@@ -355,10 +352,10 @@ ggplot2::ggsave(
 )
 
 # Per-deer pass/fail vs. covariates ------------------------------------------
-# A deer "passed" iff at least one environmental-variable model (models 6..10)
+# A deer "passed" iff at least one environmental-variable model (models 4..6)
 # survived all four gates. Deer with only null models surviving (2 or 3), or
 # with nothing surviving, are counted as failed.
-env_models <- 6:10
+env_models <- c(4L, 5L, 6L)
 
 passed_keys <- step4 |>
   dplyr::filter(model %in% env_models) |>
@@ -479,7 +476,7 @@ panels_cov <- panels_cov +
   )
 
 ggplot2::ggsave(
-  sprintf("plots/filter_covariates%s.png", suffix),
+  sprintf("plots/filter_covariates_gam%s.png", suffix),
   panels_cov,
   width = 13,
   height = 5,
@@ -490,7 +487,7 @@ ggplot2::ggsave(
 # "Did pass" here = at least one model survived all four gates (i.e. the deer
 # has rows in step4). Deer with nothing in step4 are dropped entirely. Among
 # the rest, classify the deer by whether any surviving model is an env model
-# (6-10); otherwise its only survivor(s) are null (models 2 and/or 3).
+# (4-6); otherwise its only survivor(s) are null (models 2 and/or 3).
 null_models <- c(2L, 3L)
 
 deer_compare <- step4 |>
@@ -555,7 +552,7 @@ panels_compare <- panels_compare +
   )
 
 ggplot2::ggsave(
-  sprintf("plots/filter_null_vs_env%s.png", suffix),
+  sprintf("plots/filter_null_vs_env_gam%s.png", suffix),
   panels_compare,
   width = 13,
   height = 5,

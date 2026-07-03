@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
-# Iterate every deer with simulations in sims/ and run scripts/issf/run_udoverlap.R
-# on each. By default, skip deer whose UD-overlap output already exists; pass
-# --overwrite to reprocess everything.
+# Iterate every deer with GAM simulations in sims/ and run
+# scripts/gam/run_udoverlap_gam.R on each. By default, skip deer whose UD-overlap
+# output already exists; pass --overwrite to reprocess everything.
 #
 # Failures in Rscript do not halt the loop. Final summary prints counts and
 # elapsed time.
 #
 # Usage:
-#   bash scripts/issf/run_udoverlap_all.sh              # resumable (default)
-#   bash scripts/issf/run_udoverlap_all.sh --overwrite  # reprocess all
+#   bash scripts/gam/run_udoverlap_gam_all.sh              # resumable (default)
+#   bash scripts/gam/run_udoverlap_gam_all.sh --overwrite  # reprocess all
 
 shopt -s nullglob
 
@@ -22,14 +22,12 @@ n_skipped=0
 n_failed=0
 start=$(date +%s)
 
-for f in sims/sims_*.rds; do
+for f in sims/sims_gam_*.rds; do
   base=$(basename "$f" .rds)
-  key=${base#sims_}
-  # Skip GAM sims (sims_gam_*), handled by scripts/gam/run_udoverlap_gam_all.sh.
-  [[ "$key" == gam_* ]] && continue
+  key=${base#sims_gam_}
   IFS='_' read -r id season year <<< "$key"
 
-  out_path="filters/udoverlap_${key}.rds"
+  out_path="filters/udoverlap_gam_${key}.rds"
 
   if [[ "$overwrite" == false && -f "$out_path" ]]; then
     echo "[skip] $key"
@@ -38,7 +36,7 @@ for f in sims/sims_*.rds; do
   fi
 
   echo "[run]  $key"
-  if Rscript scripts/issf/run_udoverlap.R "$id" "$season" "$year"; then
+  if Rscript scripts/gam/run_udoverlap_gam.R "$id" "$season" "$year"; then
     n_done=$((n_done + 1))
   else
     rc=$?
