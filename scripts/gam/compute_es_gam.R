@@ -1,10 +1,10 @@
 #' @description
 #' Compute one-step energy scores for every deer with GAM simulations and every
 #' model that was simulated. Writes a single combined data frame to
-#' filters/es_gam.rds. GAM analogue of scripts/issf/compute_es.R (reads the
+#' filters/gam/es_gam.rds. GAM analogue of scripts/issf/compute_es.R (reads the
 #' sims_gam_ files, writes es_gam.rds); the score itself is model-agnostic.
 #'
-#' By default, deer that already appear in the existing filters/es_gam.rds are
+#' By default, deer that already appear in the existing filters/gam/es_gam.rds are
 #' skipped (resumable reruns). Pass --overwrite to reprocess everything.
 #'
 #' Usage:
@@ -24,8 +24,8 @@ suppressPackageStartupMessages({
 source("scripts/helper_functions.R")
 
 # Setup ------------------------------------------------------------------------
-dir.create("filters", showWarnings = FALSE)
-out_path <- "filters/es_gam.rds"
+dir.create("filters/gam", showWarnings = FALSE, recursive = TRUE)
+out_path <- "filters/gam/es_gam.rds"
 
 existing <- if (!overwrite && file.exists(out_path)) {
   readRDS(out_path)
@@ -41,7 +41,7 @@ existing <- if (!overwrite && file.exists(out_path)) {
 
 # Discover deer with GAM simulations
 sim_files <- list.files(
-  "sims",
+  "sims/gam",
   pattern = "^sims_gam_.*\\.rds$",
   full.names = TRUE
 )

@@ -1,36 +1,27 @@
 #' @description
-#' Out-of-sample one-step-ahead log score: score the test-year observed track
-#' under a model trained on (id, season, year) using environmental inputs
-#' (HR rasters, NDVI) from year + 1.
+#' One-step-ahead log score for a single deer, computed for every fitted model
+#' in results/issf/results_issf_<key>.rds.
 #'
-#' Usage: Rscript run_logscore_test.R <id> <season> <year>
+#' Usage: Rscript run_logscore.R <id> <season> <year>
 #'   id     — deer ID
 #'   season — season string (e.g. "fa", "nb")
-#'   year   — training year (test year is year + 1)
-#'
-#' Assumes both results/results_issf_<train_key>.rds and the test-year
-#' wrangled track exist; the bash wrapper gates on those so this script does
-#' not need a "no test data" guard.
+#'   year   — year (integer)
 
 # Parse command line arguments -------------------------------------------------
 args <- commandArgs(trailingOnly = TRUE)
 
 if (length(args) != 3) {
   stop(
-    "Usage: Rscript run_logscore_test.R <id> <season> <year>\nExample: Rscript run_logscore_test.R 5000 fa 2017"
+    "Usage: Rscript run_logscore.R <id> <season> <year>\nExample: Rscript run_logscore.R 5000 fa 2017"
   )
 }
 
 id <- args[1]
 season <- args[2]
 year <- as.integer(args[3])
-test_year <- year + 1L
 
-train_key <- sprintf("%s_%s_%d", id, season, year)
-test_key <- sprintf("%s_%s_%d", id, season, test_year)
-
-cat(sprintf("Training key: %s\n", train_key))
-cat(sprintf("Test key:     %s\n", test_key))
+key <- sprintf("%s_%s_%d", id, season, year)
+cat(sprintf("Running log score for deer %s\n", key))
 
 # Load packages ----------------------------------------------------------------
 library(amt)
@@ -47,18 +38,18 @@ source("scripts/helper_functions.R")
 # Load data --------------------------------------------------------------------
 start_time <- Sys.time()
 
-# Deer movement data — single-row per-deer file for the TEST year
-deer_mvt <- readRDS(sprintf("data/tracks/data_%s.rds", test_key))
+# Deer movement data — single-row per-deer file
+deer_mvt <- readRDS(sprintf("data/tracks/data_%s.rds", key))
 
-# landscape data — TEST-year season-specific landcover (categorical band + per-
+# landscape data — season-specific annual landcover (categorical band + per-
 # class binary indicator layers). env_old terrain covariates are dropped.
-env_raster <- load_landcover(test_year, season)
+env_raster <- load_landcover(year, season)
 
-# NDVI data — TEST year
-ndvi_year <- load_ndvi(test_year)
+# NDVI data
+ndvi_year <- load_ndvi(year)
 
-# issf models — fitted on TRAIN year
-results_issf <- readRDS(sprintf("results/results_issf_%s.rds", train_key))
+# issf models
+results_issf <- readRDS(sprintf("results/issf/results_issf_%s.rds", key))
 
 # Score every fitted model — null/failed models filtered out automatically
 # inside the precompute step (returns NULL for those).
@@ -77,16 +68,10 @@ crop_extent <- sf::st_buffer(
 
 env_cropped <- terra::crop(env_raster, crop_extent)
 
-# HR rasters — load TEST-year rasters (test_year keys the file names).
-# Same convention as run_logscore.R: no HR_bin; HR_edge in metres; HR_center
-# is transformed via log1p to match the formulas.
-env_cropped$HR_edge <- load_hr_edge_raster(id, season, test_year, env_cropped)
-env_cropped$HR_center <- load_hr_center_raster(
-  id,
-  season,
-  test_year,
-  env_cropped
-)
+# HR rasters — no HR_bin (no model uses it). HR_edge stays in metres; for
+# HR_center we also build the log1p transformed layer the formulas reference.
+env_cropped$HR_edge <- load_hr_edge_raster(id, season, year, env_cropped)
+env_cropped$HR_center <- load_hr_center_raster(id, season, year, env_cropped)
 env_cropped$HR_center_log <- log1p(env_cropped$HR_center)
 
 deer_input <- list(
@@ -105,9 +90,6 @@ model_sims <- purrr::map(models_to_run, function(m) {
     return(NULL)
   }
 
-  # Test-year stp.var supplies the model.matrix template for coefficient-name
-  # matching. Factor levels are set explicitly in extract_step_variables, so
-  # train- and test-year stp.var are interchangeable here.
   train_i <- deer_mvt$stp.var[[1]]
 
   coefs <- iss_i$model$coefficients
@@ -207,13 +189,8 @@ cat("Results:\n")
 print(results)
 
 # Save -------------------------------------------------------------------------
-dir.create("filters", showWarnings = FALSE)
-saveRDS(results, sprintf("filters/logscore_test_%s.rds", train_key))
+dir.create("filters/issf", showWarnings = FALSE, recursive = TRUE)
+saveRDS(results, sprintf("filters/issf/logscore_issf_%s.rds", key))
 
 elapsed <- difftime(Sys.time(), start_time, units = "mins")
-cat(sprintf(
-  "Deer %s (test on %s) completed in %.1f minutes\n",
-  train_key,
-  test_key,
-  elapsed
-))
+cat(sprintf("Deer %s completed in %.1f minutes\n", key, elapsed))

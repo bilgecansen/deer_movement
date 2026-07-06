@@ -25,7 +25,7 @@ n_no_data=0
 n_failed=0
 start=$(date +%s)
 
-for f in results/results_gam_*.rds; do
+for f in results/gam/results_gam_*.rds; do
   base=$(basename "$f" .rds)
   key=${base#results_gam_}
   IFS='_' read -r id season year <<< "$key"
@@ -33,7 +33,7 @@ for f in results/results_gam_*.rds; do
   test_year=$((year + 1))
   test_key="${id}_${season}_${test_year}"
   test_track="data/tracks/data_${test_key}.rds"
-  out_path="filters/logscore_gam_test_${key}.rds"
+  out_path="filters/gam/logscore_gam_test_${key}.rds"
 
   if [[ ! -f "$test_track" ]]; then
     echo "[no-data] $key (no $test_track)"

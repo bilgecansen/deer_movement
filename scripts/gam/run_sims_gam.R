@@ -50,8 +50,8 @@ env_raster <- load_landcover(year, season)
 # NDVI data
 ndvi_year <- load_ndvi(year)
 
-# GAM models — a named list keyed by model number ("1".."5","8")
-results_gam <- readRDS(sprintf("results/results_gam_%s.rds", key))
+# GAM models — a named list keyed by model number ("1".."6")
+results_gam <- readRDS(sprintf("results/gam/results_gam_%s.rds", key))
 
 # Tentative movement distributions for the GAM kernel (gamma / von Mises). The
 # GAMs are fit on the parametric stp.var design, so these ride along on stp.var
@@ -156,8 +156,8 @@ gc()
 names(results_sim) <- models_to_sim
 
 # Save -------------------------------------------------------------------------
-dir.create("sims", showWarnings = FALSE)
-saveRDS(results_sim, sprintf("sims/sims_gam_%s.rds", key))
+dir.create("sims/gam", showWarnings = FALSE, recursive = TRUE)
+saveRDS(results_sim, sprintf("sims/gam/sims_gam_%s.rds", key))
 
 elapsed <- difftime(Sys.time(), start_time, units = "mins")
 cat(sprintf("Deer %s completed in %.1f minutes\n", key, elapsed))

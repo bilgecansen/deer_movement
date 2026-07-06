@@ -164,10 +164,9 @@ landcover-only substitute where it doesn't). The numbers are contiguous `"1"…"
 so the results object is a **named list of 6** in which position = model number.
 
 `fit_GAM.R` uses this `1–6` scheme (the HR-center × landcover model is **6**);
-treat it as canonical. `fit_issf.R` has **not** been renumbered — it still uses
-the older `"1","2","3","4","5","8"` (its HR-center × landcover model is "8", and
-its winter landcover substitutes were the internal "models 6 & 7"). So GAM model
-6 ≡ iSSF model 8.
+treat it as canonical. `fit_issf.R` now uses the **same** contiguous
+`"1","2","3","4","5","6"` numbering (its HR-center × landcover model is likewise
+**6**), so GAM and iSSF model numbers correspond one-to-one.
 
 ---
 

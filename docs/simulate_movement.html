@@ -146,7 +146,7 @@
 <p>
   <code>simulate_movement()</code> produces <em>one</em> simulated trajectory of
   a deer across the same time window the observed track covers. Higher up in
-  <code>run_sims.R</code>, this function is called <code>n_sim</code> times per
+  <code>run_sims_issf.R</code>, this function is called <code>n_sim</code> times per
   model per deer, building an ensemble of replicate paths.
 </p>
 <p>
@@ -167,7 +167,7 @@
 
 <p>
   No spatial covariate computation happens in this function. The caller
-  (<code>run_sims.R</code>) loads <code>HR_edge</code>, <code>HR_center</code>,
+  (<code>run_sims_issf.R</code>) loads <code>HR_edge</code>, <code>HR_center</code>,
   <code>HR_center_log</code>, etc. onto <code>env_test</code> <em>before</em>
   invoking, so this function never has to know which covariates exist.
 </p>
@@ -409,7 +409,7 @@ sim_result |&gt; dplyr::select(x_, y_, t_) |&gt; dplyr::mutate(burst_ = b)</code
   references. If the formula uses <code>HR_edge_end</code> and the layer is
   absent, the kernel will silently produce no <code>HR_edge_*</code> column,
   the design-matrix row will be missing that column, and amt's scoring may
-  either error or produce wrong values. <code>run_sims.R</code> handles this
+  either error or produce wrong values. <code>run_sims_issf.R</code> handles this
   correctly today by adding HR_edge / HR_center / HR_center_log layers before
   calling.
 </div>

@@ -17,7 +17,7 @@
 #'   * Otherwise read the wrangled data, reshape the chosen design's covariate
 #'     table (`gam_input`) into mgcv cox.ph form, fit all candidate formulas
 #'     with fit_gam_mod() (which returns failure-status objects rather than
-#'     erroring per-model), and save the list to results/results_gam_<key>.rds.
+#'     erroring per-model), and save the list to results/gam/results_gam_<key>.rds.
 #' Errors are caught per deer so a single failure does not halt the loop.
 #'
 #' Random points: two designs are wrangled per deer.
@@ -77,8 +77,8 @@ source("scripts/helper_functions.R")
 # make_formulas() builds the candidate RHS vector for a given cyclic-tod basis
 # (k_tod, capped per deer) and NDVI-by-landcover 'fs' basis (k_ndvi). fit_gam_mod
 # prepends the "cbind(times, stratum) ~" Cox-PH response. Each model is the GAM
-# translation of the corresponding iSSF formula in fit_issf.R (numbered 1-6 here;
-# model 6 is fit_issf.R's model 8, which still uses the older 1-5,8 numbering).
+# translation of the corresponding iSSF formula in fit_issf.R; both use the same
+# contiguous 1-6 numbering (model 6 = the HR-center × landcover interaction).
 #
 # MOVE = parametric gamma / von Mises movement kernel. The three movement
 # covariates enter as parametric main effects (sl_ + log(sl_) + cos(ta_)), which
@@ -160,7 +160,7 @@ keys <- gsub("^data_(.*)\\.rds$", "\\1", basename(track_files))
 cat(sprintf("Found %d wrangled deer in data/tracks/\n", length(track_files)))
 
 # Output dir
-dir.create("results", showWarnings = FALSE)
+dir.create("results/gam", showWarnings = FALSE, recursive = TRUE)
 
 # Loop (parallel across deer) -------------------------------------------------
 # fit_GAM is low-memory tabular work (no rasters), so deer are independent,
@@ -171,7 +171,7 @@ dir.create("results", showWarnings = FALSE)
 # status + k/shrinkage diagnostics; the main process reduces them below.
 process_deer <- function(i) {
   key <- keys[i]
-  out_path <- sprintf("results/results_gam_%s.rds", key)
+  out_path <- sprintf("results/gam/results_gam_%s.rds", key)
 
   # Skip: output already exists and we're not overwriting
   if (!overwrite && file.exists(out_path)) {
@@ -271,7 +271,7 @@ cat(sprintf(
 # with no time-of-day effect, or a habitat term with no support).
 if (length(audit_rows)) {
   audit <- dplyr::bind_rows(audit_rows)
-  saveRDS(audit, "results/k_audit_gam.rds")
+  saveRDS(audit, "results/gam/k_audit_gam.rds")
 
   cat(sprintf("\n=== k / shrinkage audit (%d smooth fits) ===\n", nrow(audit)))
   cat("status counts:\n")
@@ -296,5 +296,5 @@ if (length(audit_rows)) {
     )
     print(table(smooth = simp$smooth, status = simp$status))
   }
-  cat("\nFull per-fit audit -> results/k_audit_gam.rds\n")
+  cat("\nFull per-fit audit -> results/gam/k_audit_gam.rds\n")
 }

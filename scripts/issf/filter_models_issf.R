@@ -4,14 +4,14 @@
 #' (deer x model) data frame, and apply four sequential model-selection gates.
 #'
 #' Inputs:
-#'   filters/udoverlap_<key>.rds  — list keyed by model: list(bat_uds, svf_score)
-#'   filters/logscore_<key>.rds   — df: model, total_logp, n_steps, delta_logp
-#'   filters/es.rds               — df: id, season, year, model, energy_score
-#'   results/results_issf_<key>.rds — used to recover observed sl_
+#'   filters/issf/udoverlap_issf_<key>.rds — list keyed by model: list(bat_uds, svf_score)
+#'   filters/issf/logscore_issf_<key>.rds  — df: model, total_logp, n_steps, delta_logp
+#'   filters/issf/es_issf.rds              — df: id, season, year, model, energy_score
+#'   results/issf/results_issf_<key>.rds   — used to recover observed sl_
 #'
 #' Outputs:
-#'   filters/filter_combined.rds  — every (deer, model) with all metrics
-#'   filters/filter_selected.rds  — rows surviving all four gates
+#'   filters/issf/filter_combined_issf.rds — every (deer, model) with all metrics
+#'   filters/issf/filter_selected_issf.rds — rows surviving all four gates
 #'   plots/filter_violins_pre.png, plots/filter_violins_post.png
 #'
 #' Gates (applied sequentially — only survivors flow into the next step):
@@ -25,12 +25,12 @@
 library(tidyverse)
 
 # Pipeline mode ---------------------------------------------------------------
-# FALSE: use in-sample filter outputs (filters/udoverlap_*.rds,
-#        filters/logscore_*.rds, filters/es.rds) and write filter_combined.rds
-#        / filter_selected.rds + non-suffixed plot files.
-# TRUE:  use out-of-sample (test) filter outputs (filters/udoverlap_test_*.rds,
-#        filters/logscore_test_*.rds, filters/es_test.rds) and write
-#        filter_combined_test.rds / filter_selected_test.rds + _test plot files.
+# FALSE: use in-sample filter outputs (filters/issf/udoverlap_issf_*.rds,
+#        filters/issf/logscore_issf_*.rds, filters/issf/es_issf.rds) and write
+#        filter_combined_issf.rds / filter_selected_issf.rds + non-suffixed plots.
+# TRUE:  use out-of-sample (test) filter outputs (filters/issf/udoverlap_issf_test_*.rds,
+#        filters/issf/logscore_issf_test_*.rds, filters/issf/es_issf_test.rds) and write
+#        filter_combined_issf_test.rds / filter_selected_issf_test.rds + _test plots.
 test_mode <- F
 
 null_model <- 2L
@@ -41,29 +41,29 @@ p_excd_min <- 0.5
 
 # File-naming derived from test_mode -----------------------------------------
 suffix <- if (test_mode) "_test" else ""
-udov_prefix <- sprintf("udoverlap%s_", suffix)
-logs_prefix <- sprintf("logscore%s_", suffix)
-es_file <- sprintf("filters/es%s.rds", suffix)
-combined_out <- sprintf("filters/filter_combined%s.rds", suffix)
-selected_out <- sprintf("filters/filter_selected%s.rds", suffix)
+udov_prefix <- sprintf("udoverlap_issf%s_", suffix)
+logs_prefix <- sprintf("logscore_issf%s_", suffix)
+es_file <- sprintf("filters/issf/es_issf%s.rds", suffix)
+combined_out <- sprintf("filters/issf/filter_combined_issf%s.rds", suffix)
+selected_out <- sprintf("filters/issf/filter_selected_issf%s.rds", suffix)
 plot_pre <- sprintf("plots/filter_violins_pre%s.png", suffix)
 plot_post <- sprintf("plots/filter_violins_post%s.png", suffix)
 
 # Discover keys ---------------------------------------------------------------
 # Broad listing matches both test and non-test files (the regex
-# `^udoverlap_.*` happily eats `udoverlap_test_…`); narrow to the requested
-# mode explicitly.
-udov_files <- list.files("filters", "^udoverlap_.*\\.rds$", full.names = TRUE)
-logs_files <- list.files("filters", "^logscore_.*\\.rds$", full.names = TRUE)
+# `^udoverlap_issf_.*` happily eats `udoverlap_issf_test_…`); narrow to the
+# requested mode explicitly. GAM outputs live in filters/gam/ and never appear
+# here.
+udov_files <- list.files("filters/issf", "^udoverlap_issf_.*\\.rds$", full.names = TRUE)
+logs_files <- list.files("filters/issf", "^logscore_issf_.*\\.rds$", full.names = TRUE)
 
 if (test_mode) {
-  udov_files <- udov_files[grepl("^udoverlap_test_", basename(udov_files))]
-  logs_files <- logs_files[grepl("^logscore_test_", basename(logs_files))]
+  udov_files <- udov_files[grepl("^udoverlap_issf_test_", basename(udov_files))]
+  logs_files <- logs_files[grepl("^logscore_issf_test_", basename(logs_files))]
 } else {
-  # Exclude both test outputs and GAM outputs (udoverlap_gam_/logscore_gam_),
-  # which share the filters/ folder but belong to scripts/gam/filter_models_gam.R.
-  udov_files <- udov_files[!grepl("^udoverlap_(test|gam)_", basename(udov_files))]
-  logs_files <- logs_files[!grepl("^logscore_(test|gam)_", basename(logs_files))]
+  # Exclude the test outputs, which share the filters/issf/ folder.
+  udov_files <- udov_files[!grepl("^udoverlap_issf_test_", basename(udov_files))]
+  logs_files <- logs_files[!grepl("^logscore_issf_test_", basename(logs_files))]
 }
 
 keys_udov <- gsub(
@@ -96,8 +96,8 @@ parse_key <- function(k) {
 
 # Load udoverlap + logscore per deer ------------------------------------------
 per_deer_df <- purrr::map_dfr(keys, function(k) {
-  ud <- readRDS(file.path("filters", sprintf("%s%s.rds", udov_prefix, k)))
-  ls <- readRDS(file.path("filters", sprintf("%s%s.rds", logs_prefix, k)))
+  ud <- readRDS(file.path("filters/issf", sprintf("%s%s.rds", udov_prefix, k)))
+  ls <- readRDS(file.path("filters/issf", sprintf("%s%s.rds", logs_prefix, k)))
 
   ud_df <- purrr::imap_dfr(ud, function(x, m) {
     if (length(x) == 1 && is.na(x)) {
@@ -139,7 +139,7 @@ es_df <- readRDS(es_file) |>
 # first non-erroring fit. We keep the full vector (list-column) so that p_excd
 # can be computed per (deer, model) against its own energy_score.
 sl_df <- purrr::map_dfr(unique(per_deer_df$key), function(k) {
-  rfile <- sprintf("results/results_issf_%s.rds", k)
+  rfile <- sprintf("results/issf/results_issf_%s.rds", k)
   if (!file.exists(rfile)) {
     return(tibble::tibble(key = k, sl_obs = list(NA_real_)))
   }

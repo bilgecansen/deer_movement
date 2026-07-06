@@ -230,12 +230,12 @@ flowchart TB
 
   %% Stage 2
   fit["fit_issf.R<br/><small>loops in R</small>"]
-  issf(["results/<br/>results_issf_&lt;key&gt;.rds"])
+  issf(["results/issf/<br/>results_issf_&lt;key&gt;.rds"])
   tracks --> fit --> issf
 
   %% Stage 3
-  run_sims["run_sims.R<br/><small>+ run_sims_all.sh</small>"]
-  sims(["sims/<br/>sims_&lt;key&gt;.rds"])
+  run_sims["run_sims_issf.R<br/><small>+ run_sims_issf_all.sh</small>"]
+  sims(["sims/issf/<br/>sims_issf_&lt;key&gt;.rds"])
   tracks --> run_sims
   issf --> run_sims
   hr_files --> run_sims
@@ -245,13 +245,13 @@ flowchart TB
   run_sims --> sims
 
   %% Stage 4
-  logscore_R["run_logscore.R<br/><small>+ run_logscore_all.sh</small>"]
-  udoverlap_R["run_udoverlap.R<br/><small>+ run_udoverlap_all.sh</small>"]
-  compute_es_R["compute_es.R<br/><small>single-batch</small>"]
+  logscore_R["run_logscore_issf.R<br/><small>+ run_logscore_issf_all.sh</small>"]
+  udoverlap_R["run_udoverlap_issf.R<br/><small>+ run_udoverlap_issf_all.sh</small>"]
+  compute_es_R["compute_es_issf.R<br/><small>single-batch</small>"]
 
-  filt_logscore(["filters/<br/>logscore_&lt;key&gt;.rds"])
-  filt_udoverlap(["filters/<br/>udoverlap_&lt;key&gt;.rds"])
-  filt_es(["filters/es.rds<br/><small>one combined file</small>"])
+  filt_logscore(["filters/issf/<br/>logscore_issf_&lt;key&gt;.rds"])
+  filt_udoverlap(["filters/issf/<br/>udoverlap_issf_&lt;key&gt;.rds"])
+  filt_es(["filters/issf/es_issf.rds<br/><small>one combined file</small>"])
 
   tracks --> logscore_R
   issf --> logscore_R
@@ -269,7 +269,7 @@ flowchart TB
   compute_es_R --> filt_es
 
   %% Stage 5 (TODO)
-  agg["filter_models.R<br/><small>TODO — rewrite for new keying</small>"]
+  agg["filter_models_issf.R<br/><small>TODO — rewrite for new keying</small>"]
   final(["final analysis<br/>tables / plots"])
   filt_logscore --> agg
   filt_udoverlap --> agg
@@ -381,7 +381,7 @@ flowchart TB
           <code>data/tracks/data_&lt;key&gt;.rds</code>
         </td>
         <td>
-          <code>results/results_issf_&lt;key&gt;.rds</code><br>
+          <code>results/issf/results_issf_&lt;key&gt;.rds</code><br>
           <span class="key">list of 10 (iss, coeff, aic) entries</span>
         </td>
         <td>
@@ -415,19 +415,19 @@ flowchart TB
     <tbody>
       <tr>
         <td class="script">
-          <code>run_sims.R</code><br>
-          <code>run_sims_all.sh</code>
+          <code>run_sims_issf.R</code><br>
+          <code>run_sims_issf_all.sh</code>
         </td>
         <td>
           <code>data/tracks/data_&lt;key&gt;.rds</code><br>
-          <code>results/results_issf_&lt;key&gt;.rds</code><br>
+          <code>results/issf/results_issf_&lt;key&gt;.rds</code><br>
           <code>data/HR/HRedge_*, HRcenter_*</code><br>
           <code>data/NDVI_year/*</code><br>
           <code>data/env/wiscland/*</code><br>
           <code>Example_code/Env_2017.tif</code>
         </td>
         <td>
-          <code>sims/sims_&lt;key&gt;.rds</code><br>
+          <code>sims/issf/sims_issf_&lt;key&gt;.rds</code><br>
           <span class="key">named list keyed by model number</span>
         </td>
         <td>
@@ -457,8 +457,8 @@ flowchart TB
     <tbody>
       <tr>
         <td class="script">
-          <code>run_logscore.R</code><br>
-          <code>run_logscore_all.sh</code>
+          <code>run_logscore_issf.R</code><br>
+          <code>run_logscore_issf_all.sh</code>
         </td>
         <td>
           One-step log score under each fitted model
@@ -466,20 +466,20 @@ flowchart TB
         </td>
         <td>
           <code>data/tracks/data_&lt;key&gt;.rds</code><br>
-          <code>results/results_issf_&lt;key&gt;.rds</code><br>
+          <code>results/issf/results_issf_&lt;key&gt;.rds</code><br>
           <code>data/HR/HRedge_*, HRcenter_*</code><br>
           <code>data/NDVI_year/*</code><br>
           <code>data/env/wiscland/*</code>
         </td>
         <td>
-          <code>filters/logscore_&lt;key&gt;.rds</code><br>
+          <code>filters/issf/logscore_issf_&lt;key&gt;.rds</code><br>
           <span class="key">model, total_logp, n_steps, delta_logp</span>
         </td>
       </tr>
       <tr>
         <td class="script">
-          <code>run_udoverlap.R</code><br>
-          <code>run_udoverlap_all.sh</code>
+          <code>run_udoverlap_issf.R</code><br>
+          <code>run_udoverlap_issf_all.sh</code>
         </td>
         <td>
           AKDE Bhattacharyya overlap + SVF agreement
@@ -487,25 +487,25 @@ flowchart TB
         </td>
         <td>
           <code>data/tracks/data_&lt;key&gt;.rds</code><br>
-          <code>sims/sims_&lt;key&gt;.rds</code>
+          <code>sims/issf/sims_issf_&lt;key&gt;.rds</code>
         </td>
         <td>
-          <code>filters/udoverlap_&lt;key&gt;.rds</code><br>
+          <code>filters/issf/udoverlap_issf_&lt;key&gt;.rds</code><br>
           <span class="key">named list of (bat_uds, svf_score) per model</span>
         </td>
       </tr>
       <tr>
-        <td class="script"><code>compute_es.R</code></td>
+        <td class="script"><code>compute_es_issf.R</code></td>
         <td>
           One-step energy score
           <span class="pill">all deer · single batch</span>
         </td>
         <td>
           <code>data/tracks/data_*.rds</code><br>
-          <code>sims/sims_*.rds</code>
+          <code>sims/issf/sims_issf_*.rds</code>
         </td>
         <td>
-          <code>filters/es.rds</code><br>
+          <code>filters/issf/es_issf.rds</code><br>
           <span class="key">tidy data frame: id, season, year, model, energy_score</span>
         </td>
       </tr>
@@ -522,10 +522,11 @@ flowchart TB
 <h2 id="agg">Stage 5 — Aggregation <span style="color:#a04020">(planned)</span></h2>
 <div class="stage stage-5">
   <p>
-    <code>filter_models.R</code> currently reads the old
-    <code>results/results_skill_*.rds</code> format and is incompatible with
-    the new keying. Slated for rewrite once a full pipeline run lands and you
-    have something to aggregate.
+    <code>filter_models_issf.R</code> reads the per-deer filter outputs in
+    <code>filters/issf/</code> plus the fitted iSSF results in
+    <code>results/issf/</code>, and applies the four selection gates. It has not
+    yet been validated against a full end-to-end run, so treat its output as
+    provisional until one lands.
   </p>
   <table>
     <thead>
@@ -533,15 +534,15 @@ flowchart TB
     </thead>
     <tbody>
       <tr>
-        <td class="script"><code>filter_models.R</code></td>
+        <td class="script"><code>filter_models_issf.R</code></td>
         <td>
-          <code>filters/logscore_*.rds</code><br>
-          <code>filters/udoverlap_*.rds</code><br>
-          <code>filters/es.rds</code>
+          <code>filters/issf/logscore_issf_*.rds</code><br>
+          <code>filters/issf/udoverlap_issf_*.rds</code><br>
+          <code>filters/issf/es_issf.rds</code>
         </td>
         <td>
           analysis-ready data frame<br>
-          (location TBD — likely <code>filters/model_selection.rds</code>)
+          (location TBD — likely <code>filters/issf/model_selection.rds</code>)
         </td>
         <td class="todo">TODO — rewrite for new keying after first end-to-end run</td>
       </tr>
@@ -557,17 +558,22 @@ flowchart TB
 │   ├── wrangle_wiscland.R         # stage 1
 │   ├── create_hr_rasters.R        # stage 1
 │   ├── wrangle_deer_mvt.R         # stage 1
-│   ├── fit_issf.R                 # stage 2
-│   ├── run_sims.R                 # stage 3
-│   ├── run_sims_all.sh            # stage 3 wrapper
-│   ├── run_logscore.R             # stage 4
-│   ├── run_logscore_all.sh        # stage 4 wrapper
-│   ├── run_udoverlap.R            # stage 4
-│   ├── run_udoverlap_all.sh       # stage 4 wrapper
-│   ├── compute_es.R               # stage 4 (single-batch)
-│   ├── filter_models.R            # stage 5 — TODO rewrite
 │   ├── plot_deer_paths.R          # utility
-│   └── scrap_book.R               # sandbox
+│   ├── scrap_book.R               # sandbox
+│   ├── issf/                      # iSSF pipeline (stages 2–5)
+│   │   ├── fit_issf.R             # stage 2
+│   │   ├── run_sims_issf.R        # stage 3  (+ run_sims_issf_all.sh)
+│   │   ├── run_logscore_issf.R    # stage 4  (+ run_logscore_issf_all.sh)
+│   │   ├── run_udoverlap_issf.R   # stage 4  (+ run_udoverlap_issf_all.sh)
+│   │   ├── compute_es_issf.R      # stage 4 (single-batch)
+│   │   └── filter_models_issf.R   # stage 5
+│   └── gam/                       # GAM pipeline (parallel _gam scripts)
+│       ├── fit_GAM.R
+│       ├── run_sims_gam.R
+│       ├── run_logscore_gam.R
+│       ├── run_udoverlap_gam.R
+│       ├── compute_es_gam.R
+│       └── filter_models_gam.R
 │
 ├── data/                          # raw + wrangled inputs
 │   ├── sw_deer_tracks.rda
@@ -577,16 +583,20 @@ flowchart TB
 │   ├── HR/                        # HRbin / HRedge / HRcenter per deer
 │   └── tracks/                    # data_&lt;key&gt;.rds per deer
 │
-├── results/                       # iSSF coefficient sets
-│   └── results_issf_&lt;key&gt;.rds
+├── results/                       # fitted-model coefficient sets
+│   ├── gam/                        #   results_gam_&lt;key&gt;.rds
+│   └── issf/                       #   results_issf_&lt;key&gt;.rds
 │
 ├── sims/                          # simulated paths
-│   └── sims_&lt;key&gt;.rds
+│   ├── gam/                        #   sims_gam_&lt;key&gt;.rds
+│   └── issf/                       #   sims_issf_&lt;key&gt;.rds
 │
 ├── filters/                       # skill metrics
-│   ├── logscore_&lt;key&gt;.rds
-│   ├── udoverlap_&lt;key&gt;.rds
-│   └── es.rds
+│   ├── gam/                        #   *_gam_&lt;key&gt;.rds
+│   └── issf/
+│       ├── logscore_issf_&lt;key&gt;.rds
+│       ├── udoverlap_issf_&lt;key&gt;.rds
+│       └── es_issf.rds
 │
 ├── docs/                          # explainer pages
 │   ├── pipeline.html              # this page
@@ -605,18 +615,18 @@ Rscript scripts/create_hr_rasters.R  # loops in R
 Rscript scripts/wrangle_deer_mvt.R   # loops in R
 
 # Stage 2 — fit
-Rscript scripts/fit_issf.R           # loops in R
+Rscript scripts/issf/fit_issf.R           # loops in R
 
 # Stage 3 — simulate
-bash scripts/run_sims_all.sh         # iterates every deer with issf
+bash scripts/issf/run_sims_issf_all.sh    # iterates every deer with issf
 
 # Stage 4 — evaluate (any order; all three independent)
-bash scripts/run_logscore_all.sh
-bash scripts/run_udoverlap_all.sh
-Rscript scripts/compute_es.R
+bash scripts/issf/run_logscore_issf_all.sh
+bash scripts/issf/run_udoverlap_issf_all.sh
+Rscript scripts/issf/compute_es_issf.R
 
-# Stage 5 — aggregate (TODO)
-Rscript scripts/filter_models.R</pre>
+# Stage 5 — aggregate
+Rscript scripts/issf/filter_models_issf.R</pre>
 
 <p>
   All loops/wrappers skip already-completed deer by default. Any of them can

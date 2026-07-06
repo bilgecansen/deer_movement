@@ -1,6 +1,6 @@
 #' @description
 #' Per-deer plots of observed track vs. simulated paths, faceted by model.
-#' Reads `filters/filter_combined.rds` (which carries a `dropped_at` column
+#' Reads `filters/issf/filter_combined_issf.rds` (which carries a `dropped_at` column
 #' marking the gate that eliminated each row; NA = survived all four).
 #'
 #' Outputs five PDFs in plots/, all with the same aesthetic:
@@ -13,7 +13,7 @@
 
 library(tidyverse)
 
-annotated <- readRDS("filters/filter_combined_test.rds")
+annotated <- readRDS("filters/issf/filter_combined_issf_test.rds")
 
 dir.create("plots", showWarnings = FALSE)
 
@@ -22,7 +22,7 @@ dir.create("plots", showWarnings = FALSE)
 # file is missing, or if no requested model has usable simulations.
 plot_deer_models <- function(key, model_info, title, sim_alpha = 0.25) {
   track_file <- sprintf("data/tracks/data_%s.rds", key)
-  sim_file <- sprintf("sims/sims_%s.rds", key)
+  sim_file <- sprintf("sims/issf/sims_issf_%s.rds", key)
 
   if (!file.exists(track_file) || !file.exists(sim_file)) {
     return(NULL)

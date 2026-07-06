@@ -22,12 +22,12 @@ n_skipped=0
 n_failed=0
 start=$(date +%s)
 
-for f in results/results_gam_*.rds; do
+for f in results/gam/results_gam_*.rds; do
   base=$(basename "$f" .rds)
   key=${base#results_gam_}
   IFS='_' read -r id season year <<< "$key"
 
-  out_path="sims/sims_gam_${key}.rds"
+  out_path="sims/gam/sims_gam_${key}.rds"
 
   if [[ "$overwrite" == false && -f "$out_path" ]]; then
     echo "[skip] $key"

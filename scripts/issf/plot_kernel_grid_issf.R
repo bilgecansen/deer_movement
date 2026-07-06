@@ -9,7 +9,7 @@
 #' grids when writing to a file device.
 #'
 #' Usage:
-#'   Rscript scripts/issf/plot_kernel_grid.R <id> <season> <year> [model_num]
+#'   Rscript scripts/issf/plot_kernel_grid_issf.R <id> <season> <year> [model_num]
 #'     id        — deer ID
 #'     season    — season string (e.g. "fa", "nb")
 #'     year      — year (integer)
@@ -22,7 +22,7 @@ args <- commandArgs(trailingOnly = TRUE)
 
 if (length(args) < 3 || length(args) > 4) {
   stop(
-    "Usage: Rscript scripts/issf/plot_kernel_grid.R <id> <season> <year> [model_num]"
+    "Usage: Rscript scripts/issf/plot_kernel_grid_issf.R <id> <season> <year> [model_num]"
   )
 }
 
@@ -56,7 +56,7 @@ env_raster <- load_landcover(year, season)
 
 ndvi_year <- load_ndvi(year)
 
-results_issf <- readRDS(sprintf("results/results_issf_%s.rds", key))
+results_issf <- readRDS(sprintf("results/issf/results_issf_%s.rds", key))
 
 # Crop env around the deer's track + add HR layers ---------------------------
 stp_data <- deer_mvt$stp[[1]]

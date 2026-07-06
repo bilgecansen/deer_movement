@@ -1,22 +1,23 @@
 #' @description
-#' Out-of-sample simulation: simulate movement using a model trained on
-#' (id, season, year) but with environmental inputs and observed step
-#' structure from (id, season, year + 1).
+#' Out-of-sample one-step-ahead log score: score the test-year observed track
+#' under a model trained on (id, season, year) using environmental inputs
+#' (HR rasters, NDVI) from year + 1.
 #'
-#' Usage: Rscript run_sims_test.R <id> <season> <year>
+#' Usage: Rscript run_logscore_test.R <id> <season> <year>
 #'   id     — deer ID
 #'   season — season string (e.g. "fa", "nb")
 #'   year   — training year (test year is year + 1)
 #'
-#' Exits with status 2 if no test-year wrangled track exists for this deer.
+#' Assumes both results/issf/results_issf_<train_key>.rds and the test-year
+#' wrangled track exist; the bash wrapper gates on those so this script does
+#' not need a "no test data" guard.
 
 # Parse command line arguments -------------------------------------------------
 args <- commandArgs(trailingOnly = TRUE)
 
 if (length(args) != 3) {
   stop(
-    "Usage: Rscript run_sims_test.R <id> <season> <year>\nExample:
-      Rscript run_sims_test.R 5000 fa 2017"
+    "Usage: Rscript run_logscore_test.R <id> <season> <year>\nExample: Rscript run_logscore_test.R 5000 fa 2017"
   )
 }
 
@@ -30,13 +31,6 @@ test_key <- sprintf("%s_%s_%d", id, season, test_year)
 
 cat(sprintf("Training key: %s\n", train_key))
 cat(sprintf("Test key:     %s\n", test_key))
-
-# Guard: bail out cleanly if there is no test-year track for this deer --------
-test_track_path <- sprintf("data/tracks/data_%s.rds", test_key)
-if (!file.exists(test_track_path)) {
-  message(sprintf("no test data available for %s", test_key))
-  quit(status = 2)
-}
 
 # Load packages ----------------------------------------------------------------
 library(amt)
@@ -54,7 +48,7 @@ source("scripts/helper_functions.R")
 start_time <- Sys.time()
 
 # Deer movement data — single-row per-deer file for the TEST year
-deer_mvt <- readRDS(test_track_path)
+deer_mvt <- readRDS(sprintf("data/tracks/data_%s.rds", test_key))
 
 # landscape data — TEST-year season-specific landcover (categorical band + per-
 # class binary indicator layers). env_old terrain covariates are dropped.
@@ -64,13 +58,12 @@ env_raster <- load_landcover(test_year, season)
 ndvi_year <- load_ndvi(test_year)
 
 # issf models — fitted on TRAIN year
-results_issf <- readRDS(sprintf("results/results_issf_%s.rds", train_key))
+results_issf <- readRDS(sprintf("results/issf/results_issf_%s.rds", train_key))
 
-# Simulate every model that was fitted — null/failed models are filtered out
-# automatically inside the precompute step (returns NULL for those).
+# Score every fitted model — null/failed models filtered out automatically
+# inside the precompute step (returns NULL for those).
 n_models <- length(results_issf)
-models_to_sim <- seq_len(n_models)
-n_sim <- 10
+models_to_run <- seq_len(n_models)
 
 # Pre-crop rasters for this single deer ---------------------------------------
 crop_extent <- sf::st_buffer(
@@ -85,8 +78,8 @@ crop_extent <- sf::st_buffer(
 env_cropped <- terra::crop(env_raster, crop_extent)
 
 # HR rasters — load TEST-year rasters (test_year keys the file names).
-# Same convention as run_sims.R: no HR_bin; HR_edge in metres; HR_center is
-# transformed via log1p to match the formulas.
+# Same convention as run_logscore.R: no HR_bin; HR_edge in metres; HR_center
+# is transformed via log1p to match the formulas.
 env_cropped$HR_edge <- load_hr_edge_raster(id, season, test_year, env_cropped)
 env_cropped$HR_center <- load_hr_center_raster(
   id,
@@ -105,7 +98,7 @@ deer_input <- list(
 # Precompute simulation models ------------------------------------------------
 cat("Precomputing simulation models...\n")
 
-model_sims <- purrr::map(models_to_sim, function(m) {
+model_sims <- purrr::map(models_to_run, function(m) {
   iss_i <- results_issf[[m]]$iss
 
   if (is.character(iss_i)) {
@@ -147,50 +140,54 @@ model_sims <- purrr::map(models_to_sim, function(m) {
     ta = iss_i$ta_
   )
 })
-names(model_sims) <- as.character(models_to_sim)
+names(model_sims) <- as.character(models_to_run)
 
 # Free large objects
 rm(env_raster, ndvi_year, results_issf, deer_mvt)
 gc()
 
-# Simulate across models in parallel ------------------------------------------
-cat("Simulating movement...\n")
+# Run log score across all models in parallel ---------------------------------
+cat("Computing one-step log scores...\n")
 
 future::plan(
   multisession,
-  workers = min(length(models_to_sim), parallel::detectCores() - 1)
+  workers = min(length(models_to_run), parallel::detectCores() - 1)
 )
 
-results_sim <- furrr::future_map(
-  models_to_sim,
+results_logscore <- furrr::future_map(
+  models_to_run,
   function(m) {
-    cat("Simulating model:", m, "\n")
+    cat("  Model:", m, "\n")
 
     model_sim <- model_sims[[as.character(m)]]
 
     if (is.null(model_sim)) {
-      return(NA)
+      return(data.frame(
+        model = m,
+        total_logp = NA_real_,
+        n_steps = 0L
+      ))
     }
 
     env_local <- terra::unwrap(deer_input$crop_env)
     ndvi_local <- terra::unwrap(deer_input$crop_ndvi)
 
-    foreach(h = 1:n_sim, .combine = "rbind") %do%
-      {
-        res <- simulate_movement(
-          stp_data = deer_input$stp,
-          env_test = env_local,
-          ndvi_test = ndvi_local,
-          model = model_sim,
-          method = "issf"
-        )
-        res$nsim <- h
-        res
-      }
+    ll_df <- onestep_logscore(
+      stp_data = deer_input$stp,
+      env_test = env_local,
+      ndvi_test = ndvi_local,
+      issf_train = model_sim
+    )
+
+    data.frame(
+      model = m,
+      total_logp = sum(ll_df$logp, na.rm = TRUE),
+      n_steps = sum(!is.na(ll_df$logp))
+    )
   },
   .options = furrr::furrr_options(
     packages = c("amt", "terra", "sf", "dplyr", "lubridate", "foreach"),
-    stdout = FALSE,
+    stdout = TRUE,
     seed = TRUE
   )
 )
@@ -198,11 +195,20 @@ results_sim <- furrr::future_map(
 future::plan(sequential)
 gc()
 
-names(results_sim) <- as.character(models_to_sim)
+# Combine and compute delta_logp relative to model 2 --------------------------
+results <- dplyr::bind_rows(results_logscore)
+
+null_logp <- results$total_logp[results$model == 2]
+
+results <- results %>%
+  dplyr::mutate(delta_logp = total_logp - null_logp)
+
+cat("Results:\n")
+print(results)
 
 # Save -------------------------------------------------------------------------
-dir.create("sims", showWarnings = FALSE)
-saveRDS(results_sim, sprintf("sims/sims_test_%s.rds", train_key))
+dir.create("filters/issf", showWarnings = FALSE, recursive = TRUE)
+saveRDS(results, sprintf("filters/issf/logscore_issf_test_%s.rds", train_key))
 
 elapsed <- difftime(Sys.time(), start_time, units = "mins")
 cat(sprintf(

@@ -5,14 +5,14 @@
 #' frame, and apply four sequential model-selection gates.
 #'
 #' Inputs:
-#'   filters/udoverlap_gam_<key>.rds  — list keyed by model: list(bat_uds, svf_score)
-#'   filters/logscore_gam_<key>.rds   — df: model, total_logp, n_steps, delta_logp
-#'   filters/es_gam.rds               — df: id, season, year, model, energy_score
+#'   filters/gam/udoverlap_gam_<key>.rds  — list keyed by model: list(bat_uds, svf_score)
+#'   filters/gam/logscore_gam_<key>.rds   — df: model, total_logp, n_steps, delta_logp
+#'   filters/gam/es_gam.rds               — df: id, season, year, model, energy_score
 #'   data/tracks/data_<key>.rds       — observed steps (stp) -> observed sl_
 #'
 #' Outputs:
-#'   filters/filter_combined_gam.rds  — every (deer, model) with all metrics
-#'   filters/filter_selected_gam.rds  — rows surviving all four gates
+#'   filters/gam/filter_combined_gam.rds  — every (deer, model) with all metrics
+#'   filters/gam/filter_selected_gam.rds  — rows surviving all four gates
 #'   plots/filter_violins_pre_gam.png, plots/filter_violins_post_gam.png
 #'
 #' GAM model set is numbered 1..6 (see fit_GAM.R): 1 movement, 2 +HR-edge,
@@ -31,11 +31,11 @@
 library(tidyverse)
 
 # Pipeline mode ---------------------------------------------------------------
-# FALSE: use in-sample filter outputs (filters/udoverlap_gam_*.rds,
-#        filters/logscore_gam_*.rds, filters/es_gam.rds) and write
+# FALSE: use in-sample filter outputs (filters/gam/udoverlap_gam_*.rds,
+#        filters/gam/logscore_gam_*.rds, filters/gam/es_gam.rds) and write
 #        filter_combined_gam.rds / filter_selected_gam.rds + non-suffixed plots.
-# TRUE:  use out-of-sample (test) filter outputs (filters/udoverlap_gam_test_*.rds,
-#        filters/logscore_gam_test_*.rds, filters/es_gam_test.rds) and write
+# TRUE:  use out-of-sample (test) filter outputs (filters/gam/udoverlap_gam_test_*.rds,
+#        filters/gam/logscore_gam_test_*.rds, filters/gam/es_gam_test.rds) and write
 #        filter_combined_gam_test.rds / filter_selected_gam_test.rds + _test plots.
 test_mode <- F
 
@@ -49,9 +49,9 @@ p_excd_min <- 0.5
 suffix <- if (test_mode) "_test" else ""
 udov_prefix <- sprintf("udoverlap_gam%s_", suffix)
 logs_prefix <- sprintf("logscore_gam%s_", suffix)
-es_file <- sprintf("filters/es_gam%s.rds", suffix)
-combined_out <- sprintf("filters/filter_combined_gam%s.rds", suffix)
-selected_out <- sprintf("filters/filter_selected_gam%s.rds", suffix)
+es_file <- sprintf("filters/gam/es_gam%s.rds", suffix)
+combined_out <- sprintf("filters/gam/filter_combined_gam%s.rds", suffix)
+selected_out <- sprintf("filters/gam/filter_selected_gam%s.rds", suffix)
 plot_pre <- sprintf("plots/filter_violins_pre_gam%s.png", suffix)
 plot_post <- sprintf("plots/filter_violins_post_gam%s.png", suffix)
 
@@ -61,11 +61,11 @@ plot_post <- sprintf("plots/filter_violins_post_gam%s.png", suffix)
 # requested mode explicitly. The `_gam_` infix keeps iSSF outputs
 # (udoverlap_<key>, logscore_<key>) out of this GAM pipeline entirely.
 udov_files <- list.files(
-  "filters",
+  "filters/gam",
   "^udoverlap_gam_.*\\.rds$",
   full.names = TRUE
 )
-logs_files <- list.files("filters", "^logscore_gam_.*\\.rds$", full.names = TRUE)
+logs_files <- list.files("filters/gam", "^logscore_gam_.*\\.rds$", full.names = TRUE)
 
 if (test_mode) {
   udov_files <- udov_files[grepl("^udoverlap_gam_test_", basename(udov_files))]
@@ -105,8 +105,8 @@ parse_key <- function(k) {
 
 # Load udoverlap + logscore per deer ------------------------------------------
 per_deer_df <- purrr::map_dfr(keys, function(k) {
-  ud <- readRDS(file.path("filters", sprintf("%s%s.rds", udov_prefix, k)))
-  ls <- readRDS(file.path("filters", sprintf("%s%s.rds", logs_prefix, k)))
+  ud <- readRDS(file.path("filters/gam", sprintf("%s%s.rds", udov_prefix, k)))
+  ls <- readRDS(file.path("filters/gam", sprintf("%s%s.rds", logs_prefix, k)))
 
   ud_df <- purrr::imap_dfr(ud, function(x, m) {
     if (length(x) == 1 && is.na(x)) {

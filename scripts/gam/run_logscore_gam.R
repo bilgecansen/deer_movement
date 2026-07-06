@@ -1,6 +1,6 @@
 #' @description
 #' One-step-ahead log score for a single deer, computed for every fitted GAM
-#' model in results/results_gam_<key>.rds. GAM analogue of run_logscore.R.
+#' model in results/gam/results_gam_<key>.rds. GAM analogue of run_logscore.R.
 #'
 #' Usage: Rscript run_logscore_gam.R <id> <season> <year>
 #'   id     — deer ID
@@ -49,8 +49,8 @@ env_raster <- load_landcover(year, season)
 # NDVI data
 ndvi_year <- load_ndvi(year)
 
-# GAM models — a named list keyed by model number ("1".."5","8")
-results_gam <- readRDS(sprintf("results/results_gam_%s.rds", key))
+# GAM models — a named list keyed by model number ("1".."6")
+results_gam <- readRDS(sprintf("results/gam/results_gam_%s.rds", key))
 
 # Tentative movement distributions for the GAM kernel (gamma / von Mises). The
 # GAMs are fit on the parametric stp.var design, so these ride along on stp.var
@@ -167,8 +167,8 @@ cat("Results:\n")
 print(results)
 
 # Save -------------------------------------------------------------------------
-dir.create("filters", showWarnings = FALSE)
-saveRDS(results, sprintf("filters/logscore_gam_%s.rds", key))
+dir.create("filters/gam", showWarnings = FALSE, recursive = TRUE)
+saveRDS(results, sprintf("filters/gam/logscore_gam_%s.rds", key))
 
 elapsed <- difftime(Sys.time(), start_time, units = "mins")
 cat(sprintf("Deer %s completed in %.1f minutes\n", key, elapsed))

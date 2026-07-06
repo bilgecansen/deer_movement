@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Iterate every deer with a fitted iSSF model in results/ and run
-# scripts/issf/run_sims_test.R on each — i.e. simulate year+1 paths using the
+# scripts/issf/run_sims_issf_test.R on each — i.e. simulate year+1 paths using the
 # year-trained model. By default, skip deer whose test-simulation output
 # already exists; pass --overwrite to reprocess everything.
 #
@@ -26,12 +26,12 @@ n_no_data=0
 n_failed=0
 start=$(date +%s)
 
-for f in results/results_issf_*.rds; do
+for f in results/issf/results_issf_*.rds; do
   base=$(basename "$f" .rds)
   key=${base#results_issf_}
   IFS='_' read -r id season year <<< "$key"
 
-  out_path="sims/sims_test_${key}.rds"
+  out_path="sims/issf/sims_issf_test_${key}.rds"
 
   if [[ "$overwrite" == false && -f "$out_path" ]]; then
     echo "[skip]    $key"
@@ -40,7 +40,7 @@ for f in results/results_issf_*.rds; do
   fi
 
   echo "[run]     $key"
-  Rscript scripts/issf/run_sims_test.R "$id" "$season" "$year"
+  Rscript scripts/issf/run_sims_issf_test.R "$id" "$season" "$year"
   rc=$?
   case $rc in
     0)

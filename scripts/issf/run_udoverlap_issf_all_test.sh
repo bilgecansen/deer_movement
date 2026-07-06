@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Iterate every deer with test-year simulations in sims/sims_test_*.rds and
-# run scripts/issf/run_udoverlap_test.R on each. Driving off the test sims (rather
+# Iterate every deer with test-year simulations in sims/issf/sims_issf_test_*.rds and
+# run scripts/issf/run_udoverlap_issf_test.R on each. Driving off the test sims (rather
 # than fitted models) means deer with no test-year data are skipped naturally
 # — they have no sims_test_*.rds file. By default, skip deer whose test
 # UD-overlap output already exists; pass --overwrite to reprocess everything.
@@ -24,12 +24,12 @@ n_skipped=0
 n_failed=0
 start=$(date +%s)
 
-for f in sims/sims_test_*.rds; do
+for f in sims/issf/sims_issf_test_*.rds; do
   base=$(basename "$f" .rds)
-  key=${base#sims_test_}
+  key=${base#sims_issf_test_}
   IFS='_' read -r id season year <<< "$key"
 
-  out_path="filters/udoverlap_test_${key}.rds"
+  out_path="filters/issf/udoverlap_issf_test_${key}.rds"
 
   if [[ "$overwrite" == false && -f "$out_path" ]]; then
     echo "[skip] $key"
@@ -38,7 +38,7 @@ for f in sims/sims_test_*.rds; do
   fi
 
   echo "[run]  $key"
-  if Rscript scripts/issf/run_udoverlap_test.R "$id" "$season" "$year"; then
+  if Rscript scripts/issf/run_udoverlap_issf_test.R "$id" "$season" "$year"; then
     n_done=$((n_done + 1))
   else
     rc=$?

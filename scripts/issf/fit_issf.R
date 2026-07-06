@@ -22,41 +22,42 @@ source("scripts/helper_functions.R")
 
 # Formulas --------------------------------------------------------------------
 # make_formulas() returns the 6 candidate models for one deer, named by model
-# number ("1","2","3","4","5","8"). Slots 4 & 5 are the resource-selection
+# number ("1","2","3","4","5","6"). Slots 4 & 5 are the resource-selection
 # models and depend on season: non-breeding (winter) deer have no valid MODIS
 # NDVI (snow / dormancy -> all-or-mostly NA), so the NDVI models (4 & 5) can't
-# be fit. For those deer we substitute the landcover-only models (6 & 7) and
-# record them in slots 4 & 5. Either way the result holds 6 models and slots
-# 4/5 always mean "the resource-selection model" — models 6 & 7 never appear
-# under their own numbers, and model 8 keeps its number (hence the 1,2,3,4,5,8
-# gap). Mirrors make_formulas() in fit_GAM.R.
+# be fit. For those deer we substitute the landcover-only models and record them
+# in slots 4 & 5. Either way the result holds 6 models and slots 4/5 always mean
+# "the resource-selection model" (NDVI where it exists, a landcover-only
+# substitute where it doesn't). Model 6 is the HR-center × landcover
+# interaction. Numbering is contiguous "1".."6" and parallels make_formulas() in
+# fit_GAM.R (position = model number).
 make_formulas <- function(season) {
   move <- "case_ ~ (sl_):tod_start_ + log(sl_) + cos(ta_)"
 
   f1 <- move # 1 movement only
   f2 <- paste(move, "+ HR_edge_end") # 2 + HR edge
   f3 <- paste(move, "+ HR_center_end") # 3 + HR center
-  f8 <- paste(
+  f6 <- paste(
     move,
     "+ HR_center_end + wiscland_end + HR_center_end:wiscland_end"
-  ) # 8 + HR-center x LC
+  ) # 6 + HR-center x LC
 
   if (season == "nb") {
-    f4 <- paste(move, "+ HR_center_end + wiscland_end") # model 6 -> slot 4
-    f5 <- paste(move, "+ wiscland_end") # model 7 -> slot 5
+    f4 <- paste(move, "+ HR_center_end + wiscland_end") # 4 landcover (with HR-center)
+    f5 <- paste(move, "+ wiscland_end") # 5 landcover (no HR-center)
   } else {
     f4 <- paste(
       move,
       "+ HR_center_end + wiscland_end + ndvi_end + wiscland_end:ndvi_end"
-    ) # model 4
+    ) # 4 NDVI (with HR-center)
     f5 <- paste(
       move,
       "+ wiscland_end + ndvi_end + wiscland_end:ndvi_end"
-    ) # model 5
+    ) # 5 NDVI (no HR-center)
   }
 
-  f <- paste(c(f1, f2, f3, f4, f5, f8), "+ strata(step_id_)")
-  stats::setNames(f, c("1", "2", "3", "4", "5", "8"))
+  f <- paste(c(f1, f2, f3, f4, f5, f6), "+ strata(step_id_)")
+  stats::setNames(f, c("1", "2", "3", "4", "5", "6"))
 }
 
 # Discover deer from data/tracks/ ---------------------------------------------
@@ -71,7 +72,7 @@ keys <- gsub("^data_(.*)\\.rds$", "\\1", basename(track_files))
 cat(sprintf("Found %d wrangled deer in data/tracks/\n", length(track_files)))
 
 # Output dir
-dir.create("results", showWarnings = FALSE)
+dir.create("results/issf", showWarnings = FALSE, recursive = TRUE)
 
 # Loop ------------------------------------------------------------------------
 n_done <- 0L
@@ -83,7 +84,7 @@ start_time <- Sys.time()
 for (i in seq_along(track_files)) {
   key <- keys[i]
   in_path <- track_files[i]
-  out_path <- sprintf("results/results_issf_%s.rds", key)
+  out_path <- sprintf("results/issf/results_issf_%s.rds", key)
 
   # Skip: output already exists and we're not overwriting
   if (!overwrite && file.exists(out_path)) {
@@ -103,7 +104,7 @@ for (i in seq_along(track_files)) {
       ssf_data <- one_deer$stp.var[[1]]
 
       # Season picks the slot-4/5 resource models (NDVI vs landcover; see
-      # make_formulas). results_issf is named by model number ("1".."5","8").
+      # make_formulas). results_issf is named by model number ("1".."6").
       season <- strsplit(key, "_")[[1]][2]
       formulas <- make_formulas(season)
 

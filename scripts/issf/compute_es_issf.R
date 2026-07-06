@@ -1,14 +1,14 @@
 #' @description
 #' Compute one-step energy scores for every deer with simulations and every
 #' model that was simulated. Writes a single combined data frame to
-#' filters/es.rds.
+#' filters/issf/es_issf.rds.
 #'
-#' By default, deer that already appear in the existing filters/es.rds are
-#' skipped (resumable reruns). Pass --overwrite to reprocess everything.
+#' By default, deer that already appear in the existing filters/issf/es_issf.rds
+#' are skipped (resumable reruns). Pass --overwrite to reprocess everything.
 #'
 #' Usage:
-#'   Rscript scripts/issf/compute_es.R              # resumable (default)
-#'   Rscript scripts/issf/compute_es.R --overwrite  # reprocess every deer
+#'   Rscript scripts/issf/compute_es_issf.R              # resumable (default)
+#'   Rscript scripts/issf/compute_es_issf.R --overwrite  # reprocess every deer
 
 # Parse CLI args ---------------------------------------------------------------
 args <- commandArgs(trailingOnly = TRUE)
@@ -23,8 +23,8 @@ suppressPackageStartupMessages({
 source("scripts/helper_functions.R")
 
 # Setup ------------------------------------------------------------------------
-dir.create("filters", showWarnings = FALSE)
-out_path <- "filters/es.rds"
+dir.create("filters/issf", showWarnings = FALSE, recursive = TRUE)
+out_path <- "filters/issf/es_issf.rds"
 
 existing <- if (!overwrite && file.exists(out_path)) {
   readRDS(out_path)
@@ -38,11 +38,12 @@ existing <- if (!overwrite && file.exists(out_path)) {
   )
 }
 
-# Discover deer with simulations. GAM sims (sims_gam_*) share the sims/ folder
-# but are handled by scripts/gam/compute_es_gam.R, so exclude them here.
-sim_files <- list.files("sims", pattern = "^sims_.*\\.rds$", full.names = TRUE)
-sim_files <- sim_files[!grepl("^sims_gam_", basename(sim_files))]
-keys      <- gsub("^sims_(.*)\\.rds$", "\\1", basename(sim_files))
+# Discover deer with (non-test) iSSF simulations in sims/issf/. Test-year sims
+# (sims_issf_test_*) share the folder but are handled by compute_es_issf_test.R,
+# so exclude them here. GAM sims live in sims/gam/ and never appear here.
+sim_files <- list.files("sims/issf", pattern = "^sims_issf_.*\\.rds$", full.names = TRUE)
+sim_files <- sim_files[!grepl("^sims_issf_test_", basename(sim_files))]
+keys      <- gsub("^sims_issf_(.*)\\.rds$", "\\1", basename(sim_files))
 
 cat(sprintf("Found %d deer with simulations\n", length(sim_files)))
 

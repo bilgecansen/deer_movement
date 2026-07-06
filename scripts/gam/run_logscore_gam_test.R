@@ -8,7 +8,7 @@
 #'   season — season string (e.g. "fa", "nb")
 #'   year   — training year (test year is year + 1)
 #'
-#' Assumes results/results_gam_<train_key>.rds, the TRAIN-year wrangled track
+#' Assumes results/gam/results_gam_<train_key>.rds, the TRAIN-year wrangled track
 #' (data_<train_key>.rds, for the tentative gamma / von Mises distributions the
 #' GAM corrections are relative to), and the TEST-year wrangled track all exist;
 #' the bash wrapper gates on those so this script needs no "no test data" guard.
@@ -60,7 +60,7 @@ env_raster <- load_landcover(test_year, season)
 ndvi_year <- load_ndvi(test_year)
 
 # GAM models — fitted on TRAIN year; a named list keyed by model number
-results_gam <- readRDS(sprintf("results/results_gam_%s.rds", train_key))
+results_gam <- readRDS(sprintf("results/gam/results_gam_%s.rds", train_key))
 
 # Tentative movement distributions for the GAM kernel (gamma / von Mises). Use
 # the TRAIN-year stp.var attributes — the same proposal the GAM was fit against,
@@ -187,8 +187,8 @@ cat("Results:\n")
 print(results)
 
 # Save -------------------------------------------------------------------------
-dir.create("filters", showWarnings = FALSE)
-saveRDS(results, sprintf("filters/logscore_gam_test_%s.rds", train_key))
+dir.create("filters/gam", showWarnings = FALSE, recursive = TRUE)
+saveRDS(results, sprintf("filters/gam/logscore_gam_test_%s.rds", train_key))
 
 elapsed <- difftime(Sys.time(), start_time, units = "mins")
 cat(sprintf(

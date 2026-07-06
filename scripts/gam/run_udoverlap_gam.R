@@ -46,7 +46,7 @@ deer_mvt <- readRDS(sprintf("data/tracks/data_%s.rds", key))
 
 # GAM-simulated paths for this deer — named list keyed by the model numbers that
 # were actually simulated (run_sims_gam.R simulates every fitted model).
-results_sim <- readRDS(sprintf("sims/sims_gam_%s.rds", key))
+results_sim <- readRDS(sprintf("sims/gam/sims_gam_%s.rds", key))
 
 # Model numbers actually present in results_sim
 model_nums <- as.integer(names(results_sim))
@@ -96,8 +96,8 @@ future::plan(sequential)
 gc()
 
 # Save -------------------------------------------------------------------------
-dir.create("filters", showWarnings = FALSE)
-saveRDS(results_ud, sprintf("filters/udoverlap_gam_%s.rds", key))
+dir.create("filters/gam", showWarnings = FALSE, recursive = TRUE)
+saveRDS(results_ud, sprintf("filters/gam/udoverlap_gam_%s.rds", key))
 
 elapsed <- difftime(Sys.time(), start_time, units = "mins")
 cat(sprintf("Deer %s completed in %.1f minutes\n", key, elapsed))

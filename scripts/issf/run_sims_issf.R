@@ -49,7 +49,7 @@ env_raster <- load_landcover(year, season)
 ndvi_year <- load_ndvi(year)
 
 # issf models
-results_issf <- readRDS(sprintf("results/results_issf_%s.rds", key))
+results_issf <- readRDS(sprintf("results/issf/results_issf_%s.rds", key))
 
 # Simulate every model that was fitted — null/failed models are filtered out
 # automatically inside the precompute step (returns NULL for those).
@@ -177,8 +177,8 @@ gc()
 names(results_sim) <- as.character(models_to_sim)
 
 # Save -------------------------------------------------------------------------
-dir.create("sims", showWarnings = FALSE)
-saveRDS(results_sim, sprintf("sims/sims_%s.rds", key))
+dir.create("sims/issf", showWarnings = FALSE, recursive = TRUE)
+saveRDS(results_sim, sprintf("sims/issf/sims_issf_%s.rds", key))
 
 elapsed <- difftime(Sys.time(), start_time, units = "mins")
 cat(sprintf("Deer %s completed in %.1f minutes\n", key, elapsed))

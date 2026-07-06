@@ -2,7 +2,7 @@
 #' Explore the fitted deer-movement GAMs (output of fit_GAM.R).
 #'
 #' Section 1 (here): the k / shrinkage audit. fit_GAM.R writes one row per smooth
-#' per (deer, model) fit to results/k_audit_gam.rds, each labelled with a status
+#' per (deer, model) fit to results/gam/k_audit_gam.rds, each labelled with a status
 #' from gam_smooth_diag():
 #'   * "ok"          smooth is supported and below its basis ceiling
 #'   * "k-bound"     edf pressed against k' -> consider a higher k
@@ -28,7 +28,7 @@ suppressPackageStartupMessages({
 source("scripts/helper_functions.R")
 
 # Config ----------------------------------------------------------------------
-audit_path <- "results/k_audit_gam.rds"
+audit_path <- "results/gam/k_audit_gam.rds"
 out_dir <- "plots"
 dir.create(out_dir, showWarnings = FALSE)
 
@@ -163,7 +163,7 @@ if (is.na(rss_key)) {
 }
 cat(sprintf("\nRSS plots for deer: %s\n", rss_key))
 
-res <- readRDS(sprintf("results/results_gam_%s.rds", rss_key))
+res <- readRDS(sprintf("results/gam/results_gam_%s.rds", rss_key))
 dat <- prepare_gam_data(
   readRDS(sprintf("data/tracks/data_%s.rds", rss_key))[["stp.var"]][[1]]
 )
