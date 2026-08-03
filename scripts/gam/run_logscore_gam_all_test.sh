@@ -27,13 +27,21 @@ start=$(date +%s)
 
 for f in results/gam/results_gam_*.rds; do
   base=$(basename "$f" .rds)
+
+  # results_gam_null_<key>.rds also matches this glob; the null is scored inside
+  # run_logscore_gam_test.R, not as a deer of its own. Skip it silently.
+  [[ "$base" == results_gam_null_* ]] && continue
+
   key=${base#results_gam_}
   IFS='_' read -r id season year <<< "$key"
 
   test_year=$((year + 1))
   test_key="${id}_${season}_${test_year}"
   test_track="data/tracks/data_${test_key}.rds"
+
+  # One invocation writes both files; only skip when both are already present.
   out_path="filters/gam/logscore_gam_test_${key}.rds"
+  null_out="filters/gam/logscore_gam_null_test_${key}.rds"
 
   if [[ ! -f "$test_track" ]]; then
     echo "[no-data] $key (no $test_track)"
@@ -41,7 +49,7 @@ for f in results/gam/results_gam_*.rds; do
     continue
   fi
 
-  if [[ "$overwrite" == false && -f "$out_path" ]]; then
+  if [[ "$overwrite" == false && -f "$out_path" && -f "$null_out" ]]; then
     echo "[skip]    $key"
     n_skipped=$((n_skipped + 1))
     continue

@@ -15,16 +15,25 @@
 #'   filters/gam/filter_selected_gam.rds  — rows surviving all four gates
 #'   plots/filter_violins_pre_gam.png, plots/filter_violins_post_gam.png
 #'
-#' GAM model set is numbered 1..6 (see fit_GAM.R): 1 movement, 2 +HR-edge,
-#' 3 +HR-center, 4 & 5 resource (NDVI x landcover / landcover), 6 HR-center x
-#' landcover. The null reference for delta_logp is model 2; the environmental
-#' (resource-selection) models are 4, 5, 6.
+#' ONLY THE NUMBERED MODELS ARE FILTERED. The null model (movement +
+#' s(HR_center_end)) is fit and log-scored separately and does not go through the
+#' gates: it is the reference the numbered models are measured against, not a
+#' candidate competing with them. Concretely —
+#'   * it is never simulated, so it has no bat_uds / svf_score / energy_score;
+#'   * its log score lives in logscore_gam_null_<key>.rds, which this script
+#'     never reads (delta_logp, already differenced against it, is enough);
+#'   * there is consequently no "null model as fallback" branch at gate 3 —
+#'     a deer with no passing numbered model simply contributes nothing.
+#'
+#' GAM model set is numbered 1..4 (see fit_GAM.R): 1 movement only, 2 & 3
+#' resource (HR-center + NDVI x landcover / NDVI x landcover alone; landcover-only
+#' substitutes in winter), 4 HR-center x landcover. The environmental
+#' (resource-selection) models are 2, 3, 4; model 1 is movement-only.
 #'
 #' Gates (applied sequentially — only survivors flow into the next step):
 #'   1. bat_uds    >= 0.8
 #'   2. svf_score  >= 0.8
-#'   3. delta_logp >= -3  (delta vs. model 2; null model itself passes only as a
-#'                         fallback when no other model in that deer passes)
+#'   3. delta_logp >= 3   (must BEAT the null by this margin — see delta_logp_min)
 #'   4. p_excd     >= 0.5  P(observed sl > energy_score); equivalent to ES below
 #'                         the deer's median step length.
 
@@ -39,8 +48,12 @@ library(tidyverse)
 #        filter_combined_gam_test.rds / filter_selected_gam_test.rds + _test plots.
 test_mode <- F
 
-null_model <- 2L
-delta_logp_min <- -3
+# delta_logp_min is a *positive* margin: a numbered model must beat the null by
+# at least this much. Under the previous HR-edge null the threshold was -3
+# ("don't lose to the null by more than 3"), which is the wrong stance now that
+# the null is the HR-center model — the same reference used in the earlier
+# null-2 vs null-3 comparison, where null 3 was paired with +3.
+delta_logp_min <- 3
 ud_min <- 0.8
 svf_min <- 0.8
 p_excd_min <- 0.5
@@ -65,7 +78,18 @@ udov_files <- list.files(
   "^udoverlap_gam_.*\\.rds$",
   full.names = TRUE
 )
-logs_files <- list.files("filters/gam", "^logscore_gam_.*\\.rds$", full.names = TRUE)
+logs_files <- list.files(
+  "filters/gam",
+  "^logscore_gam_.*\\.rds$",
+  full.names = TRUE
+)
+
+# Drop the null-model log scores in BOTH modes. They match the broad regex
+# (`logscore_gam_null_<key>` and `logscore_gam_null_test_<key>`) but are not
+# candidates: the null does not go through the gates, and the comparison against
+# it already rides on the numbered rows as delta_logp. Without this they would be
+# read as deer with keys like "null_5004_fa_2017".
+logs_files <- logs_files[!grepl("^logscore_gam_null_", basename(logs_files))]
 
 if (test_mode) {
   udov_files <- udov_files[grepl("^udoverlap_gam_test_", basename(udov_files))]
@@ -183,26 +207,12 @@ step1 <- all_df |>
 step2 <- step1 |>
   dplyr::filter(!is.na(svf_score), svf_score >= svf_min)
 
-# Step 3: every non-null model passes iff its delta_logp (vs. model 2) >=
-# threshold. The null model (id = 2) is kept only as a fallback for deer where
-# no non-null model passed. Operates on step2 survivors, so a null model that
-# itself failed steps 1 or 2 is not available as a fallback.
+# Step 3: a model passes iff it beats the null by at least delta_logp_min. This
+# is now a plain row-wise filter with no per-deer grouping: the null is no longer
+# one of the candidates, so there is no null row to fall back to when a deer has
+# no passing model. Such a deer simply drops out here.
 step3 <- step2 |>
-  dplyr::group_by(key) |>
-  dplyr::group_modify(function(g, .y) {
-    passing_alt <- g |>
-      dplyr::filter(
-        model != null_model,
-        !is.na(delta_logp),
-        delta_logp >= delta_logp_min
-      )
-    if (nrow(passing_alt) > 0) {
-      passing_alt
-    } else {
-      g |> dplyr::filter(model == null_model)
-    }
-  }) |>
-  dplyr::ungroup()
+  dplyr::filter(!is.na(delta_logp), delta_logp >= delta_logp_min)
 
 step4 <- step3 |>
   dplyr::filter(!is.na(p_excd), p_excd >= p_excd_min)
@@ -352,10 +362,15 @@ ggplot2::ggsave(
 )
 
 # Per-deer pass/fail vs. covariates ------------------------------------------
-# A deer "passed" iff at least one environmental-variable model (models 4..6)
-# survived all four gates. Deer with only null models surviving (2 or 3), or
-# with nothing surviving, are counted as failed.
-env_models <- c(4L, 5L, 6L)
+# A deer "passed" iff at least one environmental-variable model (models 2..4)
+# survived all four gates. Deer whose only survivor is the movement-only model
+# (1), or with nothing surviving, are counted as failed.
+env_models <- c(2L, 3L, 4L)
+
+# The non-environmental candidate. Not the null model — the null never reaches
+# this table — but the numbered model with no habitat covariate at all, which
+# plays the analogous role *within* the filtered set.
+nonenv_models <- 1L
 
 passed_keys <- step4 |>
   dplyr::filter(model %in% env_models) |>
@@ -469,9 +484,10 @@ panels_cov <- panels_cov +
   patchwork::plot_annotation(
     title = "Per-deer pass/fail by covariate",
     subtitle = sprintf(
-      "Passed = >=1 surviving model in formulas %d-%d; failed = none or only null (2, 3).",
+      "Passed = >=1 surviving model in formulas %d-%d; failed = none or only movement-only (%s).",
       min(env_models),
-      max(env_models)
+      max(env_models),
+      paste(nonenv_models, collapse = ", ")
     )
   )
 
@@ -483,13 +499,15 @@ ggplot2::ggsave(
   dpi = 300
 )
 
-# Null vs env among deer that did pass the filters ---------------------------
+# Movement-only vs env among deer that did pass the filters -------------------
 # "Did pass" here = at least one model survived all four gates (i.e. the deer
-# has rows in step4). Deer with nothing in step4 are dropped entirely. Among
-# the rest, classify the deer by whether any surviving model is an env model
-# (4-6); otherwise its only survivor(s) are null (models 2 and/or 3).
-null_models <- c(2L, 3L)
-
+# has rows in step4). Deer with nothing in step4 are dropped entirely. Among the
+# rest, classify the deer by whether any surviving model is an env model (2-4);
+# otherwise its only survivor is the movement-only model (1).
+#
+# This used to be "null vs env" and compared against models 2/3 while they were
+# the null-ish structural models. Those are resource models now and the real null
+# sits outside this table entirely, so the contrast is movement-only vs env.
 deer_compare <- step4 |>
   dplyr::group_by(key) |>
   dplyr::summarize(
@@ -498,8 +516,8 @@ deer_compare <- step4 |>
   ) |>
   dplyr::mutate(
     status = factor(
-      ifelse(has_env, "env", "null"),
-      levels = c("null", "env")
+      ifelse(has_env, "env", "movement"),
+      levels = c("movement", "env")
     )
   ) |>
   dplyr::select(key, status) |>
@@ -509,13 +527,13 @@ deer_compare <- step4 |>
   )
 
 cat(sprintf(
-  "Null vs env among passing deer: env %d / null-only %d (of %d)\n",
+  "Movement-only vs env among passing deer: env %d / movement-only %d (of %d)\n",
   sum(deer_compare$status == "env"),
-  sum(deer_compare$status == "null"),
+  sum(deer_compare$status == "movement"),
   nrow(deer_compare)
 ))
 
-null_env_fill <- c(null = "grey60", env = "#1F77B4")
+null_env_fill <- c(movement = "grey60", env = "#1F77B4")
 
 p_season_c <- make_status_prop(
   deer_compare,
@@ -542,17 +560,17 @@ panels_compare <- (p_season_c | p_age_c | p_year_c) +
 
 panels_compare <- panels_compare +
   patchwork::plot_annotation(
-    title = "Null vs env among deer with surviving models",
+    title = "Movement-only vs env among deer with surviving models",
     subtitle = sprintf(
-      "Deer with nothing in step4 excluded. env = >=1 surviving model in %d-%d; null = only models %s.",
+      "Deer with nothing in step4 excluded. env = >=1 surviving model in %d-%d; movement = only model %s.",
       min(env_models),
       max(env_models),
-      paste(null_models, collapse = ", ")
+      paste(nonenv_models, collapse = ", ")
     )
   )
 
 ggplot2::ggsave(
-  sprintf("plots/filter_null_vs_env_gam%s.png", suffix),
+  sprintf("plots/filter_movement_vs_env_gam%s.png", suffix),
   panels_compare,
   width = 13,
   height = 5,

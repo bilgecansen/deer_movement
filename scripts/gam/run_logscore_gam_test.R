@@ -3,12 +3,18 @@
 #' track under a GAM trained on (id, season, year) using environmental inputs
 #' (HR rasters, NDVI) from year + 1. GAM analogue of run_logscore_test.R.
 #'
+#' Like the in-sample runner, this scores the null model alongside the numbered
+#' ones in a single pass and writes them to separate files:
+#'   filters/gam/logscore_gam_test_<train_key>.rds       numbered (+ delta_logp)
+#'   filters/gam/logscore_gam_null_test_<train_key>.rds  the null alone
+#'
 #' Usage: Rscript run_logscore_gam_test.R <id> <season> <year>
 #'   id     — deer ID
 #'   season — season string (e.g. "fa", "nb")
 #'   year   — training year (test year is year + 1)
 #'
-#' Assumes results/gam/results_gam_<train_key>.rds, the TRAIN-year wrangled track
+#' Assumes results/gam/results_gam_<train_key>.rds and
+#' results/gam/results_gam_null_<train_key>.rds, the TRAIN-year wrangled track
 #' (data_<train_key>.rds, for the tentative gamma / von Mises distributions the
 #' GAM corrections are relative to), and the TEST-year wrangled track all exist;
 #' the bash wrapper gates on those so this script needs no "no test data" guard.
@@ -59,8 +65,13 @@ env_raster <- load_landcover(test_year, season)
 # NDVI data — TEST year
 ndvi_year <- load_ndvi(test_year)
 
-# GAM models — fitted on TRAIN year; a named list keyed by model number
+# GAM models — fitted on TRAIN year; a named list keyed by model number, plus
+# the separately-saved null model (a single fit_gam_mod() return).
 results_gam <- readRDS(sprintf("results/gam/results_gam_%s.rds", train_key))
+results_gam_null <- readRDS(sprintf(
+  "results/gam/results_gam_null_%s.rds",
+  train_key
+))
 
 # Tentative movement distributions for the GAM kernel (gamma / von Mises). Use
 # the TRAIN-year stp.var attributes — the same proposal the GAM was fit against,
@@ -73,12 +84,11 @@ ta_distr <- attr(train_mvt$stp.var[[1]], "ta_")
 rm(train_mvt)
 
 # Score every fitted model — failed fits ($gam == "Error") return NULL below and
-# are recorded as NA. Older results_gam files are 8-element positional (no
-# names); fall back to positional numbering so the script runs on both formats.
+# are recorded as NA. Pre-naming-contract results files are positional (no
+# names); fall back to positional numbering so the script still runs on them.
 if (is.null(names(results_gam))) {
   names(results_gam) <- as.character(seq_along(results_gam))
 }
-models_to_run <- names(results_gam)
 
 # Pre-crop rasters for this single deer ---------------------------------------
 crop_extent <- sf::st_buffer(
@@ -120,8 +130,16 @@ model_gams <- purrr::map(results_gam, function(r) {
   if (is.character(g)) NULL else g
 })
 
+null_gam <- if (is.character(results_gam_null$gam)) NULL else results_gam_null$gam
+
+# One scoring pass over the null plus every numbered model; see run_logscore_gam.R
+# for why they share a run. The null is carried as a named unit ("null") so it
+# can never be mistaken for a model number.
+score_units <- c(list(null = null_gam), model_gams)
+units_to_run <- names(score_units)
+
 # Free large objects
-rm(env_raster, ndvi_year, results_gam, deer_mvt)
+rm(env_raster, ndvi_year, results_gam, results_gam_null, deer_mvt)
 gc()
 
 # Run log score across all models in parallel ---------------------------------
@@ -129,19 +147,19 @@ cat("Computing one-step log scores...\n")
 
 future::plan(
   multisession,
-  workers = min(length(models_to_run), parallel::detectCores() - 1)
+  workers = min(length(units_to_run), parallel::detectCores() - 1)
 )
 
 results_logscore <- furrr::future_map(
-  models_to_run,
+  units_to_run,
   function(m) {
     cat("  Model:", m, "\n")
 
-    model_gam <- model_gams[[m]]
+    model_gam <- score_units[[m]]
 
     if (is.null(model_gam)) {
       return(data.frame(
-        model = as.integer(m),
+        model = m,
         total_logp = NA_real_,
         n_steps = 0L
       ))
@@ -160,7 +178,7 @@ results_logscore <- furrr::future_map(
     )
 
     data.frame(
-      model = as.integer(m),
+      model = m,
       total_logp = sum(ll_df$logp, na.rm = TRUE),
       n_steps = sum(!is.na(ll_df$logp))
     )
@@ -175,20 +193,32 @@ results_logscore <- furrr::future_map(
 future::plan(sequential)
 gc()
 
-# Combine and compute delta_logp relative to model 2 --------------------------
-results <- dplyr::bind_rows(results_logscore)
+# Split null from numbered, and compute delta_logp vs. the null ---------------
+# See run_logscore_gam.R: delta_logp lives on the numbered rows because it is a
+# property of the comparison; the null's own scores are saved untouched.
+results_all <- dplyr::bind_rows(results_logscore)
 
-null_logp <- results$total_logp[results$model == 2]
+null_results <- results_all %>% dplyr::filter(model == "null")
+null_logp <- null_results$total_logp
 
-results <- results %>%
+results <- results_all %>%
+  dplyr::filter(model != "null") %>%
+  dplyr::mutate(model = as.integer(model)) %>%
+  dplyr::arrange(model) %>%
   dplyr::mutate(delta_logp = total_logp - null_logp)
 
-cat("Results:\n")
+cat("Null:\n")
+print(null_results)
+cat("Numbered models:\n")
 print(results)
 
 # Save -------------------------------------------------------------------------
 dir.create("filters/gam", showWarnings = FALSE, recursive = TRUE)
 saveRDS(results, sprintf("filters/gam/logscore_gam_test_%s.rds", train_key))
+saveRDS(
+  null_results,
+  sprintf("filters/gam/logscore_gam_null_test_%s.rds", train_key)
+)
 
 elapsed <- difftime(Sys.time(), start_time, units = "mins")
 cat(sprintf(

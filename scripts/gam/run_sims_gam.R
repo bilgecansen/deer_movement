@@ -1,6 +1,12 @@
 #' @description
-#' Simulate deer movement from all fitted GAM models for a single deer. GAM
+#' Simulate deer movement from the numbered GAM models for a single deer. GAM
 #' analogue of scripts/issf/run_sims.R.
+#'
+#' Only the NUMBERED models are simulated. The null model (fit_GAM.R writes it to
+#' results/gam/results_gam_null_<key>.rds) is deliberately left out: it is scored
+#' by log score for comparison, not simulated. Everything built on simulations —
+#' UD overlap, SVF, energy score, and hence the four filter gates — is therefore
+#' numbered-models-only by construction.
 #'
 #' Usage: Rscript scripts/gam/run_sims_gam.R <id> <season> <year>
 #'   id     — deer ID
@@ -50,8 +56,18 @@ env_raster <- load_landcover(year, season)
 # NDVI data
 ndvi_year <- load_ndvi(year)
 
-# GAM models — a named list keyed by model number ("1".."6")
+# GAM models — a named list keyed by model number ("1".."4")
 results_gam <- readRDS(sprintf("results/gam/results_gam_%s.rds", key))
+
+# Guard against being handed the null file. results_gam_null_<key>.rds holds a
+# single fit_gam_mod() return (top-level $gam), not a list of them, so it would
+# otherwise be silently misread as a one-model set named after its own fields.
+if (!is.null(results_gam[["gam"]])) {
+  stop(
+    "Loaded a single fitted model, not the numbered model list. ",
+    "The null model is not simulated; pass a numbered-model key."
+  )
+}
 
 # Tentative movement distributions for the GAM kernel (gamma / von Mises). The
 # GAMs are fit on the parametric stp.var design, so these ride along on stp.var
@@ -59,9 +75,9 @@ results_gam <- readRDS(sprintf("results/gam/results_gam_%s.rds", key))
 sl_distr <- attr(deer_mvt$stp.var[[1]], "sl_")
 ta_distr <- attr(deer_mvt$stp.var[[1]], "ta_")
 
-# Simulate every fitted model — failed fits ($gam == "Error") return NA below.
-# Older results_gam files are 8-element positional (no names); fall back to
-# positional numbering so the script runs on both formats.
+# Simulate every numbered model — failed fits ($gam == "Error") return NA below.
+# Pre-naming-contract results files are positional (no names); fall back to
+# positional numbering so the script still runs on them.
 if (is.null(names(results_gam))) {
   names(results_gam) <- as.character(seq_along(results_gam))
 }

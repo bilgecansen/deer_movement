@@ -4,6 +4,9 @@
 #' filters/gam/es_gam.rds. GAM analogue of scripts/issf/compute_es.R (reads the
 #' sims_gam_ files, writes es_gam.rds); the score itself is model-agnostic.
 #'
+#' Numbered models only — inherited from the sims: the null model is not
+#' simulated, so it cannot appear in sims_gam_<key>.rds and needs no exclusion.
+#'
 #' By default, deer that already appear in the existing filters/gam/es_gam.rds are
 #' skipped (resumable reruns). Pass --overwrite to reprocess everything.
 #'

@@ -24,6 +24,12 @@ start=$(date +%s)
 
 for f in results/gam/results_gam_*.rds; do
   base=$(basename "$f" .rds)
+
+  # Only the numbered models are simulated. fit_GAM.R saves the null model to
+  # results_gam_null_<key>.rds, which this glob also matches — skip it (and
+  # skip it silently, so it doesn't inflate the counters).
+  [[ "$base" == results_gam_null_* ]] && continue
+
   key=${base#results_gam_}
   IFS='_' read -r id season year <<< "$key"
 

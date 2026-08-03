@@ -5,6 +5,10 @@
 #' writes udoverlap_gam_<key>. The metric itself (overlap_ud) is model-agnostic,
 #' so only the input/output filenames differ from the iSSF version.
 #'
+#' Numbered models only — no filtering needed here: sims_gam_<key> contains only
+#' the numbered models (run_sims_gam.R does not simulate the null), so whatever
+#' is in the file is by definition the right set.
+#'
 #' Usage: Rscript scripts/gam/run_udoverlap_gam.R <id> <season> <year>
 #'   id     — deer ID
 #'   season — season string (e.g. "fa", "nb")
@@ -45,7 +49,8 @@ start_time <- Sys.time()
 deer_mvt <- readRDS(sprintf("data/tracks/data_%s.rds", key))
 
 # GAM-simulated paths for this deer — named list keyed by the model numbers that
-# were actually simulated (run_sims_gam.R simulates every fitted model).
+# were actually simulated (run_sims_gam.R simulates every numbered model; the
+# null is not simulated and so never appears here).
 results_sim <- readRDS(sprintf("sims/gam/sims_gam_%s.rds", key))
 
 # Model numbers actually present in results_sim

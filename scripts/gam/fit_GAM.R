@@ -12,12 +12,22 @@
 #' prepare_gam_data(); the per-model fit by fit_gam_mod() (both in
 #' helper_functions.R).
 #'
+#' Two things are fit and saved per deer, deliberately kept in separate files:
+#'   * the NULL model (movement + s(HR_center_end)) — the reference every
+#'     numbered model is scored against downstream — to
+#'     results/gam/results_gam_null_<key>.rds;
+#'   * the four numbered candidate models, to
+#'     results/gam/results_gam_<key>.rds.
+#' Keeping them apart means the null can be refit or swapped without touching
+#' the candidate set (and vice versa), and downstream code never has to know
+#' which slot "the null" happens to occupy.
+#'
 #' For each (id, season, year):
-#'   * If the output rds already exists and `overwrite` is FALSE, skip.
+#'   * If both output rds files already exist and `overwrite` is FALSE, skip.
 #'   * Otherwise read the wrangled data, reshape the chosen design's covariate
-#'     table (`gam_input`) into mgcv cox.ph form, fit all candidate formulas
-#'     with fit_gam_mod() (which returns failure-status objects rather than
-#'     erroring per-model), and save the list to results/gam/results_gam_<key>.rds.
+#'     table (`gam_input`) into mgcv cox.ph form, fit the null formula and all
+#'     candidate formulas with fit_gam_mod() (which returns failure-status
+#'     objects rather than erroring per-model), and save both files.
 #' Errors are caught per deer so a single failure does not halt the loop.
 #'
 #' Random points: two designs are wrangled per deer.
@@ -74,11 +84,21 @@ library(furrr)
 source("scripts/helper_functions.R")
 
 # Formulas --------------------------------------------------------------------
-# make_formulas() builds the candidate RHS vector for a given cyclic-tod basis
-# (k_tod, capped per deer) and NDVI-by-landcover 'fs' basis (k_ndvi). fit_gam_mod
-# prepends the "cbind(times, stratum) ~" Cox-PH response. Each model is the GAM
-# translation of the corresponding iSSF formula in fit_issf.R; both use the same
-# contiguous 1-6 numbering (model 6 = the HR-center × landcover interaction).
+# make_null_formula() builds the NULL model and make_formulas() the four
+# numbered candidates, both for a given cyclic-tod basis (k_tod, capped per
+# deer) and NDVI-by-landcover 'fs' basis (k_ndvi). fit_gam_mod prepends the
+# "cbind(times, stratum) ~" Cox-PH response.
+#
+# NULL model = movement + s(HR_center_end). Distance to the home-range centre is
+# the minimal "this deer has a home range" description: any candidate model must
+# beat it to count as evidence that habitat (not just central-place tethering)
+# drives selection. It is fit and stored on its own (see header) and is NOT one
+# of the numbered models.
+#
+# The HR_edge model (formerly numbered 2) is retired: HR_center is the null, and
+# the two are near-redundant descriptions of the same tethering. The HR_edge_end
+# covariate itself is untouched upstream — it is still computed in the wrangle
+# and available in the covariate table, just not fit here.
 #
 # MOVE = parametric gamma / von Mises movement kernel. The three movement
 # covariates enter as parametric main effects (sl_ + log(sl_) + cos(ta_)), which
@@ -97,7 +117,7 @@ source("scripts/helper_functions.R")
 # classes. The global smooth mirrors the iSSF main effect and lets sparse classes
 # pool toward the shared response instead of toward zero.
 #
-# Models 4 & 5 (breeding) put NDVI in exactly this GS form over ALL landcover
+# Models 2 & 3 (breeding) put NDVI in exactly this GS form over ALL landcover
 # classes: a global s(ndvi_end) plus an fs interaction s(ndvi_end, wiscland_end).
 # The fs carries each class's own intercept AND NDVI curve, so per-class landcover
 # selection is part of the GS term -- no separate random intercept is needed
@@ -105,47 +125,55 @@ source("scripts/helper_functions.R")
 # is uninformative (e.g. forest / wetlands / developed) the shared penalty just
 # shrinks that class's deviation toward the global. GS also lets us predict
 # classes a deer never visited (Model GS supports unobserved levels; GI does not).
-# Model 6 uses the same GS form for HR_center (s(HR_center_end) + hc_fs).
+# Model 4 uses the same GS form for HR_center (s(HR_center_end) + hc_fs).
 
-make_formulas <- function(k_tod, k_ndvi, season) {
-  move <- sprintf(
+# Parametric movement kernel, shared by the null and every numbered model.
+make_move <- function(k_tod) {
+  sprintf(
     paste0(
       "sl_ + log(sl_) + cos(ta_) + ",
       "s(tod_, bs = 'cc', k = %1$d, by = sl_)"
     ),
     k_tod
   )
+}
+
+# NULL model: movement + distance to home-range centre.
+make_null_formula <- function(k_tod) {
+  paste(make_move(k_tod), "+ s(HR_center_end)")
+}
+
+make_formulas <- function(k_tod, k_ndvi, season) {
+  move <- make_move(k_tod)
   fs <- sprintf("s(ndvi_end, wiscland_end, bs = 'fs', k = %d)", k_ndvi)
   hc_fs <- sprintf("s(HR_center_end, wiscland_end, bs = 'fs', k = %d)", k_ndvi)
 
   # Always-fit structural models
   f1 <- move # 1 movement only
-  f2 <- paste(move, "+ s(HR_edge_end)")
-  f3 <- paste(move, "+ s(HR_center_end)")
-  f6 <- paste(move, "+ s(HR_center_end) +", hc_fs)
+  f4 <- paste(move, "+ s(HR_center_end) +", hc_fs) # 4 HR-center x landcover
 
-  # Resource models for slots 4 & 5 — season-dependent. Non-breeding (winter)
+  # Resource models for slots 2 & 3 — season-dependent. Non-breeding (winter)
   # deer have no valid MODIS NDVI (snow / dormancy -> all-or-mostly NA), so the
-  # NDVI models (4 & 5) can't be fit; we substitute the landcover-only models
-  # and record them in slots 4 & 5. Either way the object holds 6 models
-  # and slots 4/5 always mean "the resource-selection model".
+  # NDVI models (2 & 3) can't be fit; we substitute the landcover-only models
+  # and record them in slots 2 & 3. Either way the object holds 4 models
+  # and slots 2/3 always mean "the resource-selection model".
   if (season == "nb") {
     # Winter NDVI is unusable; the landcover-only substitutes use a penalised
     # random effect on landcover, s(wiscland_end, bs = 're'), rather than a
     # fixed factor. It shrinks sparse classes and avoids the near-separation
     # that makes the raw factor slow / non-convergent in cox.ph (validated:
     # ~17x faster, no step failures).
-    f4 <- paste(move, "+ s(HR_center_end) + s(wiscland_end, bs = 're')")
-    f5 <- paste(move, "+ s(wiscland_end, bs = 're')")
+    f2 <- paste(move, "+ s(HR_center_end) + s(wiscland_end, bs = 're')")
+    f3 <- paste(move, "+ s(wiscland_end, bs = 're')")
   } else {
     # NDVI x landcover, GS form: global s(ndvi_end) + per-class fs deviations
     # (shared penalty). The fs carries each class's intercept, so landcover
     # selection rides along with the NDVI smooth -- no separate re needed.
-    f4 <- paste(move, "+ s(HR_center_end) + s(ndvi_end) +", fs)
-    f5 <- paste(move, "+ s(ndvi_end) +", fs)
+    f2 <- paste(move, "+ s(HR_center_end) + s(ndvi_end) +", fs)
+    f3 <- paste(move, "+ s(ndvi_end) +", fs)
   }
 
-  stats::setNames(c(f1, f2, f3, f4, f5, f6), c("1", "2", "3", "4", "5", "6"))
+  stats::setNames(c(f1, f2, f3, f4), c("1", "2", "3", "4"))
 }
 
 # Discover deer from data/tracks/ ---------------------------------------------
@@ -172,9 +200,10 @@ dir.create("results/gam", showWarnings = FALSE, recursive = TRUE)
 process_deer <- function(i) {
   key <- keys[i]
   out_path <- sprintf("results/gam/results_gam_%s.rds", key)
+  null_path <- sprintf("results/gam/results_gam_null_%s.rds", key)
 
-  # Skip: output already exists and we're not overwriting
-  if (!overwrite && file.exists(out_path)) {
+  # Skip: both outputs already exist and we're not overwriting
+  if (!overwrite && file.exists(out_path) && file.exists(null_path)) {
     return(list(status = "skip", key = key, audit = NULL))
   }
 
@@ -192,8 +221,18 @@ process_deer <- function(i) {
       n_tod <- length(unique(gam_data$tod_))
       k_tod <- max(3L, min(K_TOD, n_tod - 1L))
 
-      # Season picks the slot-4/5 resource models (NDVI vs landcover; see
-      # make_formulas). results_gam is named by model number ("1".."6").
+      # Null model first, saved on its own. It shares the data prep and k_tod cap
+      # with the candidates but nothing else, so downstream code loads exactly
+      # one reference model without indexing into the candidate list.
+      results_gam_null <- fit_gam_mod(
+        gam_data,
+        make_null_formula(k_tod),
+        select = SELECT
+      )
+      saveRDS(results_gam_null, null_path)
+
+      # Season picks the slot-2/3 resource models (NDVI vs landcover; see
+      # make_formulas). results_gam is named by model number ("1".."4").
       season <- strsplit(key, "_")[[1]][2]
       formulas <- make_formulas(k_tod, K_NDVI, season)
 
@@ -205,17 +244,21 @@ process_deer <- function(i) {
       saveRDS(results_gam, out_path)
 
       # Per-smooth k / shrinkage diagnostics for the end-of-run audit. imap's
-      # index is the model-number name ("1".."6").
-      audit <- purrr::imap_dfr(results_gam, function(r, model_no) {
-        sd <- r$smooth_diag
-        if (is.null(sd)) {
-          return(NULL)
+      # index is the model-number name ("1".."4"); the null is tagged "null" so
+      # the audit covers every fit this script produced.
+      audit <- purrr::imap_dfr(
+        c(list(null = results_gam_null), results_gam),
+        function(r, model_no) {
+          sd <- r$smooth_diag
+          if (is.null(sd)) {
+            return(NULL)
+          }
+          sd$key <- key
+          sd$model <- model_no
+          sd$k_tod <- k_tod
+          sd
         }
-        sd$key <- key
-        sd$model <- model_no
-        sd$k_tod <- k_tod
-        sd
-      })
+      )
 
       list(status = "done", key = key, audit = audit)
     },
