@@ -5,7 +5,7 @@
 #' frame, and apply four sequential model-selection gates.
 #'
 #' Inputs:
-#'   filters/gam/udoverlap_gam_<key>.rds  — list keyed by model: list(bat_uds, svf_score)
+#'   filters/gam/udoverlap_gam_<key>.rds  — list keyed by model: list(bat_uds, svf_agree)
 #'   filters/gam/logscore_gam_<key>.rds   — df: model, total_logp, n_steps, delta_logp
 #'   filters/gam/es_gam.rds               — df: id, season, year, model, energy_score
 #'   data/tracks/data_<key>.rds       — observed steps (stp) -> observed sl_
@@ -19,7 +19,7 @@
 #' s(HR_center_end)) is fit and log-scored separately and does not go through the
 #' gates: it is the reference the numbered models are measured against, not a
 #' candidate competing with them. Concretely —
-#'   * it is never simulated, so it has no bat_uds / svf_score / energy_score;
+#'   * it is never simulated, so it has no bat_uds / svf_agree / energy_score;
 #'   * its log score lives in logscore_gam_null_<key>.rds, which this script
 #'     never reads (delta_logp, already differenced against it, is enough);
 #'   * there is consequently no "null model as fallback" branch at gate 3 —
@@ -32,7 +32,7 @@
 #'
 #' Gates (applied sequentially — only survivors flow into the next step):
 #'   1. bat_uds    >= 0.8
-#'   2. svf_score  >= 0.8
+#'   2. svf_agree  >= 0.8
 #'   3. delta_logp >= 3   (must BEAT the null by this margin — see delta_logp_min)
 #'   4. p_excd     >= 0.5  P(observed sl > energy_score); equivalent to ES below
 #'                         the deer's median step length.
@@ -137,13 +137,19 @@ per_deer_df <- purrr::map_dfr(keys, function(k) {
       tibble::tibble(
         model = as.integer(m),
         bat_uds = NA_real_,
-        svf_score = NA_real_
+        svf_agree = NA_real_
       )
     } else {
+      # udoverlap files written before the rename carry this as `svf_score`.
+      # Accept either name so existing outputs do not need a (multi-hour) rerun.
       tibble::tibble(
         model = as.integer(m),
         bat_uds = x$bat_uds,
-        svf_score = x$svf_score
+        svf_agree = if (is.null(x[["svf_agree"]])) {
+          x[["svf_score"]]
+        } else {
+          x[["svf_agree"]]
+        }
       )
     }
   })
@@ -205,7 +211,7 @@ step1 <- all_df |>
   dplyr::filter(!is.na(bat_uds), bat_uds >= ud_min)
 
 step2 <- step1 |>
-  dplyr::filter(!is.na(svf_score), svf_score >= svf_min)
+  dplyr::filter(!is.na(svf_agree), svf_agree >= svf_min)
 
 # Step 3: a model passes iff it beats the null by at least delta_logp_min. This
 # is now a plain row-wise filter with no per-deer grouping: the null is no longer
@@ -263,7 +269,7 @@ cat(sprintf(
 #                kept vs. dropped at that gate, so you can see what got
 #                eliminated:
 #                   bat_uds:    all_df vs. step1
-#                   svf_score:  step1  vs. step2
+#                   svf_agree:  step1  vs. step2
 #                   delta_logp: step2  vs. step3
 #                   p_excd:     step3  vs. step4
 library(patchwork)
@@ -328,13 +334,13 @@ violin_panel_diff <- function(input_df, kept_df, y, hline, fill, title = y) {
 }
 
 panels_pre <- (violin_panel(all_df, "bat_uds", ud_min, "#FF644E") |
-  violin_panel(all_df, "svf_score", svf_min, "#16E7CF")) /
+  violin_panel(all_df, "svf_agree", svf_min, "#16E7CF")) /
   (violin_panel(all_df, "delta_logp", delta_logp_min, "#BF5AF2") |
     violin_panel(all_df, "p_excd", p_excd_min, "#61D836")) +
   patchwork::plot_annotation(title = "Pre-filter (all deer x model rows)")
 
 panels_post <- (violin_panel_diff(all_df, step1, "bat_uds", ud_min, "#FF644E") |
-  violin_panel_diff(step1, step2, "svf_score", svf_min, "#16E7CF")) /
+  violin_panel_diff(step1, step2, "svf_agree", svf_min, "#16E7CF")) /
   (violin_panel_diff(step2, step3, "delta_logp", delta_logp_min, "#BF5AF2") |
     violin_panel_diff(step3, step4, "p_excd", p_excd_min, "#61D836")) +
   patchwork::plot_layout(guides = "collect") &

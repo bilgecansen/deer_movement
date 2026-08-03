@@ -6,7 +6,7 @@
 #' Outputs five PDFs in plots/, all with the same aesthetic:
 #'   deer_paths_selected.pdf            — models that passed every gate
 #'   deer_paths_step1_eliminated.pdf    — failed bat_uds    gate
-#'   deer_paths_step2_eliminated.pdf    — failed svf_score  gate
+#'   deer_paths_step2_eliminated.pdf    — failed svf_agree  gate
 #'   deer_paths_step3_eliminated.pdf    — failed delta_logp gate (incl. null
 #'                                         model when an alt passed)
 #'   deer_paths_step4_eliminated.pdf    — failed p_excd     gate
@@ -62,7 +62,7 @@ plot_deer_models <- function(key, model_info, title, sim_alpha = 0.25) {
       "model %d\nUD %s | SVF %s | dlogp %s | P(sl>es) %s",
       model_info$model,
       fmt(model_info$bat_uds, 2),
-      fmt(model_info$svf_score, 2),
+      fmt(model_info$svf_agree, 2),
       fmt(model_info$delta_logp, 1),
       fmt(model_info$p_excd, 2)
     ),

@@ -65,7 +65,7 @@ results_ud <- suppressMessages(suppressWarnings(
       sim_m <- results_sim[[as.character(m)]]
 
       if (length(sim_m) == 1 && is.na(sim_m)) {
-        return(list(bat_uds = NA_real_, svf_score = NA_real_))
+        return(list(bat_uds = NA_real_, svf_agree = NA_real_))
       }
 
       # If overlap_ud errors (commonly due to a degenerate ctmm fit on one
@@ -76,7 +76,7 @@ results_ud <- suppressMessages(suppressWarnings(
         overlap_ud(deer_mvt$stp[[1]], sim_m, n_sim = n_sim),
         error = function(e) {
           message(sprintf("  Model %d failed: %s", m, conditionMessage(e)))
-          list(bat_uds = NA_real_, svf_score = NA_real_)
+          list(bat_uds = NA_real_, svf_agree = NA_real_)
         }
       )
     },

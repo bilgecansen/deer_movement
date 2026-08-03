@@ -111,14 +111,12 @@ svf_score <- function(ms_data, ms_model, ref) {
   1 - iad / norm
 }
 
-#' Estimate overlap of utilization distributions
-#' @param data Observed paths
-#' @param sim Simulated paths
-#' @param n_sim number of simulated paths
 #' Estimate UD overlap and SVF agreement between observed and simulated paths.
 #' @param data Observed paths
 #' @param sim Simulated paths
 #' @param n_sim number of simulated paths
+#' @return list(bat_uds, svf_agree): Bhattacharyya UD overlap and SVF agreement,
+#'   both in [0, 1] with 1 = perfect agreement.
 overlap_ud <- function(data, sim, n_sim) {
   z1_starts <- data |>
     dplyr::select(x = x1_, y = y1_, timestamp = t1_)
@@ -196,12 +194,15 @@ overlap_ud <- function(data, sim, n_sim) {
   ))
   bat_uds <- ctmm::overlap(list(z1_uds, z2_uds))$CI[1, 2, 2]
 
-  # ---- SVF score (replaces bat_ctmm) ---------------------------------------
+  # ---- SVF agreement (replaces bat_ctmm) ------------------------------------
+  # Named svf_agree, not svf_score, so the value is never confused with the
+  # svf_score() function that produces it. Files written before this rename
+  # carry the element as `svf_score`; the filter scripts read either name.
   svf <- svf_score(ms1, ms2_avg, ref = z1)
 
   list(
     bat_uds = bat_uds,
-    svf_score = svf
+    svf_agree = svf
   )
 }
 

@@ -74,7 +74,7 @@ results_ud <- suppressMessages(suppressWarnings(
       sim_m <- results_sim[[as.character(m)]]
 
       if (length(sim_m) == 1 && is.na(sim_m)) {
-        return(list(bat_uds = NA_real_, svf_score = NA_real_))
+        return(list(bat_uds = NA_real_, svf_agree = NA_real_))
       }
 
       tryCatch(
@@ -85,7 +85,7 @@ results_ud <- suppressMessages(suppressWarnings(
             m,
             conditionMessage(e)
           ))
-          list(bat_uds = NA_real_, svf_score = NA_real_)
+          list(bat_uds = NA_real_, svf_agree = NA_real_)
         }
       )
     },
