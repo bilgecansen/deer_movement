@@ -50,10 +50,11 @@ merge_NDVI <- function(
     "Dec"
   )
 
-  start_month <- paste(year, "-01-01", sep = "")
-  months <- seq(as.Date(start_month), by = "month", length.out = 12)
-
-  time(z_all) <- months
+  # Mid-month timestamps, matching load_ndvi(). Stamping the 1st makes amt's
+  # nearest-in-time layer lookup at fit time resolve to the FOLLOWING month for
+  # any step past mid-month, which then disagrees with the calendar-month lookup
+  # used at simulation / scoring time. See ndvi_layer_times() for the full note.
+  time(z_all) <- ndvi_layer_times(year)
 
   # Warp onto the working grid AND write the output in one shot. Layer names
   # and time stamps travel via the .aux.xml sidecar that warp_to_template
