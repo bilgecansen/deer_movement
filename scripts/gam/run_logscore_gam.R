@@ -145,9 +145,9 @@ results_logscore <- furrr::future_map(
 
     if (is.null(model_gam)) {
       return(data.frame(
-        model = m,
-        total_logp = NA_real_,
-        n_steps = 0L
+        burst_ = NA, step_index = NA_integer_,
+        t1_ = as.POSIXct(NA), logp = NA_real_,
+        status = "model_failed_to_fit", model = m
       ))
     }
 
@@ -163,11 +163,11 @@ results_logscore <- furrr::future_map(
       ta_distr = ta_distr
     )
 
-    data.frame(
-      model = m,
-      total_logp = sum(ll_df$logp, na.rm = TRUE),
-      n_steps = sum(!is.na(ll_df$logp))
-    )
+    # Return the PER-STEP scores. Totals are formed in the main process once the
+    # step set common to every model is known (see below) -- summing here would
+    # let each model total over its own step set.
+    ll_df$model <- m
+    ll_df
   },
   .options = furrr::furrr_options(
     packages = c("mgcv", "amt", "terra", "sf", "dplyr", "lubridate", "foreach"),
@@ -179,17 +179,69 @@ results_logscore <- furrr::future_map(
 future::plan(sequential)
 gc()
 
-# Split null from numbered, and compute delta_logp vs. the null ---------------
+# Total over the COMMON step set --------------------------------------------
+# Every model is totalled over exactly the steps that ALL of them scored, so
+# n_steps is identical across models by construction and delta_logp is a
+# like-for-like difference rather than one that happens to line up.
+#
+# Two quite different things produce an unscored step, and they are counted
+# separately rather than both vanishing into na.rm = TRUE:
+#   skipped_no_heading  first step of a burst; nothing precedes it, so no
+#                       incoming heading exists. By design, ~19% of steps.
+#   failed_*            a real failure. Overwhelmingly failed_outside_disc: the
+#                       observed step was longer than max.dist (the 0.99 quantile
+#                       of the tentative gamma) so its endpoint lies outside the
+#                       candidate disc. Routine -- about 75% of deer have at
+#                       least one -- and previously invisible.
+per_step <- dplyr::bind_rows(results_logscore)
+
+step_key <- function(d) paste(d$burst_, d$step_index)
+scored <- per_step %>% dplyr::filter(!is.na(logp))
+n_models <- dplyr::n_distinct(per_step$model)
+common <- scored %>%
+  dplyr::count(burst_, step_index) %>%
+  dplyr::filter(n == n_models) %>%
+  dplyr::mutate(k = paste(burst_, step_index)) %>%
+  dplyr::pull(k)
+
+totals <- per_step %>%
+  dplyr::mutate(k = paste(burst_, step_index)) %>%
+  dplyr::group_by(model) %>%
+  dplyr::summarise(
+    total_logp = if (all(is.na(logp))) {
+      NA_real_
+    } else {
+      sum(logp[k %in% common])
+    },
+    n_steps = sum(k %in% common & !is.na(logp)),
+    n_scored_alone = sum(!is.na(logp)),
+    n_skipped_no_heading = sum(status == "skipped_no_heading"),
+    n_failed = sum(grepl("^failed_", status)),
+    n_dropped_for_common = sum(!is.na(logp) & !(k %in% common)),
+    .groups = "drop"
+  )
+
+cat(sprintf(
+  "Steps: %d observed | %d scored by every model (common set)\n",
+  dplyr::n_distinct(step_key(per_step)),
+  length(common)
+))
+if (any(totals$n_failed > 0)) {
+  cat("Failure breakdown (non-heading):\n")
+  print(per_step %>%
+    dplyr::filter(grepl("^failed_", status)) %>%
+    dplyr::count(model, status))
+}
+
+# Split null from numbered, and compute delta_logp vs. the null.
 # delta_logp stays on the numbered rows because it is a property of the
 # comparison, not of the null: it is only defined against the null scored on the
 # same steps in this same run. The null's own scores are saved untouched in
 # their own file.
-results_all <- dplyr::bind_rows(results_logscore)
-
-null_results <- results_all %>% dplyr::filter(model == "null")
+null_results <- totals %>% dplyr::filter(model == "null")
 null_logp <- null_results$total_logp
 
-results <- results_all %>%
+results <- totals %>%
   dplyr::filter(model != "null") %>%
   dplyr::mutate(model = as.integer(model)) %>%
   dplyr::arrange(model) %>%

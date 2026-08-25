@@ -568,7 +568,8 @@ onestep_logscore_gam <- function(
             burst_ = b,
             step_index = i,
             t1_ = burst_data$t1_[i],
-            logp = NA_real_
+            logp = NA_real_,
+            status = "skipped_no_heading"
           )
           next
         }
@@ -614,22 +615,41 @@ onestep_logscore_gam <- function(
             burst_ = b,
             step_index = i,
             t1_ = burst_data$t1_[i],
-            logp = NA_real_
+            logp = NA_real_,
+            status = "failed_kernel"
           )
           next
         }
 
-        # Extract probability at observed endpoint
+        # Extract probability at observed endpoint.
+        #
+        # An NA here is not a numerical accident: the kernel raster spans only
+        # the candidate disc of radius max.dist (the 0.99 quantile of the
+        # tentative gamma), so an observed step LONGER than that lands outside it
+        # and cannot be scored. Verified across three deer -- the count of
+        # unscoreable steps equalled the count of steps exceeding max.dist
+        # exactly, and the longest scored step was always just under it. This is
+        # a property of the disc, not of the cropped raster: the failing steps
+        # sat no closer to the map edge than the scored ones, and the
+        # tolerance.outside warning never fired.
         obs_pt <- cbind(burst_data$x2_[i], burst_data$y2_[i])
         p <- terra::extract(kernel_rast$redistribution.kernel, obs_pt)[1, 1]
 
-        lp <- if (!is.na(p) && p > 0) log(p) else NA_real_
+        st <- if (is.na(p)) {
+          "failed_outside_disc"
+        } else if (p <= 0) {
+          "failed_zero_density"
+        } else {
+          "ok"
+        }
+        lp <- if (identical(st, "ok")) log(p) else NA_real_
 
         step_results[[i]] <- data.frame(
           burst_ = b,
           step_index = i,
           t1_ = burst_data$t1_[i],
-          logp = lp
+          logp = lp,
+          status = st
         )
       }
 

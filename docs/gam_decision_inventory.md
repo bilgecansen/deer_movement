@@ -43,9 +43,11 @@ read first.
 | 15 | Steps actually fit | Only steps with a turning angle. First-in-burst steps and whole 2-step bursts are dropped by `random_steps` | — (amt behaviour) | inherited |
 
 **#15 is worth a hard look.** On the test deer, models are fit on **42** steps but
-log-scored on **77**. That is not a bug, but "in-sample log score" includes 35
-steps the model never saw, and `n_steps` in the logscore files is not the fitting
-sample size.
+log-scored on **77** — now 52, since first-in-burst steps are no longer scored
+(see #27). That is not a bug, but "in-sample log score" still includes steps the
+model never saw, and `n_steps` in the logscore files is not the fitting sample
+size. The exact rule amt applies: bursts shorter than 3 steps are dropped
+entirely, and every surviving burst loses its first step (no turning angle).
 
 ### 1.3 Simulation
 
@@ -67,7 +69,7 @@ sample size.
 | # | Decision | Setting | Alternative not taken | Who |
 |---|---|---|---|---|
 | 26 | Log-score steps | Every observed step in `stp`, including those excluded from fitting (see #15) | Restrict to fitted steps | inherited |
-| 27 | Unscoreable steps | `sum(logp, na.rm = TRUE)`; `n_steps` counts only non-NA. A step whose kernel fails is **silently dropped**, not counted as a failure | Propagate NA; count and report drops | inherited |
+| 27 | Unscoreable steps | Totals are formed over the step set **common to every model**, and each unscored step is classified: `skipped_no_heading` (first in burst, ~19% of steps) vs `failed_*` (real). Counts are returned alongside the totals | The old behaviour: `sum(logp, na.rm = TRUE)` with failures silently absorbed | me |
 | 28 | Null scoring | Scored in the **same run** as the numbered models, same rasters, same steps | Separate invocation | me |
 | 29 | delta_logp storage | Lives on the numbered rows; the null file holds raw scores only | Store delta in both; compute downstream | me |
 | 30 | UD overlap statistic | `ctmm::overlap(...)$CI[1,2,2]` — the point estimate, CI discarded | Keep the interval | inherited |
@@ -75,11 +77,24 @@ sample size.
 | 32 | SVF agreement | `1 − ∫\|γ_a−γ_b\| / max(∫γ_a, ∫γ_b)`, integrated in log-Δt | Linear-Δt; data-only normalisation | inherited |
 | 33 | Energy score matching | Observed and simulated times rounded to the nearest hour to pair them | Exact timestamp matching | inherited |
 
-**#27 is the one I would most want you to look at.** A model whose kernel fails on
-some steps gets a *better-looking* total log score than one that succeeds
-everywhere, because failures are dropped rather than penalised. The
-"n_steps identical across models" check now guards this, and it currently passes
-on all 372 GAM deer — but the guard is new, not the behaviour.
+**#27 was fixed after this inventory was first written.** Totals are now taken
+over the step set every model scored, so `n_steps` is equal across models by
+construction rather than by luck, and `delta_logp` is a like-for-like difference.
+Unscored steps are classified rather than pooled.
+
+Two things that investigation corrected. Failures are **not** rare: 75% of deer
+have at least one (median 2 steps, max 9). And essentially all of them are
+`failed_outside_disc` — the observed step was longer than `max.dist`, the 0.99
+quantile of the tentative gamma and hence the radius of the candidate disc, so
+its endpoint lies outside the kernel raster entirely. Verified across three deer:
+the count of unscoreable steps equalled the count of steps exceeding `max.dist`
+exactly. This is a property of the disc, not of `CROP_BUFFER_M` — the failing
+steps sat no closer to the map edge than the scored ones.
+
+The open question it raises: the log score never tests a model's ability to
+predict the deer's longest steps, because those steps are structurally
+unscoreable. Raising `max.dist` would fix that at roughly 1.5-2x the scoring
+cost (disc area scales with radius squared).
 
 ### 1.5 Filtering
 
