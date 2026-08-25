@@ -17,5 +17,9 @@ echo "### Tier 3: analytic reductions + contracts (gam) ###"
 Rscript scripts/checks/check_kernel_gam.R "$@" || rc=1
 
 echo
+echo "### Tier 2: iSSF vs GAM on real deer ###"
+Rscript scripts/checks/check_differential_gam.R 5 30 || rc=1
+
+echo
 if [[ $rc -eq 0 ]]; then echo "ALL CHECKS PASSED"; else echo "SOME CHECKS FAILED (exit $rc)"; fi
 exit $rc
