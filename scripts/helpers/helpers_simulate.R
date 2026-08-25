@@ -158,30 +158,46 @@ simulate_movement <- function(
             method = 'near'
           )
 
-          # Start from previous chunk's last point, or burst start
+          # Start from previous chunk's last point, or burst start.
+          #
+          # The start's ta_ is the INCOMING HEADING -- the absolute bearing of
+          # the preceding step -- which the kernel subtracts from each candidate
+          # bearing to get a turning angle. make_start() on a bare one-row track
+          # cannot know it and silently returns 0, i.e. due east.
+          #
+          #  * At a burst start no heading exists (nothing precedes the first
+          #    step), so 0 is unavoidable and only that one step is affected.
+          #  * At a MONTH-CHUNK restart inside a burst a heading does exist -- the
+          #    bearing of the last simulated step -- and discarding it made the
+          #    path turn as if it had just been heading east. That is the same
+          #    defect fixed in onestep_logscore_gam; here it hits once per month
+          #    boundary per burst rather than at every step.
           if (is.null(sim_burst)) {
-            start_row <- mo_data[1, c('x1_', 'y1_', 't1_')]
-            start_pt <- amt::make_track(
-              start_row,
-              .x = x1_,
-              .y = y1_,
-              .t = t1_,
+            start_pt <- amt::make_start(
+              as.numeric(mo_data[1, c('x1_', 'y1_')]),
+              ta_ = 0,
+              time = mo_data$t1_[1],
+              dt = lubridate::hours(4),
               crs = terra::crs(env_test)
             )
           } else {
-            start_row <- sim_burst[nrow(sim_burst), ]
-            start_pt <- amt::make_track(
-              start_row,
-              .x = x_,
-              .y = y_,
-              .t = t_,
+            n_prev <- nrow(sim_burst)
+            prev_head <- if (n_prev >= 2) {
+              atan2(
+                sim_burst$y_[n_prev] - sim_burst$y_[n_prev - 1],
+                sim_burst$x_[n_prev] - sim_burst$x_[n_prev - 1]
+              )
+            } else {
+              0
+            }
+            start_pt <- amt::make_start(
+              c(sim_burst$x_[n_prev], sim_burst$y_[n_prev]),
+              ta_ = prev_head,
+              time = sim_burst$t_[n_prev],
+              dt = lubridate::hours(4),
               crs = terra::crs(env_test)
             )
           }
-
-          start_pt <- start_pt |>
-            amt::make_start() |>
-            amt::mutate(dt = lubridate::hours(4))
 
           kernel <- build_kernel(env_test, start_pt)
 
@@ -194,10 +210,18 @@ simulate_movement <- function(
             return(NULL)
           }
 
-          sim_burst <- dplyr::bind_rows(
-            sim_burst,
-            sim_result |> dplyr::select(x_, y_, t_)
-          )
+          # run_path returns the START position followed by n_steps simulated
+          # ones. For a continuation chunk that start IS the previous chunk's
+          # last position, so binding it unchanged duplicated one position --
+          # identical coordinates AND timestamp -- at every month boundary,
+          # injecting a zero-length step and a repeated time into the path
+          # (a 193-step burst came out with 195 positions instead of 194).
+          # Drop it; only the first chunk contributes its start.
+          new_rows <- sim_result |> dplyr::select(x_, y_, t_)
+          if (!is.null(sim_burst)) {
+            new_rows <- new_rows[-1, , drop = FALSE]
+          }
+          sim_burst <- dplyr::bind_rows(sim_burst, new_rows)
         }
 
         sim_burst |> dplyr::mutate(burst_ = b)
