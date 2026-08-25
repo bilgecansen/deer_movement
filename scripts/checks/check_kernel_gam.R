@@ -27,7 +27,7 @@
 
 suppressPackageStartupMessages({
   library(mgcv); library(amt); library(terra)
-  library(tidyverse); library(sf); library(ctmm)
+  library(tidyverse); library(sf); library(ctmm); library(foreach)
 })
 source("scripts/helper_functions.R")
 source("scripts/checks/check_helpers.R")
@@ -274,6 +274,60 @@ check("stratum count equals observed step count",
 check("as_tibble() restores correct grouping on steps objects",
       nrow(per) == n_grp,
       sprintf("%d groups vs %d distinct strata", nrow(per), n_grp))
+
+# ---- K8 ---------------------------------------------------------------------
+# The scoring code must condition on the deer's ACTUAL incoming heading. The
+# kernel converts a candidate endpoint to a turning angle via
+# ta_ = bearing - start$ta_, so start$ta_ is a reference direction, not a turning
+# angle. amt::make_start() on a bare one-row track returns ta_ = 0 (due east);
+# scoring every step from such a start evaluates each one as though the deer had
+# just been travelling east, which scrambles cos(ta_) by up to ~0.8 log units per
+# step and shifts delta_logp by roughly the size of the gate-3 threshold.
+check_section("K8  scoring conditions on the observed incoming heading")
+
+bare <- stp[1, c("x1_", "y1_", "t1_")] |>
+  amt::make_track(.x = x1_, .y = y1_, .t = t1_, crs = 6610) |>
+  amt::make_start()
+check("amt::make_start() on one point still defaults to ta_ = 0 (the trap)",
+      isTRUE(bare$ta_[1] == 0),
+      sprintf("ta_ = %s", bare$ta_[1]))
+
+# First-in-burst steps have no preceding step, so no heading exists; they must be
+# skipped rather than scored from an invented direction.
+heads <- stp |> dplyr::group_by(burst_) |>
+  dplyr::mutate(ph = dplyr::lag(atan2(y2_ - y1_, x2_ - x1_))) |> dplyr::ungroup()
+n_first <- sum(is.na(heads$ph))
+
+envk2 <- envc
+envk2$ndvi <- terra::resample(ndvic[[lubridate::month(stp$t1_[1])]], envc)
+ls_out <- onestep_logscore_gam(stp, envk2, ndvic, gam_fit,
+                               sl_distr = sl_distr, ta_distr = ta_distr)
+check("every first-in-burst step is skipped, every other step scored",
+      sum(is.na(ls_out$logp)) == n_first &&
+        sum(!is.na(ls_out$logp)) == nrow(stp) - n_first,
+      sprintf("%d scored + %d skipped = %d steps (%d are first-in-burst)",
+              sum(!is.na(ls_out$logp)), sum(is.na(ls_out$logp)),
+              nrow(ls_out), n_first))
+
+# Direct: scoring with the true heading must differ from scoring with ta_ = 0.
+# If these ever agree, the heading is being ignored again.
+i2 <- which(!is.na(heads$ph))[1]
+lp_at <- function(ta_start) {
+  st <- amt::make_start(c(heads$x1_[i2], heads$y1_[i2]), ta_ = ta_start,
+                        time = heads$t1_[i2], dt = lubridate::hours(4), crs = 6610)
+  k <- tryCatch(redistribution_kernel_gam(
+    x = gam_fit, map = envk2, start = st, fun = gam_cov_fun,
+    sl_distr = sl_distr, ta_distr = ta_distr,
+    compensate.movement = TRUE, as.rast = TRUE)$redistribution.kernel,
+    error = function(e) NULL)
+  if (is.null(k)) return(NA_real_)
+  v <- terra::extract(k, cbind(heads$x2_[i2], heads$y2_[i2]))
+  log(as.numeric(v[1, ncol(v)]))
+}
+d_head <- lp_at(heads$ph[i2]) - lp_at(0)
+check("the start's heading actually changes the kernel (not ignored)",
+      is.finite(d_head) && abs(d_head) > 1e-9,
+      sprintf("log p differs by %.4g between true heading and ta_ = 0", d_head))
 
 # ---- K7 ---------------------------------------------------------------------
 check_section("K7  metric identities")

@@ -534,10 +534,44 @@ onestep_logscore_gam <- function(
   results <- foreach(b = bursts, .combine = "rbind") %do%
     {
       burst_data <- stp_data |> dplyr::filter(burst_ == b)
+
+      # Incoming heading: the ABSOLUTE bearing of the preceding step in this
+      # burst. The kernel turns a candidate endpoint into a turning angle with
+      # ta_ = bearing - start$ta_, so start$ta_ must carry that heading -- it is
+      # a reference direction, not a turning angle, despite the name.
+      #
+      # make_start() on a single point cannot know the heading and returns 0,
+      # i.e. due east. Scoring every step from a start built that way evaluates
+      # each one as though the deer had just been travelling east, so cos(ta_) is
+      # measured off the wrong baseline. Measured on 7193_fa_2020: per-step log p
+      # off by up to 0.81 (sd 0.44), and because each model fits its own cos(ta_)
+      # coefficient the error does not cancel in delta_logp -- it shifted by
+      # ~4.4 for a median-length deer, against a gate-3 threshold of 3.
+      #
+      # The first step of a burst has no preceding step, so no heading exists for
+      # it. Rather than invent one, it is skipped (logp = NA) -- inventing a
+      # heading is what produced the bug.
+      burst_data$prev_head <- dplyr::lag(
+        atan2(
+          burst_data$y2_ - burst_data$y1_,
+          burst_data$x2_ - burst_data$x1_
+        )
+      )
+
       current_month <- NULL
       step_results <- vector("list", nrow(burst_data))
 
       for (i in seq_len(nrow(burst_data))) {
+        # No heading recoverable (first step of the burst): not scoreable.
+        if (is.na(burst_data$prev_head[i])) {
+          step_results[[i]] <- data.frame(
+            burst_ = b,
+            step_index = i,
+            t1_ = burst_data$t1_[i],
+            logp = NA_real_
+          )
+          next
+        }
         # Update NDVI only when month changes
         mo <- lubridate::month(burst_data$t1_[i])
         if (is.null(current_month) || mo != current_month) {
@@ -549,16 +583,16 @@ onestep_logscore_gam <- function(
           current_month <- mo
         }
 
-        # Build start point from observed location
-        start_pt <- burst_data[i, c("x1_", "y1_", "t1_")] |>
-          amt::make_track(
-            .x = x1_,
-            .y = y1_,
-            .t = t1_,
-            crs = terra::crs(env_test)
-          ) |>
-          amt::make_start() |>
-          amt::mutate(dt = lubridate::hours(4))
+        # Build the start from the observed location AND the observed incoming
+        # heading. make_start() is given ta_ explicitly here; called without it
+        # (as on a bare one-row track) it silently defaults to 0.
+        start_pt <- amt::make_start(
+          c(burst_data$x1_[i], burst_data$y1_[i]),
+          ta_ = burst_data$prev_head[i],
+          time = burst_data$t1_[i],
+          dt = lubridate::hours(4),
+          crs = terra::crs(env_test)
+        )
 
         # Build GAM redistribution kernel as raster
         kernel_rast <- tryCatch(
