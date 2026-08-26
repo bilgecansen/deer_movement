@@ -362,12 +362,8 @@ if (!file.exists(null_path)) {
 
 # 13 ---- delta_logp against the GAM null -------------------------------------
 # Gate 3 compares each numbered amt model to the GAM null. Here for one step; in
-# production it is the sum over every step both models scored.
-#
-# The caveat to keep in mind: the GAM null carries a cyclic time-of-day smooth,
-# a more flexible movement block than the day/night factor this amt model uses.
-# So delta_logp mixes "does habitat help" with "my movement block is less
-# flexible than the reference's".
+# production it is the sum over every step both models scored. Both paths share
+# the one GAM null by design.
 cat(sprintf("logp amt %.4f | GAM null %.4f | delta %.4f (this step)\n",
             
             logp, logp_null, logp - logp_null))

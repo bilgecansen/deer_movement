@@ -11,12 +11,6 @@
 #' ORDERING: fit_GAM.R must have run first, since the null comes from the GAM
 #' side. The script stops with a clear message if the null file is missing.
 #'
-#' CAVEAT worth remembering: the GAM null carries a cyclic time-of-day smooth,
-#' a more flexible movement block than the day/night factor the amt models use.
-#' delta_logp therefore mixes "does habitat help" with "my movement block is
-#' less flexible than the reference's", and the amt models are handicapped by
-#' roughly the movement-block gain (~0.017-0.066 log units per step).
-#'
 #' Usage: Rscript run_logscore_amt.R <id> <season> <year>
 #'   id     — deer ID
 #'   season — season string (e.g. "fa", "nb")

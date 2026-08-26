@@ -9,11 +9,8 @@
 #'
 #' NO NULL MODEL IS FIT HERE. The amt models are compared against the GAM null
 #' (movement + s(HR_center_end)) from results/gam/results_gam_null_<key>.rds, so
-#' fit_GAM.R must have been run before any amt log score. The consequence worth
-#' remembering: the GAM null carries a cyclic time-of-day smooth, a more
-#' flexible movement block than the day/night factor these models use, so
-#' delta_logp mixes "does habitat help" with "my movement block is less flexible
-#' than the reference's".
+#' fit_GAM.R must have been run before any amt log score. One shared null across
+#' both paths is deliberate.
 #'
 #' Configuration: edit `overwrite` below before running.
 
