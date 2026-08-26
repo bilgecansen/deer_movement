@@ -3,7 +3,7 @@
 # Model-agnostic scores computed from observed vs. simulated paths: energy
 # score, semi-variance function agreement, and utilisation-distribution
 # overlap. Consumed by the compute_es_* and run_udoverlap_* runners on both the
-# iSSF and GAM sides. Model-specific scores (log score) live with their path.
+# amt and GAM sides. Model-specific scores (log score) live with their path.
 #
 # Part of the helper library split out of scripts/helper_functions.R, which
 # now sources every file in this folder. Scripts keep sourcing that one

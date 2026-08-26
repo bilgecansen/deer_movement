@@ -1,5 +1,5 @@
 #' @description
-#' Differential test on REAL deer: the iSSF and GAM paths are two independent
+#' Differential test on REAL deer: the amt and GAM paths are two independent
 #' implementations of the same estimator, so where they are given the same data
 #' and the same model structure they must agree.
 #'
@@ -103,7 +103,7 @@ for (key in keys) {
   ci <- coef(iss$model)[TERMS]
   cg <- coef(gm)[TERMS]
   max_cd <- max(abs(as.numeric(cg - ci)))
-  cat(sprintf("  coefficients (issf | gam): %s\n",
+  cat(sprintf("  coefficients (amt | gam): %s\n",
       paste(sprintf("%s %.5f|%.5f", TERMS, ci, cg), collapse = "  ")))
   check(sprintf("%s: coefficients agree", key), max_cd < 1e-4,
         sprintf("max |diff| = %.2e", max_cd))
@@ -140,20 +140,20 @@ for (key in keys) {
       error = function(e) NULL)
     if (is.null(ki) || is.null(kg)) return(NULL)
     at <- cbind(s$x2_[i], s$y2_[i])
-    tibble(issf = log(dens(ki, at)), gam = log(dens(kg, at)))
-  }) |> dplyr::filter(is.finite(issf), is.finite(gam))
+    tibble(amt = log(dens(ki, at)), gam = log(dens(kg, at)))
+  }) |> dplyr::filter(is.finite(amt), is.finite(gam))
 
   if (nrow(lp) < 5) {
     check(sprintf("%s: enough steps scored by both", key), NA,
           sprintf("only %d", nrow(lp)))
     next
   }
-  dd <- lp$gam - lp$issf
-  cat(sprintf("  per-step log p over %d steps: mean issf %.4f, mean gam %.4f\n",
-              nrow(lp), mean(lp$issf), mean(lp$gam)))
+  dd <- lp$gam - lp$amt
+  cat(sprintf("  per-step log p over %d steps: mean amt %.4f, mean gam %.4f\n",
+              nrow(lp), mean(lp$amt), mean(lp$gam)))
   check(sprintf("%s: per-step probabilities agree", key), max(abs(dd)) < 1e-6,
         sprintf("max |diff| = %.2e, cor = %.8f",
-                max(abs(dd)), cor(lp$issf, lp$gam)))
+                max(abs(dd)), cor(lp$amt, lp$gam)))
 
   summary_rows[[key]] <- tibble(
     key = key, season = season, n_strata = max(gd$stratum),

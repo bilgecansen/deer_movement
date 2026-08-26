@@ -2,7 +2,7 @@
 #
 # Turning observed relocations into step-selection data: random-point
 # generation and the covariate extraction that attaches landcover, NDVI and
-# home-range values to each observed and random step. Shared by the iSSF and
+# home-range values to each observed and random step. Shared by the amt and
 # GAM paths, which both fit on the output.
 #
 # Part of the helper library split out of scripts/helper_functions.R, which
@@ -19,9 +19,9 @@
 #' @param n_pts Number of random points per step
 #' @param water Binary raster for water bodies
 #' @param model Sampling design for the random points:
-#'   * "issf" — step lengths / turning angles drawn from gamma and von Mises
+#'   * "amt" — step lengths / turning angles drawn from gamma and von Mises
 #'     distributions fitted to the data (amt defaults). Movement covariates are
-#'     then corrections to these tentative distributions (the standard iSSF).
+#'     then corrections to these tentative distributions (the standard amt).
 #'     Also usable for GAMs with a *parametric* movement kernel.
 #'   * "nonp" — points drawn uniformly over a disc of radius R = max observed
 #'     step length (turning angle ~ Unif(-pi, pi), step length =
@@ -32,7 +32,7 @@ make_random_pt_extraction <- function(
   data,
   n_pts,
   water,
-  model = c("issf", "nonp"),
+  model = c("amt", "nonp"),
   stp_col = "stp",
   output_col = "random.stp"
 ) {
@@ -50,11 +50,11 @@ make_random_pt_extraction <- function(
   # Start with buffer for water removal
   n_random <- ceiling(n_pts * 10)
 
-  # Generate random steps. "issf" samples from fitted gamma / von Mises
+  # Generate random steps. "amt" samples from fitted gamma / von Mises
   # distributions (amt defaults); "nonp" samples uniformly over a disc of
   # radius R = max observed step length (amt draws from the rand_* pools with
   # replacement, so a fixed pool gives good coverage at any step count).
-  rs <- if (model == "issf") {
+  rs <- if (model == "amt") {
     amt::random_steps(data_step, n_control = n_random)
   } else {
     R <- max(data_step$sl_, na.rm = TRUE)

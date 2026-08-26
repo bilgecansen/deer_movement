@@ -1,8 +1,9 @@
 # Simulation orchestration (both paths) ----------------------------------------
 #
-# simulate_movement(): the seam between the iSSF and GAM paths. Its `method`
-# argument picks the redistribution kernel and path simulator -- amt's for
-# iSSF, ours for GAM -- while the burst/month orchestration, NDVI swapping and
+# simulate_movement(): the seam between the amt and GAM paths. Its `method`
+# argument picks the redistribution kernel and path simulator -- the amt
+# package's for the amt path, ours for GAM -- while the burst/month
+# orchestration, NDVI swapping and
 # start-point handling around it are shared. This is the only helper that
 # reaches into both paths, which is why it sits in its own file rather than in
 # either one.
@@ -11,7 +12,7 @@
 # now sources every file in this folder. Scripts keep sourcing that one
 # aggregator, so nothing here needs to be sourced directly.
 
-#' Simulate a single movement path (iSSF or GAM)
+#' Simulate a single movement path (amt or GAM)
 #'
 #' Builds a redistribution kernel from `model` and `env_test` and simulates one
 #' path that follows the observed step timing in `stp_data`. The caller is
@@ -21,9 +22,8 @@
 #'
 #' `method` picks the route; the burst / month orchestration below is shared,
 #' only the kernel builder and path simulator differ:
-#'   * "issf" — amt::redistribution_kernel() + amt::simulate_path(); `model` is
-#'     a
-#'     fitted iSSF (amt make_issf_model / fit_clogit).
+#'   * "amt" — amt::redistribution_kernel() + amt::simulate_path(); `model` is
+#'     a conditional-logistic fit (amt::make_issf_model / fit_clogit).
 #'   * "gam"  — redistribution_kernel_gam() + simulate_path_gam(); `model` is an
 #'     mgcv cox.ph GAM, and the tentative movement distributions sl_distr /
 #'     ta_distr (e.g. attr(stp.var, "sl_") / attr(stp.var, "ta_")) are needed
@@ -32,8 +32,8 @@
 #' Two code paths inside, chosen automatically based on whether the model has
 #' any NDVI term:
 #'   * NDVI path — for each burst, walks month-by-month, swapping
-#'     `env_test$ndvi`
-#'     to that month's layer before building a fresh kernel. Required because
+#'     `env_test$ndvi` to that month's layer before building a fresh kernel,
+#'     because
 #'     NDVI is the only time-varying covariate.
 #'   * Simple path — for each burst, builds one kernel and simulates every step
 #'     in the burst in a single call. Avoids redundant kernel rebuilds when the
@@ -43,9 +43,9 @@
 #' @param env_test Environmental rasters for the simulation extent
 #' @param ndvi_test NDVI rasters indexed by month (ignored if the model has no
 #'   NDVI terms)
-#' @param model Fitted movement model — an iSSF (method = "issf") or an mgcv
-#'   cox.ph GAM (method = "gam")
-#' @param method Which kernel / simulator to use: "issf" (default) or "gam"
+#' @param model Fitted movement model — a conditional-logistic fit
+#'   (method = "amt") or an mgcv cox.ph GAM (method = "gam")
+#' @param method Which kernel / simulator to use: "amt" (default) or "gam"
 #' @param sl_distr Tentative step-length distribution for the GAM kernel
 #'   (attr(stp.var, "sl_")); required for method = "gam" with
 #'   compensate.movement = TRUE
@@ -58,7 +58,7 @@ simulate_movement <- function(
   env_test,
   ndvi_test,
   model,
-  method = c("issf", "gam"),
+  method = c("amt", "gam"),
   sl_distr = NULL,
   ta_distr = NULL,
   compensate.movement = TRUE
@@ -69,7 +69,7 @@ simulate_movement <- function(
   # `build_kernel` makes a sampled-endpoint kernel at a start point; `run_path`
   # simulates a path from it. Everything after this block (burst / month
   # orchestration) is shared, so the two routes never duplicate that logic.
-  if (method == "issf") {
+  if (method == "amt") {
     model_formula <- model$model$formula
 
     cov_fun <- function(xy, map) {
@@ -172,8 +172,8 @@ simulate_movement <- function(
           #  * At a burst start no heading exists (nothing precedes the first
           #    step), so 0 is unavoidable and only that one step is affected.
           #  * At a MONTH-CHUNK restart inside a burst a heading does exist --
+          #    the bearing of the last simulated step -- and discarding it made
           #    the
-          #    bearing of the last simulated step -- and discarding it made the
           #    path turn as if it had just been heading east. That is the same
           #    defect fixed in onestep_logscore_gam; here it hits once per month
           #    boundary per burst rather than at every step.

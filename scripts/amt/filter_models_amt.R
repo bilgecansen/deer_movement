@@ -1,20 +1,20 @@
 #' @description
 #' Combine per-deer filter outputs (udoverlap, logscore, energy score) plus the
-#' observed median step length from the fitted iSSF results, into one long
+#' observed median step length from the fitted amt results, into one long
 #' (deer x model) data frame, and apply four sequential model-selection gates.
 #'
 #' Inputs:
-#'   filters/issf/udoverlap_issf_<key>.rds — list keyed by model: list(bat_uds,
+#'   filters/amt/udoverlap_amt_<key>.rds — list keyed by model: list(bat_uds,
 #'   svf_agree)
-#'   filters/issf/logscore_issf_<key>.rds — df: model, total_logp, n_steps,
+#'   filters/amt/logscore_amt_<key>.rds — df: model, total_logp, n_steps,
 #'     delta_logp
-#'   filters/issf/es_issf.rds — df: id, season, year, model, energy_score
-#'   results/issf/results_issf_<key>.rds   — used to recover observed sl_
+#'   filters/amt/es_amt.rds — df: id, season, year, model, energy_score
+#'   results/amt/results_amt_<key>.rds   — used to recover observed sl_
 #'
 #' Outputs:
-#'   filters/issf/filter_combined_issf.rds — every (deer, model) with all
-#'   metrics filters/issf/filter_selected_issf.rds — rows surviving all four
-#'   gates plots/filter_violins_pre.png, plots/filter_violins_post.png
+#'   filters/amt/filter_combined_amt.rds — every (deer, model) with all
+#'   metrics filters/amt/filter_selected_amt.rds — rows surviving all four
+#'   gates plots/filter_violins_pre_amt.png, plots/filter_violins_post_amt.png
 #'
 #' Gates (applied sequentially — only survivors flow into the next step):
 #'   1. bat_uds    >= 0.8
@@ -27,54 +27,57 @@
 library(tidyverse)
 
 # Pipeline mode ---------------------------------------------------------------
-# FALSE: use in-sample filter outputs (filters/issf/udoverlap_issf_*.rds,
-#        filters/issf/logscore_issf_*.rds, filters/issf/es_issf.rds) and write
-#        filter_combined_issf.rds / filter_selected_issf.rds +
+# FALSE: use in-sample filter outputs (filters/amt/udoverlap_amt_*.rds,
+#        filters/amt/logscore_amt_*.rds, filters/amt/es_amt.rds) and write
+#        filter_combined_amt.rds / filter_selected_amt.rds +
 #        non-suffixed plots.
 # TRUE: use out-of-sample (test) filter outputs
-#   (filters/issf/udoverlap_issf_test_*.rds,
-#        filters/issf/logscore_issf_test_*.rds, filters/issf/es_issf_test.rds)
-#        and write filter_combined_issf_test.rds / filter_selected_issf_test.rds
+#   (filters/amt/udoverlap_amt_test_*.rds,
+#        filters/amt/logscore_amt_test_*.rds, filters/amt/es_amt_test.rds)
+#        and write filter_combined_amt_test.rds / filter_selected_amt_test.rds
 #        + _test plots.
 test_mode <- F
 
-null_model <- 2L
-delta_logp_min <- -3
+# delta_logp_min is a *positive* margin: a numbered model must beat the null by
+# at least this much. The null is the GAM null (movement + s(HR_center_end)),
+# scored alongside the amt models by run_logscore_amt.R -- there is no amt null,
+# and no null row ever reaches this table.
+delta_logp_min <- 3
 ud_min <- 0.8
 svf_min <- 0.8
 p_excd_min <- 0.5
 
 # File-naming derived from test_mode -----------------------------------------
 suffix <- if (test_mode) "_test" else ""
-udov_prefix <- sprintf("udoverlap_issf%s_", suffix)
-logs_prefix <- sprintf("logscore_issf%s_", suffix)
-es_file <- sprintf("filters/issf/es_issf%s.rds", suffix)
-combined_out <- sprintf("filters/issf/filter_combined_issf%s.rds", suffix)
-selected_out <- sprintf("filters/issf/filter_selected_issf%s.rds", suffix)
-plot_pre <- sprintf("plots/filter_violins_pre%s.png", suffix)
-plot_post <- sprintf("plots/filter_violins_post%s.png", suffix)
+udov_prefix <- sprintf("udoverlap_amt%s_", suffix)
+logs_prefix <- sprintf("logscore_amt%s_", suffix)
+es_file <- sprintf("filters/amt/es_amt%s.rds", suffix)
+combined_out <- sprintf("filters/amt/filter_combined_amt%s.rds", suffix)
+selected_out <- sprintf("filters/amt/filter_selected_amt%s.rds", suffix)
+plot_pre <- sprintf("plots/filter_violins_pre_amt%s.png", suffix)
+plot_post <- sprintf("plots/filter_violins_post_amt%s.png", suffix)
 
 # Discover keys ---------------------------------------------------------------
 # Broad listing matches both test and non-test files (the regex
-# `^udoverlap_issf_.*` happily eats `udoverlap_issf_test_…`); narrow to the
+# `^udoverlap_amt_.*` happily eats `udoverlap_amt_test_…`); narrow to the
 # requested mode explicitly. GAM outputs live in filters/gam/ and never
 # appear here.
 udov_files <- list.files(
-  "filters/issf", "^udoverlap_issf_.*\\.rds$", full.names = TRUE
+  "filters/amt", "^udoverlap_amt_.*\\.rds$", full.names = TRUE
 )
 logs_files <- list.files(
-  "filters/issf", "^logscore_issf_.*\\.rds$", full.names = TRUE
+  "filters/amt", "^logscore_amt_.*\\.rds$", full.names = TRUE
 )
 
 if (test_mode) {
-  udov_files <- udov_files[grepl("^udoverlap_issf_test_", basename(udov_files))]
-  logs_files <- logs_files[grepl("^logscore_issf_test_", basename(logs_files))]
+  udov_files <- udov_files[grepl("^udoverlap_amt_test_", basename(udov_files))]
+  logs_files <- logs_files[grepl("^logscore_amt_test_", basename(logs_files))]
 } else {
-  # Exclude the test outputs, which share the filters/issf/ folder.
+  # Exclude the test outputs, which share the filters/amt/ folder.
   udov_files <- udov_files[
-    !grepl("^udoverlap_issf_test_", basename(udov_files))
+    !grepl("^udoverlap_amt_test_", basename(udov_files))
   ]
-  logs_files <- logs_files[!grepl("^logscore_issf_test_", basename(logs_files))]
+  logs_files <- logs_files[!grepl("^logscore_amt_test_", basename(logs_files))]
 }
 
 keys_udov <- gsub(
@@ -107,8 +110,8 @@ parse_key <- function(k) {
 
 # Load udoverlap + logscore per deer ------------------------------------------
 per_deer_df <- purrr::map_dfr(keys, function(k) {
-  ud <- readRDS(file.path("filters/issf", sprintf("%s%s.rds", udov_prefix, k)))
-  ls <- readRDS(file.path("filters/issf", sprintf("%s%s.rds", logs_prefix, k)))
+  ud <- readRDS(file.path("filters/amt", sprintf("%s%s.rds", udov_prefix, k)))
+  ls <- readRDS(file.path("filters/amt", sprintf("%s%s.rds", logs_prefix, k)))
 
   ud_df <- purrr::imap_dfr(ud, function(x, m) {
     if (length(x) == 1 && is.na(x)) {
@@ -149,14 +152,14 @@ es_df <- readRDS(es_file) |>
   ) |>
   dplyr::select(key, model, energy_score)
 
-# Observed step lengths per deer, from the fitted iSSF model frame -----------
-# The clogit model frame in results_issf carries `log(sl_)` as a column and the
+# Observed step lengths per deer, from the fitted amt model frame -----------
+# The clogit model frame in results_amt carries `log(sl_)` as a column and the
 # response Surv object (which holds case_ as its "status" column). The observed
 # steps are case_ == 1. Same vector for every formula on a deer, so we use the
 # first non-erroring fit. We keep the full vector (list-column) so that p_excd
 # can be computed per (deer, model) against its own energy_score.
 sl_df <- purrr::map_dfr(unique(per_deer_df$key), function(k) {
-  rfile <- sprintf("results/issf/results_issf_%s.rds", k)
+  rfile <- sprintf("results/amt/results_amt_%s.rds", k)
   if (!file.exists(rfile)) {
     return(tibble::tibble(key = k, sl_obs = list(NA_real_)))
   }
@@ -203,26 +206,12 @@ step1 <- all_df |>
 step2 <- step1 |>
   dplyr::filter(!is.na(svf_agree), svf_agree >= svf_min)
 
-# Step 3: every non-null model passes iff its delta_logp (vs. model 2) >=
-# threshold. The null model (id = 2) is kept only as a fallback for deer where
-# no non-null model passed. Operates on step2 survivors, so a null model that
-# itself failed steps 1 or 2 is not available as a fallback.
+# Step 3: a model passes iff it beats the GAM null by at least delta_logp_min.
+# A plain row-wise filter with no per-deer grouping: the null is not one of the
+# candidates, so there is no null row to fall back to when a deer has no passing
+# model. Such a deer simply drops out here.
 step3 <- step2 |>
-  dplyr::group_by(key) |>
-  dplyr::group_modify(function(g, .y) {
-    passing_alt <- g |>
-      dplyr::filter(
-        model != null_model,
-        !is.na(delta_logp),
-        delta_logp >= delta_logp_min
-      )
-    if (nrow(passing_alt) > 0) {
-      passing_alt
-    } else {
-      g |> dplyr::filter(model == null_model)
-    }
-  }) |>
-  dplyr::ungroup()
+  dplyr::filter(!is.na(delta_logp), delta_logp >= delta_logp_min)
 
 step4 <- step3 |>
   dplyr::filter(!is.na(p_excd), p_excd >= p_excd_min)
@@ -372,10 +361,18 @@ ggplot2::ggsave(
 )
 
 # Per-deer pass/fail vs. covariates ------------------------------------------
-# A deer "passed" iff at least one environmental-variable model (models 6..10)
-# survived all four gates. Deer with only null models surviving (2 or 3), or
-# with nothing surviving, are counted as failed.
-env_models <- 6:10
+# A deer "passed" iff at least one environmental-variable model (models 2..4)
+# survived all four gates. Deer whose only survivor is the movement-only model
+# (1), or with nothing surviving, are counted as failed.
+#
+# This was `6:10` under an older numbering that ran past 6. Against the 1..6 set
+# it matched ONLY model 6, silently excluding the resource models from the pass
+# determination -- any deer that passed via 4 or 5 but not 6 was counted failed.
+env_models <- c(2L, 3L, 4L)
+
+# The non-environmental candidate: not the null (which never reaches this
+# table), but the numbered model with no habitat covariate at all.
+nonenv_models <- 1L
 
 passed_keys <- step4 |>
   dplyr::filter(model %in% env_models) |>
@@ -490,14 +487,15 @@ panels_cov <- panels_cov +
     title = "Per-deer pass/fail by covariate",
     subtitle = sprintf(
       paste("Passed = >=1 surviving model in formulas %d-%d;",
-            "failed = none or only null (2, 3)."),
+            "failed = none or only movement-only (%s)."),
       min(env_models),
-      max(env_models)
+      max(env_models),
+      paste(nonenv_models, collapse = ", ")
     )
   )
 
 ggplot2::ggsave(
-  sprintf("plots/filter_covariates%s.png", suffix),
+  sprintf("plots/filter_covariates_amt%s.png", suffix),
   panels_cov,
   width = 13,
   height = 5,
@@ -509,7 +507,7 @@ ggplot2::ggsave(
 # has rows in step4). Deer with nothing in step4 are dropped entirely. Among
 # the rest, classify the deer by whether any surviving model is an env model
 # (6-10); otherwise its only survivor(s) are null (models 2 and/or 3).
-null_models <- c(2L, 3L)
+
 
 deer_compare <- step4 |>
   dplyr::group_by(key) |>
@@ -519,8 +517,8 @@ deer_compare <- step4 |>
   ) |>
   dplyr::mutate(
     status = factor(
-      ifelse(has_env, "env", "null"),
-      levels = c("null", "env")
+      ifelse(has_env, "env", "movement"),
+      levels = c("movement", "env")
     )
   ) |>
   dplyr::select(key, status) |>
@@ -530,13 +528,13 @@ deer_compare <- step4 |>
   )
 
 cat(sprintf(
-  "Null vs env among passing deer: env %d / null-only %d (of %d)\n",
+  "Movement vs env among passing deer: env %d / movement %d (of %d)\n",
   sum(deer_compare$status == "env"),
-  sum(deer_compare$status == "null"),
+  sum(deer_compare$status == "movement"),
   nrow(deer_compare)
 ))
 
-null_env_fill <- c(null = "grey60", env = "#1F77B4")
+null_env_fill <- c(movement = "grey60", env = "#1F77B4")
 
 p_season_c <- make_status_prop(
   deer_compare,
@@ -563,19 +561,19 @@ panels_compare <- (p_season_c | p_age_c | p_year_c) +
 
 panels_compare <- panels_compare +
   patchwork::plot_annotation(
-    title = "Null vs env among deer with surviving models",
+    title = "Movement-only vs env among deer with surviving models",
     subtitle = sprintf(
       paste("Deer with nothing in step4 excluded.",
             "env = >=1 surviving model in %d-%d;",
-            "null = only models %s."),
+            "movement = only model %s."),
       min(env_models),
       max(env_models),
-      paste(null_models, collapse = ", ")
+      paste(nonenv_models, collapse = ", ")
     )
   )
 
 ggplot2::ggsave(
-  sprintf("plots/filter_null_vs_env%s.png", suffix),
+  sprintf("plots/filter_movement_vs_env_amt%s.png", suffix),
   panels_compare,
   width = 13,
   height = 5,

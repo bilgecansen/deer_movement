@@ -50,9 +50,13 @@ so rule 1 is not enforced automatically.
 
 - `scripts/helpers/` — the helper library, split by theme. `helper_functions.R`
   is a thin aggregator that sources all of them; every script sources only that.
-- `scripts/gam/`, `scripts/issf/` — one folder per modelling path. Keep the
-  `_gam` / `_issf` suffix on filenames even inside those folders; the redundancy
-  is a deliberate safeguard.
+- `scripts/gam/`, `scripts/amt/` — one folder per modelling path, named for the
+  fitting engine (mgcv GAM vs amt conditional logistic). Both paths fit an iSSF;
+  the engine is what distinguishes them. Keep the `_gam` / `_amt` suffix on
+  filenames even inside those folders; the redundancy is a deliberate safeguard.
+  Note `amt::fit_issf` and `amt::make_issf_model` are the package's own API and
+  keep their names.
+- `scripts/retired/` — scripts kept for reference but not runnable as-is.
 - `scripts/checks/` — correctness checks. `run_checks_all.sh` runs them all and
   exits non-zero on failure. `walkthrough_gam.R` is a straight-line, loop-free
   inlining of the GAM path for manual line-by-line review.

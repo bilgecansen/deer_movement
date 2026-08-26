@@ -79,13 +79,13 @@ for (i in seq_len(nrow(deer_mvt))) {
       water <- make_water_mask(landcover)
       ndvi <- load_ndvi(one_deer$year)
 
-      # Gamma / von Mises design (parametric): used by iSSF and by parametric
+      # Gamma / von Mises design (parametric): used by amt and by parametric
       # GAMs -> stp.random / stp.var. 25 random points (Klappstein et al. 2024).
       one_deer <- make_random_pt_extraction(
         data = one_deer,
         n_pts = 25,
         water = water,
-        model = "issf",
+        model = "amt",
         stp_col = "stp",
         output_col = "stp.random"
       )

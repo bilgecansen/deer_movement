@@ -12,9 +12,9 @@
 #   helpers_raster.R     landcover / NDVI / home-range raster loading
 #   helpers_warp.R       warp_to_template (gdalwarp wrapper; prep scripts only)
 #   helpers_track.R      random-point generation, step covariate extraction
-#   helpers_issf.R       iSSF fitting, coefficient tidying, log score
+#   helpers_amt.R       amt fitting, coefficient tidying, log score
 #   helpers_gam.R GAM fitting, diagnostics, redistribution kernel, log score
-#   helpers_simulate.R   simulate_movement (the iSSF / GAM seam)
+#   helpers_simulate.R   simulate_movement (the amt / GAM seam)
 #   helpers_metrics.R    energy score, SVF, UD overlap (both paths)
 #   helpers_plots.R      track plotting / animation
 #
@@ -38,7 +38,7 @@ for (.helper_file in c(
   "helpers_raster.R",
   "helpers_warp.R",
   "helpers_track.R",
-  "helpers_issf.R",
+  "helpers_amt.R",
   "helpers_gam.R",
   "helpers_simulate.R",
   "helpers_metrics.R",

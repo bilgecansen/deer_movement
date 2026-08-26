@@ -78,7 +78,7 @@ results_gam_null <- readRDS(sprintf(
 
 # Tentative movement distributions for the GAM kernel (gamma / von Mises). Use
 # the TRAIN-year stp.var attributes — the same proposal the GAM was fit against,
-# so the movement-kernel compensation matches the fitted corrections. (The iSSF
+# so the movement-kernel compensation matches the fitted corrections. (The amt
 # test runner gets the equivalent from iss_i$sl_/iss_i$ta_ baked into the fitted
 # object; an mgcv GAM does not carry them, so we read the train track here.)
 train_mvt <- readRDS(sprintf("data/tracks/data_%s.rds", train_key))
@@ -124,7 +124,7 @@ deer_input <- list(
 )
 
 # Collect fitted GAMs ---------------------------------------------------------
-# No coefficient surgery (unlike the iSSF path): the fitted mgcv cox.ph object
+# No coefficient surgery (unlike the amt path): the fitted mgcv cox.ph object
 # is used directly by redistribution_kernel_gam. Failed fits become NULL.
 cat("Collecting fitted GAMs...\n")
 

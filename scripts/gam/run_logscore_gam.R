@@ -110,7 +110,7 @@ deer_input <- list(
 )
 
 # Collect fitted GAMs ---------------------------------------------------------
-# No coefficient surgery (unlike the iSSF path): the fitted mgcv cox.ph object
+# No coefficient surgery (unlike the amt path): the fitted mgcv cox.ph object
 # is used directly by redistribution_kernel_gam. Failed fits become NULL.
 cat("Collecting fitted GAMs...\n")
 

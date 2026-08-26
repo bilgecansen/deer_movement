@@ -9,12 +9,12 @@
 #' grids when writing to a file device.
 #'
 #' Usage:
-#'   Rscript scripts/issf/plot_kernel_grid_issf.R <id> <season>
+#'   Rscript scripts/amt/plot_kernel_grid_amt.R <id> <season>
 #'   <year> [model_num]
 #'     id        — deer ID
 #'     season    — season string (e.g. "fa", "nb")
 #'     year      — year (integer)
-#'     model_num — fitted-model index from results_issf_<key>.rds (default 2)
+#'     model_num — fitted-model index from results_amt_<key>.rds (default 2)
 #'
 #' Output: plots/kernel_all_<key>_m<model_num>.png
 
@@ -23,7 +23,7 @@ args <- commandArgs(trailingOnly = TRUE)
 
 if (length(args) < 3 || length(args) > 4) {
   stop(
-    paste("Usage: Rscript scripts/issf/plot_kernel_grid_issf.R",
+    paste("Usage: Rscript scripts/amt/plot_kernel_grid_amt.R",
           "<id> <season> <year> [model_num]")
   )
 }
@@ -58,7 +58,7 @@ env_raster <- load_landcover(year, season)
 
 ndvi_year <- load_ndvi(year)
 
-results_issf <- readRDS(sprintf("results/issf/results_issf_%s.rds", key))
+results_amt <- readRDS(sprintf("results/amt/results_amt_%s.rds", key))
 
 # Crop env around the deer's track + add HR layers ---------------------------
 stp_data <- deer_mvt$stp[[1]]
@@ -75,10 +75,10 @@ env_cropped$HR_center_log <- log1p(env_cropped$HR_center)
 
 ndvi_cropped <- terra::crop(ndvi_year, crop_extent)
 
-# Build the issf model object (with coefficient-name renaming) ---------------
+# Build the amt model object (with coefficient-name renaming) ---------------
 # Same coefficient-rename + interaction-permutation trick used by run_sims.R
 # and run_logscore.R so the model matches model.matrix columns at runtime.
-iss_i <- results_issf[[model_num]]$iss
+iss_i <- results_amt[[model_num]]$iss
 if (is.character(iss_i)) {
   stop(sprintf("Model %d for %s did not fit successfully.", model_num, key))
 }
@@ -108,7 +108,7 @@ for (idx in seq_along(coefs)) {
   }
 }
 
-issf_model <- amt::make_issf_model(
+amt_model <- amt::make_issf_model(
   coefs = coefs,
   sl = iss_i$sl_,
   ta = iss_i$ta_
@@ -140,7 +140,7 @@ build_kernel <- function(i) {
     amt::mutate(dt = lubridate::hours(4))
 
   amt::redistribution_kernel(
-    x = issf_model,
+    x = amt_model,
     map = env_local,
     fun = function(xy, map) {
       xy |>

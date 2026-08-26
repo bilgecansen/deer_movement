@@ -8,7 +8,7 @@
 #'   season — season string (e.g. "fa", "nb")
 #'   year   — training year (test year is year + 1)
 #'
-#' Assumes both results/issf/results_issf_<train_key>.rds and the test-year
+#' Assumes both results/amt/results_amt_<train_key>.rds and the test-year
 #' wrangled track exist; the bash wrapper gates on those so this script does
 #' not need a "no test data" guard.
 
@@ -60,12 +60,12 @@ env_raster <- load_landcover(test_year, season)
 # NDVI data — TEST year
 ndvi_year <- load_ndvi(test_year)
 
-# issf models — fitted on TRAIN year
-results_issf <- readRDS(sprintf("results/issf/results_issf_%s.rds", train_key))
+# amt models — fitted on TRAIN year
+results_amt <- readRDS(sprintf("results/amt/results_amt_%s.rds", train_key))
 
 # Score every fitted model — null/failed models filtered out automatically
 # inside the precompute step (returns NULL for those).
-n_models <- length(results_issf)
+n_models <- length(results_amt)
 models_to_run <- seq_len(n_models)
 
 # Pre-crop rasters for this single deer ---------------------------------------
@@ -102,7 +102,7 @@ deer_input <- list(
 cat("Precomputing simulation models...\n")
 
 model_sims <- purrr::map(models_to_run, function(m) {
-  iss_i <- results_issf[[m]]$iss
+  iss_i <- results_amt[[m]]$iss
 
   if (is.character(iss_i)) {
     return(NULL)
@@ -146,7 +146,7 @@ model_sims <- purrr::map(models_to_run, function(m) {
 names(model_sims) <- as.character(models_to_run)
 
 # Free large objects
-rm(env_raster, ndvi_year, results_issf, deer_mvt)
+rm(env_raster, ndvi_year, results_amt, deer_mvt)
 gc()
 
 # Run log score across all models in parallel ---------------------------------
@@ -179,7 +179,7 @@ results_logscore <- furrr::future_map(
       stp_data = deer_input$stp,
       env_test = env_local,
       ndvi_test = ndvi_local,
-      issf_train = model_sim
+      amt_train = model_sim
     )
 
     data.frame(
@@ -210,8 +210,8 @@ cat("Results:\n")
 print(results)
 
 # Save -------------------------------------------------------------------------
-dir.create("filters/issf", showWarnings = FALSE, recursive = TRUE)
-saveRDS(results, sprintf("filters/issf/logscore_issf_test_%s.rds", train_key))
+dir.create("filters/amt", showWarnings = FALSE, recursive = TRUE)
+saveRDS(results, sprintf("filters/amt/logscore_amt_test_%s.rds", train_key))
 
 elapsed <- difftime(Sys.time(), start_time, units = "mins")
 cat(sprintf(

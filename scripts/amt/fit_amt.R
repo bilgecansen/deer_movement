@@ -1,11 +1,19 @@
 #' @description
-#' Fit deer iSSF models for every deer with a wrangled track file in
-#' data/tracks/. For each (id, season, year):
+#' Fit the amt (conditional-logistic) movement models for every deer with a
+#' wrangled track file in data/tracks/. For each (id, season, year):
 #'   * If the output rds already exists and `overwrite` is FALSE, skip.
 #'   * Otherwise read the wrangled data, fit all candidate formulas with
 #'     fit_mod() (which itself returns failure-status objects rather than
 #'     erroring out per-model), and save the list of results.
 #' Errors are caught per deer so a single failure does not halt the loop.
+#'
+#' NO NULL MODEL IS FIT HERE. The amt models are compared against the GAM null
+#' (movement + s(HR_center_end)) from results/gam/results_gam_null_<key>.rds, so
+#' fit_GAM.R must have been run before any amt log score. The consequence worth
+#' remembering: the GAM null carries a cyclic time-of-day smooth, a more
+#' flexible movement block than the day/night factor these models use, so
+#' delta_logp mixes "does habitat help" with "my movement block is less flexible
+#' than the reference's".
 #'
 #' Configuration: edit `overwrite` below before running.
 
@@ -21,44 +29,54 @@ library(tidyverse)
 source("scripts/helper_functions.R")
 
 # Formulas --------------------------------------------------------------------
-# make_formulas() returns the 6 candidate models for one deer, named by model
-# number ("1","2","3","4","5","6"). Slots 4 & 5 are the resource-selection
-# models and depend on season: non-breeding (winter) deer have no valid MODIS
-# NDVI (snow / dormancy -> all-or-mostly NA), so the NDVI models (4 & 5) can't
-# be fit. For those deer we substitute the landcover-only models and record them
-# in slots 4 & 5. Either way the result holds 6 models and slots 4/5 always mean
-# "the resource-selection model" (NDVI where it exists, a landcover-only
-# substitute where it doesn't). Model 6 is the HR-center × landcover
-# interaction. Numbering is contiguous "1".."6" and parallels make_formulas() in
-# fit_GAM.R (position = model number).
+# make_formulas() returns the 4 candidate models for one deer, named by model
+# number ("1".."4"). The set mirrors make_formulas() in fit_GAM.R slot for slot,
+# with linear / factor terms where the GAM uses penalised smooths:
+#
+#   #  amt                                        GAM
+#   1  movement only                              movement only
+#   2  + HR_center + resource                     + s(HR_center) + resource
+#   3  + resource                                 + resource
+#   4  + HR_center x landcover                    + s(HR_center) + hc_fs
+#
+# The resource block is season-dependent, exactly as in the GAM path: winter
+# (nb) deer have no usable MODIS NDVI (snow / dormancy -> all-or-mostly NA), so
+# slots 2 and 3 fall back to landcover alone. Either way slots 2/3 always mean
+# "the resource-selection model".
+#
+# Retired relative to the old 1..6 set: the HR-edge model (old 2), and the
+# HR-center-only model (old 3), which is now the GAM null and is not refit here.
+# Old 1, 4, 5, 6 become new 1, 2, 3, 4 -- the same remapping the GAM path used.
 make_formulas <- function(season) {
   move <- "case_ ~ (sl_):tod_start_ + log(sl_) + cos(ta_)"
 
   f1 <- move # 1 movement only
-  f2 <- paste(move, "+ HR_edge_end") # 2 + HR edge
-  f3 <- paste(move, "+ HR_center_end") # 3 + HR center
-  f6 <- paste(
+  # 4 HR-center x landcover
+  f4 <- paste(
     move,
     "+ HR_center_end + wiscland_end + HR_center_end:wiscland_end"
-  ) # 6 + HR-center x LC
+  )
 
   if (season == "nb") {
-    # 4 landcover (with HR-center)
-    f4 <- paste(move, "+ HR_center_end + wiscland_end")
-    f5 <- paste(move, "+ wiscland_end") # 5 landcover (no HR-center)
+    # 2 landcover, with HR-center
+    f2 <- paste(move, "+ HR_center_end + wiscland_end")
+    # 3 landcover, no HR-center
+    f3 <- paste(move, "+ wiscland_end")
   } else {
-    f4 <- paste(
+    # 2 NDVI x landcover, with HR-center
+    f2 <- paste(
       move,
       "+ HR_center_end + wiscland_end + ndvi_end + wiscland_end:ndvi_end"
-    ) # 4 NDVI (with HR-center)
-    f5 <- paste(
+    )
+    # 3 NDVI x landcover, no HR-center
+    f3 <- paste(
       move,
       "+ wiscland_end + ndvi_end + wiscland_end:ndvi_end"
-    ) # 5 NDVI (no HR-center)
+    )
   }
 
-  f <- paste(c(f1, f2, f3, f4, f5, f6), "+ strata(step_id_)")
-  stats::setNames(f, c("1", "2", "3", "4", "5", "6"))
+  f <- paste(c(f1, f2, f3, f4), "+ strata(step_id_)")
+  stats::setNames(f, c("1", "2", "3", "4"))
 }
 
 # Discover deer from data/tracks/ ---------------------------------------------
@@ -73,7 +91,7 @@ keys <- gsub("^data_(.*)\\.rds$", "\\1", basename(track_files))
 cat(sprintf("Found %d wrangled deer in data/tracks/\n", length(track_files)))
 
 # Output dir
-dir.create("results/issf", showWarnings = FALSE, recursive = TRUE)
+dir.create("results/amt", showWarnings = FALSE, recursive = TRUE)
 
 # Loop ------------------------------------------------------------------------
 n_done <- 0L
@@ -85,7 +103,7 @@ start_time <- Sys.time()
 for (i in seq_along(track_files)) {
   key <- keys[i]
   in_path <- track_files[i]
-  out_path <- sprintf("results/issf/results_issf_%s.rds", key)
+  out_path <- sprintf("results/amt/results_amt_%s.rds", key)
 
   # Skip: output already exists and we're not overwriting
   if (!overwrite && file.exists(out_path)) {
@@ -105,13 +123,13 @@ for (i in seq_along(track_files)) {
       ssf_data <- one_deer$stp.var[[1]]
 
       # Season picks the slot-4/5 resource models (NDVI vs landcover; see
-      # make_formulas). results_issf is named by model number ("1".."6").
+      # make_formulas). results_amt is named by model number ("1".."6").
       season <- strsplit(key, "_")[[1]][2]
       formulas <- make_formulas(season)
 
-      results_issf <- purrr::map(formulas, function(f) fit_mod(ssf_data, f))
+      results_amt <- purrr::map(formulas, function(f) fit_mod(ssf_data, f))
 
-      saveRDS(results_issf, out_path)
+      saveRDS(results_amt, out_path)
       TRUE
     },
     error = function(e) {

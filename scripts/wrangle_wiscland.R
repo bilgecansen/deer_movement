@@ -1,7 +1,7 @@
 #' @description
 #' Create binary indicator layers from the categorical wiscland raster.
 #' One layer per non-reference category (forest is the reference level).
-#' Saves the result as a multi-layer raster for use in iSSF simulations.
+#' Saves the result as a multi-layer raster for use in amt simulations.
 
 library(terra)
 

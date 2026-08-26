@@ -1,14 +1,14 @@
 #' @description
 #' Compute one-step energy scores for every deer with simulations and every
 #' model that was simulated. Writes a single combined data frame to
-#' filters/issf/es_issf.rds.
+#' filters/amt/es_amt.rds.
 #'
-#' By default, deer that already appear in the existing filters/issf/es_issf.rds
+#' By default, deer that already appear in the existing filters/amt/es_amt.rds
 #' are skipped (resumable reruns). Pass --overwrite to reprocess everything.
 #'
 #' Usage:
-#'   Rscript scripts/issf/compute_es_issf.R              # resumable (default)
-#'   Rscript scripts/issf/compute_es_issf.R --overwrite  # reprocess every deer
+#'   Rscript scripts/amt/compute_es_amt.R              # resumable (default)
+#'   Rscript scripts/amt/compute_es_amt.R --overwrite  # reprocess every deer
 
 # Parse CLI args ---------------------------------------------------------------
 args <- commandArgs(trailingOnly = TRUE)
@@ -23,8 +23,8 @@ suppressPackageStartupMessages({
 source("scripts/helper_functions.R")
 
 # Setup ------------------------------------------------------------------------
-dir.create("filters/issf", showWarnings = FALSE, recursive = TRUE)
-out_path <- "filters/issf/es_issf.rds"
+dir.create("filters/amt", showWarnings = FALSE, recursive = TRUE)
+out_path <- "filters/amt/es_amt.rds"
 
 existing <- if (!overwrite && file.exists(out_path)) {
   readRDS(out_path)
@@ -38,14 +38,14 @@ existing <- if (!overwrite && file.exists(out_path)) {
   )
 }
 
-# Discover deer with (non-test) iSSF simulations in sims/issf/. Test-year sims
-# (sims_issf_test_*) share the folder but are handled by compute_es_issf_test.R,
+# Discover deer with (non-test) amt simulations in sims/amt/. Test-year sims
+# (sims_amt_test_*) share the folder but are handled by compute_es_amt_test.R,
 # so exclude them here. GAM sims live in sims/gam/ and never appear here.
 sim_files <- list.files(
-  "sims/issf", pattern = "^sims_issf_.*\\.rds$", full.names = TRUE
+  "sims/amt", pattern = "^sims_amt_.*\\.rds$", full.names = TRUE
 )
-sim_files <- sim_files[!grepl("^sims_issf_test_", basename(sim_files))]
-keys      <- gsub("^sims_issf_(.*)\\.rds$", "\\1", basename(sim_files))
+sim_files <- sim_files[!grepl("^sims_amt_test_", basename(sim_files))]
+keys      <- gsub("^sims_amt_(.*)\\.rds$", "\\1", basename(sim_files))
 
 cat(sprintf("Found %d deer with simulations\n", length(sim_files)))
 

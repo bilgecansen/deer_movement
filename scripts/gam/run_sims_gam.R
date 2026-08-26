@@ -1,6 +1,6 @@
 #' @description
 #' Simulate deer movement from the numbered GAM models for a single deer. GAM
-#' analogue of scripts/issf/run_sims.R.
+#' analogue of scripts/amt/run_sims.R.
 #'
 #' Only the NUMBERED models are simulated. The null model (fit_GAM.R writes it
 #' to results/gam/results_gam_null_<key>.rds) is deliberately left out: it is
@@ -109,7 +109,7 @@ deer_input <- list(
 )
 
 # Collect fitted GAMs ---------------------------------------------------------
-# No coefficient surgery (unlike the iSSF path): the fitted mgcv cox.ph object
+# No coefficient surgery (unlike the amt path): the fitted mgcv cox.ph object
 # is used directly by redistribution_kernel_gam. Failed fits become NULL.
 cat("Collecting fitted GAMs...\n")
 

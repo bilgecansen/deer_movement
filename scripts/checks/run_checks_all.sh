@@ -11,13 +11,14 @@ rc=0
 
 echo "### Tier 6: cross-output audit (gam) ###"
 Rscript scripts/checks/check_outputs.R gam || rc=1
+Rscript scripts/checks/check_outputs.R amt || rc=1
 
 echo
 echo "### Tier 3: analytic reductions + contracts (gam) ###"
 Rscript scripts/checks/check_kernel_gam.R "$@" || rc=1
 
 echo
-echo "### Tier 2: iSSF vs GAM on real deer ###"
+echo "### Tier 2: amt vs GAM on real deer ###"
 Rscript scripts/checks/check_differential_gam.R 5 30 || rc=1
 
 echo

@@ -1,5 +1,5 @@
 #' @description
-#' GAM analogue of scripts/issf/filter_models.R. Combine per-deer GAM filter
+#' GAM analogue of scripts/amt/filter_models.R. Combine per-deer GAM filter
 #' outputs (udoverlap_gam, logscore_gam, energy score es_gam) plus the observed
 #' step-length distribution (from the track), into one long (deer x model) data
 #' frame, and apply four sequential model-selection gates.
@@ -76,7 +76,7 @@ plot_post <- sprintf("plots/filter_violins_post_gam%s.png", suffix)
 # Discover keys ---------------------------------------------------------------
 # Broad listing matches both test and non-test files (the regex
 # `^udoverlap_gam_.*` happily eats `udoverlap_gam_test_…`); narrow to the
-# requested mode explicitly. The `_gam_` infix keeps iSSF outputs
+# requested mode explicitly. The `_gam_` infix keeps amt outputs
 # (udoverlap_<key>, logscore_<key>) out of this GAM pipeline entirely.
 udov_files <- list.files(
   "filters/gam",
@@ -177,7 +177,7 @@ es_df <- readRDS(es_file) |>
   dplyr::select(key, model, energy_score)
 
 # Observed step lengths per deer, from the track ------------------------------
-# Model-independent (unlike the iSSF filter, which recovers sl_ from the clogit
+# Model-independent (unlike the amt filter, which recovers sl_ from the clogit
 # model frame): the observed steps live on data/tracks/data_<key>.rds$stp. We
 # keep the full vector (list-column) so p_excd can be computed per (deer, model)
 # against its own energy_score.

@@ -3,13 +3,13 @@
 # Everything for the mgcv cox.ph (Klappstein et al. 2024) path: reshaping step
 # data into stratified Cox-PH form, fitting and diagnosing the smooths, and the
 # custom redistribution kernel used for both simulation and log scoring. The
-# iSSF equivalents live in helpers_issf.R.
+# amt equivalents live in helpers_amt.R.
 #
 # Part of the helper library split out of scripts/helper_functions.R, which
 # now sources every file in this folder. Scripts keep sourcing that one
 # aggregator, so nothing here needs to be sourced directly.
 
-#' Reshape iSSF step data into mgcv Cox-PH (GAM-SSF) form
+#' Reshape amt step data into mgcv Cox-PH (GAM-SSF) form
 #'
 #' Following Klappstein et al. (2024), an (integrated) SSF is fit as a
 #' stratified Cox proportional-hazards model in mgcv. This adds the three
@@ -160,14 +160,14 @@ gam_smooth_diag <- function(
 }
 
 # GAM redistribution kernel ----------------------------------------------------
-# amt::redistribution_kernel() only accepts fit_clogit (iSSF) objects: it reads
+# amt::redistribution_kernel() only accepts fit_clogit (amt) objects: it reads
 # fixed coefficients via coef() and a fixed model.matrix. Our movement models
 # are mgcv cox.ph GAMs whose effects are penalised smooths evaluated through
 # predict.gam(). The functions below reproduce amt's discrete-landscape kernel
 # (kernel_setup + ssf_weights), swapping only the `model.matrix %*% coefs` step
 # for `predict(gam, type = "link")`. The disc geometry, the tentative-kernel
 # compensation (phi - log(sl_)), the exp() stabilisation, and the normalise-to-
-# sum-1 step all match amt, so the result is interchangeable with the iSSF path
+# sum-1 step all match amt, so the result is interchangeable with the amt path
 # (Klappstein et al. 2024; derivation in docs/kernel_exponent.html).
 #
 # Parametric design only: the GAMs are fit on the gamma / von Mises steps
@@ -505,7 +505,7 @@ simulate_path_gam <- function(
 #' redistribution kernel (redistribution_kernel_gam) anchored at the observed
 #' start, evaluates it as a normalised raster, and reads off the kernel value at
 #' the observed endpoint to give a per-step log probability. Structure, NDVI
-#' month-swapping, and the NA / out-of-disc handling all mirror the iSSF version
+#' month-swapping, and the NA / out-of-disc handling all mirror the amt version
 #' exactly; only the kernel builder differs (redistribution_kernel_gam +
 #' gam_cov_fun, with the tentative gamma / von Mises distributions for the
 #' parametric movement compensation). The caller is responsible for ensuring

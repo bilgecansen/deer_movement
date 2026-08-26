@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Iterate every deer with a fitted iSSF model in results/ and run
-# scripts/issf/run_logscore_issf_test.R on each, scoring the test-year
+# Iterate every deer with a fitted amt model in results/ and run
+# scripts/amt/run_logscore_amt_test.R on each, scoring the test-year
 # (year+1) track
 # under the train-year model. Deer with no test-year wrangled track are
 # counted as "no data" and skipped without invoking R.
@@ -10,8 +10,8 @@
 # the loop. Final summary prints counts and elapsed time.
 #
 # Usage:
-#   bash scripts/issf/run_logscore_all_test.sh            # resumable
-#   bash scripts/issf/run_logscore_all_test.sh --overwrite  # reprocess all
+#   bash scripts/amt/run_logscore_all_test.sh            # resumable
+#   bash scripts/amt/run_logscore_all_test.sh --overwrite  # reprocess all
 
 shopt -s nullglob
 
@@ -26,15 +26,15 @@ n_no_data=0
 n_failed=0
 start=$(date +%s)
 
-for f in results/issf/results_issf_*.rds; do
+for f in results/amt/results_amt_*.rds; do
   base=$(basename "$f" .rds)
-  key=${base#results_issf_}
+  key=${base#results_amt_}
   IFS='_' read -r id season year <<< "$key"
 
   test_year=$((year + 1))
   test_key="${id}_${season}_${test_year}"
   test_track="data/tracks/data_${test_key}.rds"
-  out_path="filters/issf/logscore_issf_test_${key}.rds"
+  out_path="filters/amt/logscore_amt_test_${key}.rds"
 
   if [[ ! -f "$test_track" ]]; then
     echo "[no-data] $key (no $test_track)"
@@ -49,7 +49,7 @@ for f in results/issf/results_issf_*.rds; do
   fi
 
   echo "[run]     $key"
-  if Rscript scripts/issf/run_logscore_issf_test.R "$id" "$season" "$year"; then
+  if Rscript scripts/amt/run_logscore_amt_test.R "$id" "$season" "$year"; then
     n_done=$((n_done + 1))
   else
     rc=$?

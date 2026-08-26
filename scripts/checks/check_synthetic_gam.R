@@ -4,7 +4,7 @@
 #' the wrangle).
 #'
 #' Part 1 -- UNIMODAL truth, 5 replicates x 1000 steps. Selection peaks at an
-#'   intermediate covariate value, which a linear iSSF term cannot represent, so
+#'   intermediate covariate value, which a linear amt term cannot represent, so
 #'   this tests whether the smooth recovers a SHAPE rather than just a sign.
 #'   Checked: shape of the recovered smooth against truth (on the log-RSS
 #'   scale), location of the fitted peak, pointwise CI coverage, and -- a sharp
@@ -12,7 +12,7 @@
 #'   generated from exactly the tentative gamma / von Mises the controls were
 #'   drawn from.
 #'
-#' Part 2 -- MONOTONIC truth, 1 replicate. The same data are fit with amt's iSSF
+#' Part 2 -- MONOTONIC truth, 1 replicate. The same data are fit with amt's amt
 #'   (conditional logistic) and with our GAM (cox.ph), using an identical LINEAR
 #'   structure so the two are the same likelihood. Two comparisons:
 #'     (a) coefficients -- should agree to several decimals;
@@ -126,10 +126,10 @@ if (part %in% c("1", "both")) {
   }
 }
 
-# ---- Part 2: iSSF vs GAM on identical data ----------------------------------
+# ---- Part 2: amt vs GAM on identical data ----------------------------------
 if (part %in% c("2", "both")) {
   check_section(
-    "Part 2  monotonic truth: iSSF vs GAM, same data, same structure"
+    "Part 2  monotonic truth: amt vs GAM, same data, same structure"
   )
   BETA <- 2
   f_lin <- function(cv) BETA * (cv - 1)          # max 0 at cv = 1
@@ -152,14 +152,14 @@ if (part %in% c("2", "both")) {
   terms_ <- c("cov_end", "sl_", "log(sl_)", "cos(ta_)")
   ci <- coef(iss$model)[terms_]
   cg <- coef(gm)[terms_]
-  cmp <- tibble(term = terms_, issf = as.numeric(ci), gam = as.numeric(cg),
+  cmp <- tibble(term = terms_, amt = as.numeric(ci), gam = as.numeric(cg),
                 diff = as.numeric(cg - ci),
                 truth = c(BETA, 0, 0, 0))
   cat("\n  coefficients:\n")
   print(as.data.frame(cmp |> mutate(across(where(is.numeric), ~round(., 5)))),
         row.names = FALSE)
 
-  check("iSSF and GAM coefficients agree (max |diff| < 1e-3)",
+  check("amt and GAM coefficients agree (max |diff| < 1e-3)",
         max(abs(cmp$diff)) < 1e-3,
         sprintf("max |diff| = %.2e on %s", max(abs(cmp$diff)),
                 cmp$term[which.max(abs(cmp$diff))]))
@@ -168,12 +168,12 @@ if (part %in% c("2", "both")) {
   # would require it to be closer than its own standard error -- a check that
   # fails on correct code roughly half the time.
   se_slope <- summary(iss$model)$coefficients["cov_end", "se(coef)"]
-  lo <- cmp$issf[1] - 1.96 * se_slope
-  hi <- cmp$issf[1] + 1.96 * se_slope
+  lo <- cmp$amt[1] - 1.96 * se_slope
+  hi <- cmp$amt[1] + 1.96 * se_slope
   check("95% CI for the cov_end slope contains the truth",
         BETA >= lo && BETA <= hi,
         sprintf("estimate %.4f, SE %.4f, CI [%.3f, %.3f], truth %.2f",
-                cmp$issf[1], se_slope, lo, hi, BETA))
+                cmp$amt[1], se_slope, lo, hi, BETA))
 
   # ---- gate-3 machinery: per-step probabilities, nothing filtered ------------
   # Same construction both onestep_logscore*() use: build the kernel as a
@@ -188,15 +188,15 @@ if (part %in% c("2", "both")) {
     start <- amt::make_start(as.numeric(stp[i, c("x1_", "y1_")]), ta_ = 0,
                              time = stp$t1_[i],
                              dt = lubridate::hours(4), crs = 6610)
-    cf_issf <- function(xy, map) {
+    cf_amt <- function(xy, map) {
       amt::extract_covariates(xy, map, where = "both")
     }
     ki <- tryCatch(amt::redistribution_kernel(
-      x = iss, map = land, fun = cf_issf, start = start,
+      x = iss, map = land, fun = cf_amt, start = start,
       landscape = "discrete", as.rast = TRUE)$redistribution.kernel,
       error = function(e) NULL)
     kg <- tryCatch(redistribution_kernel_gam(
-      x = gm, map = land, start = start, fun = cf_issf,
+      x = gm, map = land, start = start, fun = cf_amt,
       sl_distr = attr(d, "sl_"), ta_distr = attr(d, "ta_"),
       compensate.movement = TRUE, normalize = TRUE, as.rast = TRUE
     )$redistribution.kernel, error = function(e) NULL)
@@ -209,27 +209,27 @@ if (part %in% c("2", "both")) {
       e <- terra::extract(k, at)
       as.numeric(e[1, ncol(e)])
     }
-    tibble(step = i, issf = log(dens(ki)), gam = log(dens(kg)))
-  }) |> dplyr::filter(is.finite(issf), is.finite(gam))
+    tibble(step = i, amt = log(dens(ki)), gam = log(dens(kg)))
+  }) |> dplyr::filter(is.finite(amt), is.finite(gam))
 
   cat(sprintf("  evaluated %d steps\n", nrow(logp)))
-  dd <- logp$gam - logp$issf
+  dd <- logp$gam - logp$amt
   cat("\n  per-step log probability:\n")
   print(as.data.frame(tibble(
-    stat = c("mean issf", "mean gam", "mean diff", "max |diff|", "cor"),
-    value = round(c(mean(logp$issf), mean(logp$gam), mean(dd),
-                    max(abs(dd)), cor(logp$issf, logp$gam)), 6))),
+    stat = c("mean amt", "mean gam", "mean diff", "max |diff|", "cor"),
+    value = round(c(mean(logp$amt), mean(logp$gam), mean(dd),
+                    max(abs(dd)), cor(logp$amt, logp$gam)), 6))),
         row.names = FALSE)
 
-  check("iSSF and GAM assign the same per-step probability (max |diff| < 0.01)",
+  check("amt and GAM assign the same per-step probability (max |diff| < 0.01)",
         max(abs(dd)) < 0.01,
         sprintf("max |diff| = %.2e over %d steps", max(abs(dd)), nrow(logp)))
   check("per-step log probabilities correlate at r > 0.999",
-        cor(logp$issf, logp$gam) > 0.999,
-        sprintf("r = %.8f", cor(logp$issf, logp$gam)))
+        cor(logp$amt, logp$gam) > 0.999,
+        sprintf("r = %.8f", cor(logp$amt, logp$gam)))
   check("total log score agrees (relative diff < 1e-3)",
-        abs(sum(dd)) / abs(sum(logp$issf)) < 1e-3,
-        sprintf("issf %.3f vs gam %.3f", sum(logp$issf), sum(logp$gam)))
+        abs(sum(dd)) / abs(sum(logp$amt)) < 1e-3,
+        sprintf("amt %.3f vs gam %.3f", sum(logp$amt), sum(logp$gam)))
 }
 
 quit(status = if (check_summary() > 0) 1L else 0L)

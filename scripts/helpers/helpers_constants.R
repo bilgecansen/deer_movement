@@ -1,7 +1,7 @@
 # Shared constants -------------------------------------------------------------
 #
 # Values used across every stage of the pipeline and by the runner scripts
-# directly. They live on their own so that raster, track, iSSF and GAM helpers
+# directly. They live on their own so that raster, track, amt and GAM helpers
 # can all depend on them without depending on each other.
 #
 # Part of the helper library split out of scripts/helper_functions.R, which

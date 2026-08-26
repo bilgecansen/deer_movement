@@ -8,7 +8,7 @@
 #' model is right; it tells you when the pipeline produced something the maths
 #' says it shouldn't have.
 #'
-#' Checks, per path (issf / gam):
+#' Checks, per path (amt / gam):
 #'   * bat_uds and svf_agree inside [0, 1] (both are overlap/agreement measures)
 #'   * neither pinned at exactly 0 or 1 (a degenerate fit, not a real overlap)
 #'   * n_steps identical across models within a deer — delta_logp differences
@@ -19,13 +19,13 @@
 #'     or copy/paste bug looks exactly like this)
 #'   * the same model set present in every deer's file
 #'
-#' Usage: Rscript scripts/checks/check_outputs.R [issf|gam|both]
+#' Usage: Rscript scripts/checks/check_outputs.R [amt|gam|both]
 
 suppressPackageStartupMessages(library(tidyverse))
 source("scripts/checks/check_helpers.R")
 
 args <- commandArgs(trailingOnly = TRUE)
-paths <- if (length(args) && args[1] != "both") args[1] else c("issf", "gam")
+paths <- if (length(args) && args[1] != "both") args[1] else c("amt", "gam")
 
 # Tunables --------------------------------------------------------------------
 # DELTA_ZERO_TOL: a model that adds terms should change the log likelihood by

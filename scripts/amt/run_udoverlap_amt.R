@@ -46,7 +46,7 @@ deer_mvt <- readRDS(sprintf("data/tracks/data_%s.rds", key))
 
 # Simulated paths for this deer — named list keyed by the model numbers that
 # were actually simulated (run_sims.R simulates every fitted model now).
-results_sim <- readRDS(sprintf("sims/issf/sims_issf_%s.rds", key))
+results_sim <- readRDS(sprintf("sims/amt/sims_amt_%s.rds", key))
 
 # Model numbers actually present in results_sim
 model_nums <- as.integer(names(results_sim))
@@ -96,8 +96,8 @@ future::plan(sequential)
 gc()
 
 # Save -------------------------------------------------------------------------
-dir.create("filters/issf", showWarnings = FALSE, recursive = TRUE)
-saveRDS(results_ud, sprintf("filters/issf/udoverlap_issf_%s.rds", key))
+dir.create("filters/amt", showWarnings = FALSE, recursive = TRUE)
+saveRDS(results_ud, sprintf("filters/amt/udoverlap_amt_%s.rds", key))
 
 elapsed <- difftime(Sys.time(), start_time, units = "mins")
 cat(sprintf("Deer %s completed in %.1f minutes\n", key, elapsed))

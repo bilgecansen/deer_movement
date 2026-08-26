@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
-# Iterate every deer with a fitted iSSF model in results/ and run
-# scripts/issf/run_logscore_issf.R on each. By default, skip deer whose
-# log-score
-# output already exists; pass --overwrite to reprocess everything.
+# Iterate every deer with a fitted amt model in results/ and run
+# scripts/amt/run_sims_amt.R on each. By default, skip deer whose
+# simulation output
+# already exists; pass --overwrite to reprocess everything.
 #
-# Failures in Rscript do not halt the loop. Final summary prints counts and
-# elapsed time.
+# Failures in Rscript do not halt the loop — we capture the exit code and
+# continue. Final summary prints counts and elapsed time.
 #
 # Usage:
-#   bash scripts/issf/run_logscore_all.sh              # resumable (default)
-#   bash scripts/issf/run_logscore_all.sh --overwrite  # reprocess all
+#   bash scripts/amt/run_sims_all.sh              # resumable (default)
+#   bash scripts/amt/run_sims_all.sh --overwrite  # reprocess all
 
 shopt -s nullglob
 
@@ -23,12 +23,12 @@ n_skipped=0
 n_failed=0
 start=$(date +%s)
 
-for f in results/issf/results_issf_*.rds; do
+for f in results/amt/results_amt_*.rds; do
   base=$(basename "$f" .rds)
-  key=${base#results_issf_}
+  key=${base#results_amt_}
   IFS='_' read -r id season year <<< "$key"
 
-  out_path="filters/issf/logscore_issf_${key}.rds"
+  out_path="sims/amt/sims_amt_${key}.rds"
 
   if [[ "$overwrite" == false && -f "$out_path" ]]; then
     echo "[skip] $key"
@@ -37,7 +37,7 @@ for f in results/issf/results_issf_*.rds; do
   fi
 
   echo "[run]  $key"
-  if Rscript scripts/issf/run_logscore_issf.R "$id" "$season" "$year"; then
+  if Rscript scripts/amt/run_sims_amt.R "$id" "$season" "$year"; then
     n_done=$((n_done + 1))
   else
     rc=$?

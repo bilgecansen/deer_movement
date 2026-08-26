@@ -1,7 +1,7 @@
 #' @description
 #' Compute one-step energy scores for every deer with GAM simulations and every
 #' model that was simulated. Writes a single combined data frame to
-#' filters/gam/es_gam.rds. GAM analogue of scripts/issf/compute_es.R (reads the
+#' filters/gam/es_gam.rds. GAM analogue of scripts/amt/compute_es.R (reads the
 #' sims_gam_ files, writes es_gam.rds); the score itself is model-agnostic.
 #'
 #' Numbered models only — inherited from the sims: the null model is not

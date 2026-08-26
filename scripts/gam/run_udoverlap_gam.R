@@ -1,9 +1,9 @@
 #' @description
 #' Compute UD overlap (Bhattacharyya) and SVF agreement between observed and
 #' GAM-simulated paths for every model that was simulated for a single deer.
-#' GAM analogue of scripts/issf/run_udoverlap.R: it reads sims_gam_<key> and
+#' GAM analogue of scripts/amt/run_udoverlap.R: it reads sims_gam_<key> and
 #' writes udoverlap_gam_<key>. The metric itself (overlap_ud) is model-agnostic,
-#' so only the input/output filenames differ from the iSSF version.
+#' so only the input/output filenames differ from the amt version.
 #'
 #' Numbered models only — no filtering needed here: sims_gam_<key> contains only
 #' the numbered models (run_sims_gam.R does not simulate the null), so whatever

@@ -1,6 +1,6 @@
 #' @description
 #' Fit deer movement GAMs (SSFs with penalised smooths) for every deer with a
-#' wrangled track file in data/tracks/. This is the GAM analogue of fit_issf.R.
+#' wrangled track file in data/tracks/. This is the GAM analogue of fit_amt.R.
 #'
 #' Following Klappstein et al. (2024, Methods Ecol Evol), an (integrated) SSF is
 #' fit as a stratified Cox proportional-hazards model in mgcv:
@@ -35,7 +35,7 @@
 #'     ~ max step length (wrangle_deer_mvt.R, model = "nonp"). Required for
 #'     *non-parametric* movement smooths s(sl_) / s(ta_) (Klappstein et al.
 #'     2024, Section 3.1); also valid for parametric kernels.
-#'   * "stp.var" — gamma / von Mises (iSSF-style). Usable for GAMs with a
+#'   * "stp.var" — gamma / von Mises (amt-style). Usable for GAMs with a
 #'     *parametric* movement kernel, and more efficient there.
 #' Pick via `gam_input` below.
 #'
@@ -114,7 +114,7 @@ source("scripts/helper_functions.R")
 # hierarchical "fs" deviations (Pedersen et al. 2019 "Model GS": one shrunk
 # curve per class around a shared global response) rather than independent by=
 # smooths, which are unidentifiable when a deer visits only a few classes. The
-# global smooth mirrors the iSSF main effect and lets sparse classes pool toward
+# global smooth mirrors the amt main effect and lets sparse classes pool toward
 # the shared response instead of toward zero.
 #
 # Models 2 & 3 (breeding) put NDVI in exactly this GS form over ALL landcover

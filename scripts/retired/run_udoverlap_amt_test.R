@@ -8,7 +8,7 @@
 #'   season — season string (e.g. "fa", "nb")
 #'   year   — training year (test year is year + 1)
 #'
-#' Assumes sims/issf/sims_issf_test_<train_key>.rds and the test-year wrangled
+#' Assumes sims/amt/sims_amt_test_<train_key>.rds and the test-year wrangled
 #' track both exist; the bash wrapper iterates over the test sims directly so
 #' this script does not need a "no test data" guard.
 
@@ -52,7 +52,7 @@ start_time <- Sys.time()
 deer_mvt <- readRDS(sprintf("data/tracks/data_%s.rds", test_key))
 
 # Simulated paths — test simulations from the train-year model
-results_sim <- readRDS(sprintf("sims/issf/sims_issf_test_%s.rds", train_key))
+results_sim <- readRDS(sprintf("sims/amt/sims_amt_test_%s.rds", train_key))
 
 # Model numbers actually present in results_sim
 model_nums <- as.integer(names(results_sim))
@@ -102,10 +102,10 @@ future::plan(sequential)
 gc()
 
 # Save -------------------------------------------------------------------------
-dir.create("filters/issf", showWarnings = FALSE, recursive = TRUE)
+dir.create("filters/amt", showWarnings = FALSE, recursive = TRUE)
 saveRDS(
   results_ud,
-  sprintf("filters/issf/udoverlap_issf_test_%s.rds", train_key)
+  sprintf("filters/amt/udoverlap_amt_test_%s.rds", train_key)
 )
 
 elapsed <- difftime(Sys.time(), start_time, units = "mins")

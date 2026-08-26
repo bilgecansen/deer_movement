@@ -13,7 +13,7 @@
 #'
 #' Reads library/landcover/landcover_<year>.tif, selects the band matching the
 #' deer's `season`, and returns a SpatRaster carrying:
-#'   * `wiscland` — the categorical landcover band (factor; drives the iSSF
+#'   * `wiscland` — the categorical landcover band (factor; drives the amt
 #'     `wiscland_*` design columns at fit time)
 #'   * one binary indicator layer per non-reference predictor class, each named
 #'     exactly like the class so the redistribution kernel can read

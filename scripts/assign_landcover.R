@@ -304,8 +304,7 @@ assign_landcover <- function(
 #    4240, 4241,    7,  "central.hardwoods",
 #    4100, 4200,    8,  "other.forest",
 #    4210, 4230,    8,  "other.forest",
-#    4250, 5000,    8,  "other.forest"
-# )
+#    4250, 5000,    8,  "other.forest" )
 # r <- assign_landcover(src = wiscland2, rc = rc)
 
 # Create a custom wiscland2 raster that combines certain categories

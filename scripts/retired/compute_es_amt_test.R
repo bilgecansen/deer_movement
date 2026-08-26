@@ -1,22 +1,22 @@
 #' @description
 #' Out-of-sample one-step energy scores: for every deer with test-year
-#' simulations in sims/issf/sims_issf_test_*.rds, compute per-model energy
+#' simulations in sims/amt/sims_amt_test_*.rds, compute per-model energy
 #' scores against the test-year (year + 1) observed track.
 #'
 #' Iterating off the test sims means deer with no test data are excluded by
-#' construction (they have no sims_issf_test_*.rds file). The (id, season, year)
+#' construction (they have no sims_amt_test_*.rds file). The (id, season, year)
 #' columns in the output identify the TRAIN key — i.e. the model that produced
 #' the simulations — matching the keying used by
-#' filters/issf/udoverlap_issf_test_*.rds and
-#' filters/issf/logscore_issf_test_*.rds.
+#' filters/amt/udoverlap_amt_test_*.rds and
+#' filters/amt/logscore_amt_test_*.rds.
 #'
 #' By default, deer that already appear in the existing
-#' filters/issf/es_issf_test.rds are skipped (resumable reruns). Pass
+#' filters/amt/es_amt_test.rds are skipped (resumable reruns). Pass
 #' --overwrite to reprocess everything.
 #'
 #' Usage:
-#'   Rscript scripts/issf/compute_es_issf_test.R # resumable (default)
-#'   Rscript scripts/issf/compute_es_issf_test.R --overwrite # reprocess every
+#'   Rscript scripts/amt/compute_es_amt_test.R # resumable (default)
+#'   Rscript scripts/amt/compute_es_amt_test.R --overwrite # reprocess every
 #'     deer
 
 # Parse CLI args ---------------------------------------------------------------
@@ -32,8 +32,8 @@ suppressPackageStartupMessages({
 source("scripts/helper_functions.R")
 
 # Setup ------------------------------------------------------------------------
-dir.create("filters/issf", showWarnings = FALSE, recursive = TRUE)
-out_path <- "filters/issf/es_issf_test.rds"
+dir.create("filters/amt", showWarnings = FALSE, recursive = TRUE)
+out_path <- "filters/amt/es_amt_test.rds"
 
 existing <- if (!overwrite && file.exists(out_path)) {
   readRDS(out_path)
@@ -49,11 +49,11 @@ existing <- if (!overwrite && file.exists(out_path)) {
 
 # Discover deer with test simulations
 sim_files <- list.files(
-  "sims/issf",
-  pattern = "^sims_issf_test_.*\\.rds$",
+  "sims/amt",
+  pattern = "^sims_amt_test_.*\\.rds$",
   full.names = TRUE
 )
-keys <- gsub("^sims_issf_test_(.*)\\.rds$", "\\1", basename(sim_files))
+keys <- gsub("^sims_amt_test_(.*)\\.rds$", "\\1", basename(sim_files))
 
 cat(sprintf("Found %d deer with test simulations\n", length(sim_files)))
 
