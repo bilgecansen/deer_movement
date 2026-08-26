@@ -59,7 +59,9 @@ so rule 1 is not enforced automatically.
 - `scripts/retired/` — scripts kept for reference but not runnable as-is.
 - `scripts/checks/` — correctness checks. `run_checks_all.sh` runs them all and
   exits non-zero on failure. `walkthrough_gam.R` is a straight-line, loop-free
-  inlining of the GAM path for manual line-by-line review.
+  inlining of the GAM path for manual line-by-line review. `check_wrangle.R`
+  re-derives every column of `data/tracks/` from the source rasters and the
+  stored coordinates; run it as `check_wrangle.R all both` for the full cohort.
 - `docs/gam_decision_inventory.md` — every non-obvious choice in the GAM path,
   attributed, with the alternative that was rejected.
 

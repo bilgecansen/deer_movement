@@ -154,12 +154,23 @@ make_formulas <- function(k_tod, k_ndvi, season) {
   f4 <- paste(move, "+ s(HR_center_end) +", hc_fs) # 4 HR-center x landcover
 
   # Resource models for slots 2 & 3 — season-dependent. Non-breeding (winter)
-  # deer have no valid MODIS NDVI (snow / dormancy -> all-or-mostly NA), so the
-  # NDVI models (2 & 3) can't be fit; we substitute the landcover-only models
-  # and record them in slots 2 & 3. Either way the object holds 4 models
-  # and slots 2/3 always mean "the resource-selection model".
+  # deer have no usable ndvi_end in data/tracks/, so the NDVI models (2 & 3)
+  # can't be fit; we substitute the landcover-only models and record them in
+  # slots 2 & 3. Either way the object holds 4 models and slots 2/3 always mean
+  # "the resource-selection model".
+  #
+  # WHY it is unusable is NOT snow or dormancy, as this comment used to claim.
+  # The nb season is named for the year it STARTS in and runs into the next one,
+  # but load_ndvi(year) stacks only that one year's twelve layers. Every step
+  # from January on is then outside extract_covariates_var_time's 31-day window
+  # and comes back NA, and late-December steps go NA too because there is no
+  # following layer to fall back on. The 2021 rasters exist in library/ndvi/ and
+  # are 100% non-NA at those deer's own step endpoints. See
+  # scripts/checks/check_wrangle.R W3.5 and docs/gam_decision_inventory.md #46.
+  # Fixing the loader would make winter NDVI models available; that is an open
+  # decision, not something this comment should keep foreclosing.
   if (season == "nb") {
-    # Winter NDVI is unusable; the landcover-only substitutes use a penalised
+    # The landcover-only substitutes use a penalised
     # random effect on landcover, s(wiscland_end, bs = 're'), rather than a
     # fixed factor. It shrinks sparse classes and avoids the near-separation
     # that makes the raw factor slow / non-convergent in cox.ph (validated:

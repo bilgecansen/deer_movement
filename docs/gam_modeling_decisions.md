@@ -146,8 +146,21 @@ comparison they are not interchangeable; `_end` is kept.
 
 **Finding:** 107 of 372 deer have NDVI NAs — and they are *exactly* the 107
 non-breeding (`nb`, winter) deer (0 in `fa`/`pf`; every `nb` deer affected,
-35 of them 100 % NA). Cause: MODIS NDVI is masked under snow / dormancy. So the
-NDVI models can't be fit for `nb` deer (this caused the old errors).
+35 of them 100 % NA). So the NDVI models can't be fit for `nb` deer (this caused
+the old errors).
+
+> **Correction (cause).** This section originally attributed the NAs to MODIS
+> being masked under snow / dormancy. That is wrong. The `nb` season is named
+> for the year it *starts* in and runs into the next one, while
+> `load_ndvi(year)` stacks only that year's twelve layers — so every step from
+> January on falls outside `extract_covariates_var_time`'s 31-day window, and
+> late-December steps go NA too for want of a following layer. The next year's
+> rasters exist in `library/ndvi/` and are 100 % non-NA at those deer's own step
+> endpoints (monthly means 0.32–0.51). The 35 deer that are 100 % NA are exactly
+> those whose winter track begins after New Year. Verified by
+> `scripts/checks/check_wrangle.R` W3.5; see `docs/gam_decision_inventory.md`
+> #46–47. The resolution below still stands as *what the code does*, but its
+> justification does not.
 
 **Resolution:** `make_formulas()` builds **6 models per deer, named by model
 number `"1","2","3","4","5","6"`**:

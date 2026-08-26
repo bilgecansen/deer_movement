@@ -122,6 +122,39 @@ single number changes which deer pass.
 | 43 | HR-centre transform | `log1p(HR_center)` available as a separate layer | Raw metres only | inherited |
 | 44 | NDVI layer times | **Mid-month** (changed this session from 1st-of-month) | 1st of month — caused a fit/predict mismatch on 46.7% of days | you |
 | 45 | NDVI lookup window | `max_time = 31 days`, `when = "any"` (nearest in time) | `when = "before"`; a shorter window | inherited |
+| 46 | NDVI stack span | `load_ndvi(year)` loads the 12 layers of the deer's `year` field only | Load the months the season actually spans | inherited |
+| 47 | Winter resource models | Slots 2 & 3 drop NDVI for `season == "nb"` | Fit NDVI models in winter too | inherited |
+
+**Open issue on 46 and 47.** `check_wrangle.R` W3.5 shows that the non-breeding
+season is labelled by its *starting* year and runs into the next one: deer
+`7975_nb_2020` spans 2020-12-16 to 2021-04-30. `load_ndvi(2020)` supplies no
+2021 layer, so `extract_covariates_var_time`'s 31-day window finds nothing and
+`ndvi_end` is NA for every step from January on. Across the cohort this is
+**1,037,686 rows in all 107 `nb` deer** (`stp.var`; 2,035,461 in `stp.var.nonp`).
+
+Decision 47's inline justification in `fit_GAM.R` attributed winter's unusable
+NDVI to "snow / dormancy -> all-or-mostly NA". That is not what the data shows.
+The 2021 layers exist in `library/ndvi/` and are **100% non-NA at that deer's
+step endpoints**, with plausible values (monthly means 0.32–0.51). The NA is
+produced by the loader's year span, not by the sensor.
+
+The span accounts for every winter NA, at both ends of the stack:
+
+- steps in `year + 1` (99.5% of the NAs) have no layer within 31 days;
+- steps on 31 December go NA as well, because `when = "any"` has no *following*
+  layer to fall back on past roughly half the inter-layer gap — measured on
+  `7975_nb_2020`, December rows resolve out to 15.33 days from the mid-December
+  stamp and go NA from 15.5 days.
+
+The 35 `nb` deer that are 100% NA are exactly those whose winter track begins
+after New Year, so none of their steps lie in the loaded year at all.
+
+Consequence today: none — no `nb` formula names `ndvi_end`, so the NA never
+reaches a fit (W4.3 and W6.1/W6.2 confirm no winter row is dropped). The cost is
+that winter models 2 & 3 were replaced by landcover-only substitutes on the
+strength of a mis-attributed data problem, and the moment an NDVI term is added
+to a winter model, ~80% of every `nb` deer's rows will vanish at fit time
+without a warning.
 
 ---
 

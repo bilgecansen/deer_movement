@@ -14,6 +14,12 @@ Rscript scripts/checks/check_outputs.R gam || rc=1
 Rscript scripts/checks/check_outputs.R amt || rc=1
 
 echo
+echo "### Tier 1: wrangle contracts (data/tracks) ###"
+# 25 deer keeps the suite quick. The contracts are per-row, so a sample this
+# size already covers ~150k rows; run "all both" by hand for the full cohort.
+Rscript scripts/checks/check_wrangle.R 25 amt || rc=1
+
+echo
 echo "### Tier 3: analytic reductions + contracts (gam) ###"
 Rscript scripts/checks/check_kernel_gam.R "$@" || rc=1
 
