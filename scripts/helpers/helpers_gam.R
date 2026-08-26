@@ -82,7 +82,8 @@ fit_gam_mod <- function(gam_data, formula, select = TRUE) {
       # visited works with a plain predict(): the per-class fs deviation falls
       # back to 0 and the global s(ndvi_end) carries the response (this is the
       # Model GS "predict unobserved levels" property). Verified to leave the
-      # fits for visited classes (coefficients and variance components) unchanged.
+      # fits for visited classes (coefficients and variance
+      # components) unchanged.
       drop.unused.levels = FALSE
     ),
     error = function(err) "Error"
@@ -102,17 +103,18 @@ fit_gam_mod <- function(gam_data, formula, select = TRUE) {
 #' Per-smooth basis / shrinkage diagnostic for a fitted GAM-SSF
 #'
 #' Reads each smooth's effective degrees of freedom (edf) and basis ceiling (k')
-#' from mgcv::k.check() and labels its status. We deliberately ignore k.check()'s
-#' k-index and p-value columns: those are residual-based and unreliable for a
-#' cox.ph SSF (the same reason Klappstein et al. 2024 advise against PH
-#' residuals). The trustworthy signal is edf vs k':
+#' from mgcv::k.check() and labels its status. We deliberately ignore
+#' k.check()'s k-index and p-value columns: those are residual-based and
+#' unreliable for a cox.ph SSF (the same reason Klappstein et al. 2024 advise
+#' against PH residuals). The trustworthy signal is edf vs k':
 #'   * "removed"     edf <= removed_edf  — shrunk to ~zero. With select = TRUE
 #'                                         any smooth can reach this; with
 #'                                         select = FALSE only smooths with no
-#'                                         unpenalised null space (cc cyclic, re,
-#'                                         fs) can, when REML drives their
+#'                                         unpenalised null space (cc cyclic,
+#'                                         re, fs) can, when REML drives their
 #'                                         variance to ~0 (no time-of-day
-#'                                         modulation / no between-class variance)
+#'                                         modulation / no
+#'                                         between-class variance)
 #'   * "near-linear" edf <= linear_edf   — collapsed to the penalty null space
 #'                                         (a straight line = no nonlinearity);
 #'                                         the floor for ordinary tp/cr smooths
@@ -159,8 +161,8 @@ gam_smooth_diag <- function(
 
 # GAM redistribution kernel ----------------------------------------------------
 # amt::redistribution_kernel() only accepts fit_clogit (iSSF) objects: it reads
-# fixed coefficients via coef() and a fixed model.matrix. Our movement models are
-# mgcv cox.ph GAMs whose effects are penalised smooths evaluated through
+# fixed coefficients via coef() and a fixed model.matrix. Our movement models
+# are mgcv cox.ph GAMs whose effects are penalised smooths evaluated through
 # predict.gam(). The functions below reproduce amt's discrete-landscape kernel
 # (kernel_setup + ssf_weights), swapping only the `model.matrix %*% coefs` step
 # for `predict(gam, type = "link")`. The disc geometry, the tentative-kernel
@@ -206,10 +208,10 @@ gam_movement_kernel <- function(xy, sl_distr, ta_distr = NULL) {
 #'
 #' GAM analogue of the cov_fun used by simulate_movement(). Extracts every map
 #' layer at the step start and end and adds the continuous time-of-day covariate
-#' tod_ (decimal hour at the step start) that the cyclic spline s(tod_, bs = "cc")
-#' needs. wiscland_start/end are re-levelled to LANDCOVER_LEVELS so predict.gam
-#' sees the same factor levels as the fit (cells whose class is outside those
-#' levels, e.g. open_water, become NA and so get weight 0).
+#' tod_ (decimal hour at the step start) that the cyclic spline s(tod_, bs =
+#' "cc") needs. wiscland_start/end are re-levelled to LANDCOVER_LEVELS so
+#' predict.gam sees the same factor levels as the fit (cells whose class is
+#' outside those levels, e.g. open_water, become NA and so get weight 0).
 #'
 #' @param xy  Candidate-step tibble (from the kernel grid) with t1_ set
 #' @param map SpatRaster carrying all covariate layers the GAM references
@@ -231,16 +233,16 @@ gam_cov_fun <- function(xy, map) {
 #' where eta = predict(gam, type = "link") is the cox.ph linear predictor (the
 #' fitted movement corrections + habitat), phi is the log tentative movement
 #' kernel (gam_movement_kernel), and -log(sl_) is the polar->planar Jacobian.
-#' With compensate.movement = FALSE the phi - log(sl_) term is dropped (uniform /
-#' non-parametric availability), leaving w = exp(eta). Exponentiation uses the
+#' With compensate.movement = FALSE the phi - log(sl_) term is dropped (uniform
+#' / non-parametric availability), leaving w = exp(eta). Exponentiation uses the
 #' same mean-centring stabilisation as amt; non-finite weights become 0.
 #'
 #' @param xy        Candidate-step tibble after covariate extraction
 #' @param gam_fit   Fitted mgcv gam (family = cox.ph)
-#' @param sl_distr  Tentative step-length distribution (required if compensating)
+#' @param sl_distr Tentative step-length distribution (required if compensating)
 #' @param ta_distr  Tentative turning-angle distribution or NULL
-#' @param compensate.movement Add the tentative-kernel + Jacobian terms (TRUE for
-#'   the parametric gamma / von Mises design)
+#' @param compensate.movement Add the tentative-kernel + Jacobian terms (TRUE
+#'   for the parametric gamma / von Mises design)
 #' @return numeric vector of non-negative weights, one per row of xy
 gam_kernel_weights <- function(
   xy,
@@ -259,7 +261,8 @@ gam_kernel_weights <- function(
   if (compensate.movement) {
     if (is.null(sl_distr)) {
       stop(
-        "compensate.movement = TRUE needs sl_distr (the tentative step-length distribution)."
+        paste("compensate.movement = TRUE needs sl_distr",
+              "(the tentative step-length distribution).")
       )
     }
     phi <- gam_movement_kernel(xy, sl_distr, ta_distr)
@@ -284,21 +287,21 @@ gam_kernel_weights <- function(
 #' @param x         Fitted mgcv gam (family = cox.ph)
 #' @param map       SpatRaster carrying every covariate layer the GAM references
 #' @param start     amt sim_start (from amt::make_start): x_, y_, t_, ta_, dt
-#' @param fun       Covariate-extraction callback fun(xy, map); default gam_cov_fun
+#' @param fun Covariate-extraction callback fun(xy, map); default gam_cov_fun
 #' @param sl_distr  Tentative step-length distribution (attr(stp.var, "sl_"))
 #' @param ta_distr  Tentative turning-angle distribution (attr(stp.var, "ta_"))
-#' @param max.dist  Disc radius (m); default = 0.99 quantile of sl_distr (matches
+#' @param max.dist Disc radius (m); default = 0.99 quantile of sl_distr (matches
 #'   amt::get_max_dist)
-#' @param compensate.movement Re-add the tentative kernel + Jacobian (TRUE for the
-#'   parametric design)
+#' @param compensate.movement Re-add the tentative kernel + Jacobian (TRUE for
+#'   the parametric design)
 #' @param normalize Scale the raster to sum to 1 (as.rast only)
 #' @param as.rast   TRUE -> normalised SpatRaster; FALSE -> sampled endpoint(s)
 #' @param n.sample  Endpoints to draw when as.rast = FALSE
-#' @param tolerance.outside Max fraction of candidate cells allowed beyond the map
-#'   extent before bailing out (returns NULL)
+#' @param tolerance.outside Max fraction of candidate cells allowed beyond the
+#'   map extent before bailing out (returns NULL)
 #' @return list(args, redistribution.kernel) of class
-#'   "redistribution_kernel_gam", or NULL if the kernel ran off the map / has no
-#'   mass
+#'   "redistribution_kernel_gam", or NULL if the kernel ran off the map / has
+#'   no mass
 redistribution_kernel_gam <- function(
   x,
   map,
@@ -317,7 +320,8 @@ redistribution_kernel_gam <- function(
 
   if (compensate.movement && is.null(sl_distr)) {
     stop(
-      "compensate.movement = TRUE needs sl_distr (the tentative step-length distribution)."
+      paste("compensate.movement = TRUE needs sl_distr",
+            "(the tentative step-length distribution).")
     )
   }
 
@@ -326,7 +330,8 @@ redistribution_kernel_gam <- function(
   if (is.null(max.dist)) {
     if (is.null(sl_distr)) {
       stop(
-        "Provide max.dist, or sl_distr so it can default to the 0.99 step-length quantile."
+        paste("Provide max.dist, or sl_distr so it can default to",
+              "the 0.99 step-length quantile.")
       )
     }
     max.dist <- ceiling(do.call(
@@ -335,7 +340,8 @@ redistribution_kernel_gam <- function(
     ))
   }
 
-  # --- Candidate grid: disc of radius max.dist around the start (kernel_setup) -
+  # --- Candidate grid: disc of radius max.dist around the start
+  # (kernel_setup) -
   pt <- sf::st_sf(
     geom = sf::st_sfc(sf::st_point(
       as.numeric(start[1, c("x_", "y_")])
@@ -367,7 +373,8 @@ redistribution_kernel_gam <- function(
   )
   if (frac_out > tolerance.outside) {
     warning(sprintf(
-      "%.2f%% of candidate steps end outside the map (tolerance %.2f%%); returning NULL.",
+      paste("%.2f%% of candidate steps end outside the map",
+            "(tolerance %.2f%%); returning NULL."),
       100 * frac_out,
       100 * tolerance.outside
     ))
@@ -465,7 +472,8 @@ simulate_path_gam <- function(
     if (is.null(rk)) {
       if (verbose) {
         warning(sprintf(
-          "Simulation stopped after %d steps: kernel ran off the map or had no mass.",
+          paste("Simulation stopped after %d steps:",
+                "kernel ran off the map or had no mass."),
           i - 1
         ))
       }
@@ -504,15 +512,19 @@ simulate_path_gam <- function(
 #' `env_test` already carries every covariate layer the model references
 #' (HR_edge, HR_center_log, the landcover band, etc.).
 #'
-#' @param stp_data Observed step data for one deer (x1_, y1_, t1_, x2_, y2_, t2_, burst_)
-#' @param env_test Cropped environmental rasters (with all model covariates as layers)
+#' @param stp_data Observed step data for one deer (x1_, y1_, t1_, x2_, y2_,
+#'   t2_, burst_)
+#' @param env_test Cropped environmental rasters (with all model covariates as
+#'   layers)
 #' @param ndvi_test Cropped NDVI rasters (indexed by month)
 #' @param gam_train Fitted mgcv cox.ph GAM (results_gam[[m]]$gam)
 #' @param sl_distr Tentative step-length distribution (attr(stp.var, "sl_"));
 #'   required when compensate.movement = TRUE
-#' @param ta_distr Tentative turning-angle distribution (attr(stp.var, "ta_")) or NULL
-#' @param compensate.movement Re-add the tentative kernel + Jacobian (TRUE for the
-#'   parametric gamma / von Mises design; FALSE for a uniform-disc / nonp design)
+#' @param ta_distr Tentative turning-angle distribution (attr(stp.var, "ta_"))
+#'   or NULL
+#' @param compensate.movement Re-add the tentative kernel + Jacobian (TRUE for
+#'   the parametric gamma / von Mises design; FALSE for a uniform-disc / nonp
+#'   design)
 #' @return data.frame with burst_, step_index, t1_, logp
 onestep_logscore_gam <- function(
   stp_data,
@@ -525,7 +537,8 @@ onestep_logscore_gam <- function(
 ) {
   if (compensate.movement && is.null(sl_distr)) {
     stop(
-      "compensate.movement = TRUE needs sl_distr (the tentative step-length distribution, e.g. attr(stp.var, 'sl_'))."
+      paste("compensate.movement = TRUE needs sl_distr (the tentative",
+            "step-length distribution, e.g. attr(stp.var, 'sl_')).")
     )
   }
 
@@ -542,14 +555,15 @@ onestep_logscore_gam <- function(
       #
       # make_start() on a single point cannot know the heading and returns 0,
       # i.e. due east. Scoring every step from a start built that way evaluates
-      # each one as though the deer had just been travelling east, so cos(ta_) is
-      # measured off the wrong baseline. Measured on 7193_fa_2020: per-step log p
-      # off by up to 0.81 (sd 0.44), and because each model fits its own cos(ta_)
-      # coefficient the error does not cancel in delta_logp -- it shifted by
-      # ~4.4 for a median-length deer, against a gate-3 threshold of 3.
+      # each one as though the deer had just been travelling east, so cos(ta_)
+      # is measured off the wrong baseline. Measured on 7193_fa_2020: per-step
+      # log p off by up to 0.81 (sd 0.44), and because each model fits its own
+      # cos(ta_) coefficient the error does not cancel in delta_logp -- it
+      # shifted by ~4.4 for a median-length deer, against a gate-3 threshold
+      # of 3.
       #
-      # The first step of a burst has no preceding step, so no heading exists for
-      # it. Rather than invent one, it is skipped (logp = NA) -- inventing a
+      # The first step of a burst has no preceding step, so no heading exists
+      # for it. Rather than invent one, it is skipped (logp = NA) -- inventing a
       # heading is what produced the bug.
       burst_data$prev_head <- dplyr::lag(
         atan2(
@@ -625,8 +639,8 @@ onestep_logscore_gam <- function(
         #
         # An NA here is not a numerical accident: the kernel raster spans only
         # the candidate disc of radius max.dist (the 0.99 quantile of the
-        # tentative gamma), so an observed step LONGER than that lands outside it
-        # and cannot be scored. Verified across three deer -- the count of
+        # tentative gamma), so an observed step LONGER than that lands outside
+        # it and cannot be scored. Verified across three deer -- the count of
         # unscoreable steps equalled the count of steps exceeding max.dist
         # exactly, and the longest scored step was always just under it. This is
         # a property of the disc, not of the cropped raster: the failing steps

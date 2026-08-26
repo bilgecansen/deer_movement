@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Iterate every deer with a fitted GAM model in results/ and run
-# scripts/gam/run_logscore_gam_test.R on each, scoring the test-year (year+1) track
+# scripts/gam/run_logscore_gam_test.R on each, scoring the test-year
+# (year+1) track
 # under the train-year model. Deer with no test-year wrangled track are
 # counted as "no data" and skipped without invoking R.
 #
@@ -9,7 +10,7 @@
 # the loop. Final summary prints counts and elapsed time.
 #
 # Usage:
-#   bash scripts/gam/run_logscore_gam_all_test.sh              # resumable (default)
+#   bash scripts/gam/run_logscore_gam_all_test.sh            # resumable
 #   bash scripts/gam/run_logscore_gam_all_test.sh --overwrite  # reprocess all
 
 shopt -s nullglob
@@ -69,4 +70,5 @@ elapsed=$(( $(date +%s) - start ))
 mins=$(( elapsed / 60 ))
 secs=$(( elapsed % 60 ))
 echo
-echo "Done: $n_done   Skipped: $n_skipped   No data: $n_no_data   Failed: $n_failed   Elapsed: ${mins}m ${secs}s"
+echo "Done: $n_done   Skipped: $n_skipped   No data: $n_no_data"
+echo "Failed: $n_failed   Elapsed: ${mins}m ${secs}s"

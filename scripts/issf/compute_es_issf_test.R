@@ -1,20 +1,23 @@
 #' @description
 #' Out-of-sample one-step energy scores: for every deer with test-year
-#' simulations in sims/issf/sims_issf_test_*.rds, compute per-model energy scores
-#' against the test-year (year + 1) observed track.
+#' simulations in sims/issf/sims_issf_test_*.rds, compute per-model energy
+#' scores against the test-year (year + 1) observed track.
 #'
 #' Iterating off the test sims means deer with no test data are excluded by
 #' construction (they have no sims_issf_test_*.rds file). The (id, season, year)
-#' columns in the output identify the TRAIN key — i.e. the model that
-#' produced the simulations — matching the keying used by
-#' filters/issf/udoverlap_issf_test_*.rds and filters/issf/logscore_issf_test_*.rds.
+#' columns in the output identify the TRAIN key — i.e. the model that produced
+#' the simulations — matching the keying used by
+#' filters/issf/udoverlap_issf_test_*.rds and
+#' filters/issf/logscore_issf_test_*.rds.
 #'
-#' By default, deer that already appear in the existing filters/issf/es_issf_test.rds
-#' are skipped (resumable reruns). Pass --overwrite to reprocess everything.
+#' By default, deer that already appear in the existing
+#' filters/issf/es_issf_test.rds are skipped (resumable reruns). Pass
+#' --overwrite to reprocess everything.
 #'
 #' Usage:
-#'   Rscript scripts/issf/compute_es_issf_test.R              # resumable (default)
-#'   Rscript scripts/issf/compute_es_issf_test.R --overwrite  # reprocess every deer
+#'   Rscript scripts/issf/compute_es_issf_test.R # resumable (default)
+#'   Rscript scripts/issf/compute_es_issf_test.R --overwrite # reprocess every
+#'     deer
 
 # Parse CLI args ---------------------------------------------------------------
 args <- commandArgs(trailingOnly = TRUE)

@@ -12,7 +12,8 @@
 #' Fit a single iSSF model for one individual
 #' @param ssf_data Step selection data for one deer (from stp.var.train)
 #' @param formula Model formula string
-#' @return List with iss (fitted model), coeff (tidy coefficients), aic (AIC value)
+#' @return List with iss (fitted model), coeff (tidy coefficients), aic (AIC
+#'   value)
 fit_mod <- function(ssf_data, formula) {
   iss <- tryCatch(
     ssf_data |> amt::fit_issf(as.formula(formula), model = TRUE),
@@ -27,7 +28,8 @@ fit_mod <- function(ssf_data, formula) {
 
 #' Rename categorical landcover coefficients to match binary raster layer names
 #' @param coef_names Character vector of coefficient names from a fitted model
-#' @param prefix The categorical variable prefix to look for (default: "wiscland_end")
+#' @param prefix The categorical variable prefix to look for (default:
+#'   "wiscland_end")
 #' @param levels Non-reference levels of the categorical variable
 #' @return Character vector with renamed coefficients
 rename_landcover_coefs <- function(
@@ -58,8 +60,10 @@ rename_landcover_coefs <- function(
 #' responsible for ensuring `env_test` already carries every covariate layer
 #' the model formula references (HR_edge, HR_center_log, etc.).
 #'
-#' @param stp_data Observed step data for one deer (x1_, y1_, t1_, x2_, y2_, t2_, burst_)
-#' @param env_test Cropped environmental rasters (with all model covariates as layers)
+#' @param stp_data Observed step data for one deer (x1_, y1_, t1_, x2_, y2_,
+#'   t2_, burst_)
+#' @param env_test Cropped environmental rasters (with all model covariates as
+#'   layers)
 #' @param ndvi_test Cropped NDVI rasters (indexed by month)
 #' @param issf_train Precomputed iSSF model (from amt::make_issf_model)
 #' @return data.frame with burst_, step_index, t1_, logp

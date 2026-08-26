@@ -1,7 +1,7 @@
 #' @description
 #' Deer movement data wrangling — full track per deer (no train/test split).
-#' Iterates sequentially over every deer matching the create_hr_rasters.R
-#' filter and writes one rds per deer to data/tracks/data_<id>_<season>_<year>.rds.
+#' Iterates sequentially over every deer matching the create_hr_rasters.R filter
+#' and writes one rds per deer to data/tracks/data_<id>_<season>_<year>.rds.
 #'
 #' Behavior per deer:
 #'   * If the HR rasters are missing for that (id, season, year), skip with a
@@ -45,7 +45,7 @@ cat(sprintf("Total qualifying deer: %d\n", nrow(deer_mvt)))
 # Output dir
 dir.create("data/tracks", recursive = TRUE, showWarnings = FALSE)
 
-# Loop --------------------------------------------------------------------------
+# Loop -------------------------------------------------------------------------
 n_done <- 0L
 n_skipped <- 0L
 n_failed <- 0L

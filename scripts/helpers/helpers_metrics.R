@@ -100,8 +100,8 @@ svf_score <- function(ms_data, ms_model, ref) {
   model_area <- trap(log_dt, curve_model)
 
   # Normalize by the larger of the two curve areas. Makes the score
-  # symmetric and avoids the over/undershoot asymmetry of the data-only
-  # normalization.
+  # symmetric and avoids the over/undershoot asymmetry of the
+  # data-only normalization.
   norm <- max(data_area, model_area)
 
   if (norm == 0 || !is.finite(norm)) {

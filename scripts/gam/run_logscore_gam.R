@@ -11,8 +11,8 @@
 #'
 #' Both are scored in the SAME run, over the same cropped rasters and the same
 #' observed steps. That is deliberate: delta_logp is only meaningful as a
-#' like-for-like difference, and splitting the null into its own invocation would
-#' repeat all the raster work while letting the two sides drift apart.
+#' like-for-like difference, and splitting the null into its own invocation
+#' would repeat all the raster work while letting the two sides drift apart.
 #'
 #' Usage: Rscript run_logscore_gam.R <id> <season> <year>
 #'   id     — deer ID
@@ -24,7 +24,10 @@ args <- commandArgs(trailingOnly = TRUE)
 
 if (length(args) != 3) {
   stop(
-    "Usage: Rscript run_logscore_gam.R <id> <season> <year>\nExample: Rscript run_logscore_gam.R 5004 fa 2017"
+    paste0(
+      "Usage: Rscript run_logscore_gam.R <id> <season> <year>\n",
+      "Example: Rscript run_logscore_gam.R 5004 fa 2017"
+    )
   )
 }
 
@@ -107,8 +110,8 @@ deer_input <- list(
 )
 
 # Collect fitted GAMs ---------------------------------------------------------
-# No coefficient surgery (unlike the iSSF path): the fitted mgcv cox.ph object is
-# used directly by redistribution_kernel_gam. Failed fits become NULL.
+# No coefficient surgery (unlike the iSSF path): the fitted mgcv cox.ph object
+# is used directly by redistribution_kernel_gam. Failed fits become NULL.
 cat("Collecting fitted GAMs...\n")
 
 model_gams <- purrr::map(results_gam, function(r) {
@@ -116,11 +119,15 @@ model_gams <- purrr::map(results_gam, function(r) {
   if (is.character(g)) NULL else g
 })
 
-null_gam <- if (is.character(results_gam_null$gam)) NULL else results_gam_null$gam
+null_gam <- if (is.character(results_gam_null$gam)) {
+  NULL
+} else {
+  results_gam_null$gam
+}
 
 # One scoring pass over the null plus every numbered model. The null is carried
-# as a named unit ("null") rather than a model number so it can never be mistaken
-# for one; the results are split apart again before saving.
+# as a named unit ("null") rather than a model number so it can never be
+# mistaken for one; the results are split apart again before saving.
 score_units <- c(list(null = null_gam), model_gams)
 units_to_run <- names(score_units)
 
@@ -189,10 +196,10 @@ gc()
 #   skipped_no_heading  first step of a burst; nothing precedes it, so no
 #                       incoming heading exists. By design, ~19% of steps.
 #   failed_*            a real failure. Overwhelmingly failed_outside_disc: the
-#                       observed step was longer than max.dist (the 0.99 quantile
-#                       of the tentative gamma) so its endpoint lies outside the
-#                       candidate disc. Routine -- about 75% of deer have at
-#                       least one -- and previously invisible.
+#                       observed step was longer than max.dist (the 0.99
+#                       quantile of the tentative gamma) so its endpoint lies
+#                       outside the candidate disc. Routine -- about 75% of deer
+#                       have at least one -- and previously invisible.
 per_step <- dplyr::bind_rows(results_logscore)
 
 step_key <- function(d) paste(d$burst_, d$step_index)

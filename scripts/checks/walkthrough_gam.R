@@ -5,22 +5,23 @@
 #'
 #' Every function in scripts/helpers/ is INLINED here. Library calls (mgcv, amt,
 #' terra, sf) stay as calls -- that is the boundary of what this file lets you
-#' review, and it is the right one: our code is what carries the project's
-#' assumptions.
+#' review, and it is the right one: our code is what carries the
+#' project's assumptions.
 #'
-#' There are no loops. Fixing one deer, one model and one step removes every loop
-#' in the GAM path: the deer/model loops in fit_GAM.R, the burst and step loops in
-#' onestep_logscore_gam(), the step loop in simulate_path_gam(), and the burst and
-#' month-chunk loops in simulate_movement(). redistribution_kernel_gam() has none
-#' to begin with -- it is vectorised over candidate cells.
+#' There are no loops. Fixing one deer, one model and one step removes every
+#' loop in the GAM path: the deer/model loops in fit_GAM.R, the burst and step
+#' loops in onestep_logscore_gam(), the step loop in simulate_path_gam(), and
+#' the burst and month-chunk loops in simulate_movement().
+#' redistribution_kernel_gam() has none to begin with -- it is vectorised over
+#' candidate cells.
 #'
 #' WHY THE ASSERTIONS MATTER. An inlined copy is a second implementation of the
-#' same computation, and a second implementation can drift. If it does, you would
-#' be carefully reviewing code that is not what runs -- worse than not reviewing,
-#' because it produces false confidence. So every stage ends with a stopifnot()
-#' comparing the hand-built object against what the production helper returns on
-#' the same inputs. They are what make this file trustworthy, and they will fail
-#' loudly the day a helper changes. Do not delete them.
+#' same computation, and a second implementation can drift. If it does, you
+#' would be carefully reviewing code that is not what runs -- worse than not
+#' reviewing, because it produces false confidence. So every stage ends with a
+#' stopifnot() comparing the hand-built object against what the production
+#' helper returns on the same inputs. They are what make this file trustworthy,
+#' and they will fail loudly the day a helper changes. Do not delete them.
 #'
 #' Sections:
 #'   0  configuration
@@ -37,7 +38,7 @@
 #'  11  the weights                          (gam_kernel_weights)
 #'  12  rasterise and normalise              (redistribution_kernel_gam, part 2)
 #'  13  SIMULATE one step                    (simulate_path_gam, one iteration)
-#'  14  SCORE one step                       (onestep_logscore_gam, one iteration)
+#'  14 SCORE one step (onestep_logscore_gam, one iteration)
 #'  15  delta_logp against the null
 #'  16  the handoff to step 2
 #'
@@ -53,8 +54,8 @@ suppressPackageStartupMessages({
   library(foreach) # only so the production functions can be called for checks
 })
 
-# The helpers are loaded ONLY so the assertions can compare against them. None of
-# the walkthrough code below calls them.
+# The helpers are loaded ONLY so the assertions can compare against them. None
+# of the walkthrough code below calls them.
 source("scripts/helper_functions.R")
 
 
@@ -82,8 +83,8 @@ stp <- deer$stp[[1]]
 stp_var <- deer$stp.var[[1]]
 
 # The tentative movement distributions, fitted during the wrangle and carried as
-# attributes. The GAM's sl_ / log(sl_) / cos(ta_) terms are CORRECTIONS to these,
-# so the kernel needs them to reconstruct the full movement density.
+# attributes. The GAM's sl_ / log(sl_) / cos(ta_) terms are CORRECTIONS to
+# these, so the kernel needs them to reconstruct the full movement density.
 sl_distr <- attr(stp_var, "sl_")
 ta_distr <- attr(stp_var, "ta_")
 
@@ -105,12 +106,13 @@ cat(sprintf(
 
 # 2 ---- The stratified Cox design (prepare_gam_data, inlined) -----------------
 # An SSF is fit as a stratified Cox PH model: one stratum per observed step, one
-# "event" per stratum at a shared constant time, and the used/available indicator
-# passed as the censoring weight. That tie structure reproduces conditional
-# logistic regression.
+# "event" per stratum at a shared constant time, and the used/available
+# indicator passed as the censoring weight. That tie structure reproduces
+# conditional logistic regression.
 gam_data <- stp_var
 gam_data$times <- 1 # constant event time
-gam_data$stratum <- as.integer(factor(gam_data$step_id_)) # one per observed step
+# one stratum per observed step
+gam_data$stratum <- as.integer(factor(gam_data$step_id_))
 gam_data$obs <- as.integer(gam_data$case_) # 1 = used, 0 = available
 
 stopifnot(identical(
@@ -122,9 +124,10 @@ stopifnot(identical(
 # ones, one shared event time.
 per_stratum <- tibble::as_tibble(gam_data) |>
   dplyr::group_by(stratum) |>
-  dplyr::summarise(used = sum(obs == 1), avail = sum(obs == 0), .groups = "drop")
+  dplyr::summarise(used = sum(obs == 1), avail = sum(obs == 0),
+                   .groups = "drop")
 cat(sprintf(
-  "design: %d strata, %d used each, %d available each, %d distinct event time\n",
+  "design: %d strata, %d used, %d available each, %d event time\n",
   nrow(per_stratum), unique(per_stratum$used), unique(per_stratum$avail),
   dplyr::n_distinct(gam_data$times)
 ))
@@ -200,9 +203,9 @@ cat(sprintf("cropped map: %d x %d cells, %d layers: %s\n",
 
 # 5 ---- One step, and its incoming heading -----------------------------------
 # Heading = the ABSOLUTE bearing of the PRECEDING step in the same burst. The
-# kernel converts a candidate endpoint into a turning angle by subtracting it, so
-# it is a reference direction, NOT a turning angle -- despite living in a field
-# called ta_.
+# kernel converts a candidate endpoint into a turning angle by subtracting it,
+# so it is a reference direction, NOT a turning angle -- despite living in a
+# field called ta_.
 steps <- stp |>
   dplyr::group_by(burst_) |>
   dplyr::mutate(prev_head = dplyr::lag(atan2(y2_ - y1_, x2_ - x1_))) |>
@@ -228,13 +231,15 @@ cat(sprintf("incoming heading: %.4f rad (%.1f deg)\n",
 # calendar-month lookup agrees with the nearest-in-time lookup used at fit time.
 mo <- lubridate::month(step$t1_)
 env_test <- env_cropped
-env_test$ndvi <- terra::resample(ndvi_cropped[[mo]], env_cropped, method = "near")
+env_test$ndvi <- terra::resample(
+  ndvi_cropped[[mo]], env_cropped, method = "near"
+)
 cat(sprintf("NDVI layer: %s (month %d)\n", names(ndvi_cropped)[mo], mo))
 
 
 # 6 ---- Fit-time vs kernel-time covariates -----------------------------------
-# The model must be scored on the covariates it was FIT on. Here the same step is
-# extracted both ways and compared. A mismatch here is silent and invalidates
+# The model must be scored on the covariates it was FIT on. Here the same step
+# is extracted both ways and compared. A mismatch here is silent and invalidates
 # everything downstream -- it is exactly where the NDVI bug lived.
 #
 # CAVEAT while data/tracks/ is still stale. The stored fit-time values were
@@ -243,7 +248,7 @@ cat(sprintf("NDVI layer: %s (month %d)\n", names(ndvi_cropped)[mo], mo))
 # mid-month. Layers are now stamped mid-month and the two rules agree, but the
 # stored files have not caught up. So until the tracks are re-wrangled:
 #   * a step in the first half of a month  -> ndvi_end agrees (as it always did)
-#   * a step in the second half            -> ndvi_end DISAGREES, and that is the
+#   * a step in the second half -> ndvi_end DISAGREES, and that is the
 #                                             stale data, not the code
 # Change STEP_I to a late-month step to see it. HR_center_end and wiscland_end
 # are unaffected either way and should always agree exactly.
@@ -267,21 +272,26 @@ if (nrow(fit_time) == 1) {
               as.character(fit_time$wiscland_end),
               as.character(kernel_time$wiscland_end)))
 } else {
-  cat("this step was not in the fitting design (short burst or first in burst)\n")
+  cat("this step was not in the fitting design",
+      "(short burst or first in burst)\n")
 }
 
 
 # 7 ---- The candidate disc (redistribution_kernel_gam, part 1) ---------------
-# Radius: the 0.99 quantile of the tentative step length. An OBSERVED step longer
-# than this cannot be scored -- its endpoint falls outside the disc. That is the
-# cause of essentially every scoring failure in the pipeline.
+# Radius: the 0.99 quantile of the tentative step length. An OBSERVED step
+# longer than this cannot be scored -- its endpoint falls outside the disc. That
+# is the cause of essentially every scoring failure in the pipeline.
 max_dist <- ceiling(do.call(
   paste0("q", sl_distr$name),
   c(list(p = 0.99), sl_distr$params)
 ))
 cat(sprintf("max.dist = %d m | this step is %.0f m -> %s\n",
             max_dist, step$sl_,
-            if (step$sl_ <= max_dist) "inside the disc" else "OUTSIDE, unscoreable"))
+            if (step$sl_ <= max_dist) {
+              "inside the disc"
+            } else {
+              "OUTSIDE, unscoreable"
+            }))
 
 start_xy <- c(step$x1_, step$y1_)
 
@@ -308,7 +318,7 @@ k$t2_ <- step$t1_ + lubridate::hours(DT_HOURS)
 class(k) <- c("steps_xyt", "steps_xy", class(k))
 attr(k, "crs") <- 6610
 
-cat(sprintf("%d candidate endpoints | sl_ range %.0f-%.0f m | ta_ range %.2f-%.2f rad\n",
+cat(sprintf("%d candidates | sl_ %.0f-%.0f m | ta_ %.2f-%.2f rad\n",
             nrow(k), min(k$sl_), max(k$sl_), min(k$ta_), max(k$ta_)))
 
 
@@ -347,8 +357,8 @@ phi <- -(1 / sl_distr$params$scale) * k_cov$sl_ +
 
 stopifnot(all.equal(phi, gam_movement_kernel(k_cov, sl_distr, ta_distr)))
 
-# Independent confirmation: phi differs from the textbook log densities only by a
-# constant.
+# Independent confirmation: phi differs from the textbook log densities only by
+# a constant.
 phi_check <- dgamma(k_cov$sl_, shape = sl_distr$params$shape,
                     scale = sl_distr$params$scale, log = TRUE) +
   ta_distr$params$kappa * cos(k_cov$ta_) -
@@ -360,11 +370,11 @@ cat(sprintf("phi - (log gamma + log vonMises) is constant: sd = %.3g\n",
 # 11 ---- The weights (gam_kernel_weights, inlined) ---------------------------
 # w = exp(eta + phi - log(sl_)).
 #
-# The -log(sl_) is the polar-to-planar Jacobian. phi is a density over
-# (step length, turning angle); the candidates are cells on a PLANE. Converting
-# from polar to Cartesian divides by sl_, hence minus its log. Drop this term and
-# the kernel over-weights long steps, because a ring at radius r contains more
-# cells than one at radius r/2.
+# The -log(sl_) is the polar-to-planar Jacobian. phi is a density over (step
+# length, turning angle); the candidates are cells on a PLANE. Converting from
+# polar to Cartesian divides by sl_, hence minus its log. Drop this term and the
+# kernel over-weights long steps, because a ring at radius r contains more cells
+# than one at radius r/2.
 w_raw <- eta + phi - log(k_cov$sl_)
 
 # Subtracting the mean before exponentiating is numerical hygiene only -- it
@@ -381,7 +391,8 @@ cat(sprintf("weights: %d candidates, %d with positive mass, max/min = %.1f\n",
 
 # 12 ---- Rasterise and normalise (redistribution_kernel_gam, part 2) ---------
 kernel_rast <- terra::rast(data.frame(k_cov[, c("x2_", "y2_")], w = w))
-kernel_rast <- kernel_rast / terra::global(kernel_rast, "sum", na.rm = TRUE)[1, 1]
+kernel_rast <- kernel_rast /
+  terra::global(kernel_rast, "sum", na.rm = TRUE)[1, 1]
 names(kernel_rast) <- "kernel"
 
 cat(sprintf("normalised kernel sums to %.10f\n",
@@ -412,8 +423,8 @@ cat(sprintf("simulated endpoint: (%.0f, %.0f), sl_ %.0f m, ta_ %.2f rad\n",
             sim_end[1], sim_end[2], k_cov$sl_[idx], k_cov$ta_[idx]))
 cat(sprintf("observed  endpoint: (%.0f, %.0f), sl_ %.0f m\n",
             step$x2_, step$y2_, step$sl_))
-# NOTE: sample.int here draws WITHOUT replacement. Harmless at size = 1, which is
-# the only value production uses, but wrong for any larger size.
+# NOTE: sample.int here draws WITHOUT replacement. Harmless at size = 1, which
+# is the only value production uses, but wrong for any larger size.
 
 
 # 14 ---- SCORE one step (onestep_logscore_gam, one iteration) ----------------
@@ -421,10 +432,16 @@ cat(sprintf("observed  endpoint: (%.0f, %.0f), sl_ %.0f m\n",
 obs_pt <- cbind(step$x2_, step$y2_)
 p <- terra::extract(kernel_rast, obs_pt)[1, 1]
 
-# An NA here means the observed endpoint lies outside the disc, i.e. the step was
-# longer than max.dist. It is recorded as failed_outside_disc, not silently
-# dropped.
-status <- if (is.na(p)) "failed_outside_disc" else if (p <= 0) "failed_zero_density" else "ok"
+# An NA here means the observed endpoint lies outside the disc, i.e. the step
+# was longer than max.dist. It is recorded as failed_outside_disc, not
+# silently dropped.
+status <- if (is.na(p)) {
+  "failed_outside_disc"
+} else if (p <= 0) {
+  "failed_zero_density"
+} else {
+  "ok"
+}
 logp <- if (status == "ok") log(p) else NA_real_
 
 cat(sprintf("density at observed endpoint: %.3e -> logp %.4f (%s)\n",
@@ -472,7 +489,9 @@ next_start <- amt::make_start(
   dt = lubridate::hours(DT_HOURS), crs = 6610
 )
 cat(sprintf("next start: (%.0f, %.0f), heading %.4f rad, t %s\n",
-            next_start$x_, next_start$y_, next_start$ta_, format(next_start$t_)))
+            next_start$x_, next_start$y_, next_start$ta_,
+            format(next_start$t_)))
 cat("\nSection 7 onwards would now repeat with next_start in place of step.\n")
 
-cat("\nAll assertions passed: this walkthrough computes what the helpers compute.\n")
+cat("\nAll assertions passed:",
+    "this walkthrough computes what the helpers compute.\n")

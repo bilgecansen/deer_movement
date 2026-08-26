@@ -3,17 +3,17 @@
 # Aggregator. The helper library used to be one ~2100-line file; it now lives as
 # themed files in scripts/helpers/ and this file just sources all of them.
 #
-# Every script keeps its existing `source("scripts/helper_functions.R")` line and
-# gets the whole library, exactly as before. Nothing needs to know which file a
-# given function ended up in, and a helper can be moved between files without
-# touching any caller.
+# Every script keeps its existing `source("scripts/helper_functions.R")` line
+# and gets the whole library, exactly as before. Nothing needs to know which
+# file a given function ended up in, and a helper can be moved between files
+# without touching any caller.
 #
 #   helpers_constants.R  LANDCOVER_LEVELS, CROP_BUFFER_M
 #   helpers_raster.R     landcover / NDVI / home-range raster loading
 #   helpers_warp.R       warp_to_template (gdalwarp wrapper; prep scripts only)
 #   helpers_track.R      random-point generation, step covariate extraction
 #   helpers_issf.R       iSSF fitting, coefficient tidying, log score
-#   helpers_gam.R        GAM fitting, diagnostics, redistribution kernel, log score
+#   helpers_gam.R GAM fitting, diagnostics, redistribution kernel, log score
 #   helpers_simulate.R   simulate_movement (the iSSF / GAM seam)
 #   helpers_metrics.R    energy score, SVF, UD overlap (both paths)
 #   helpers_plots.R      track plotting / animation

@@ -14,29 +14,38 @@
 #'                            Ships with a deliberate-break control so we know
 #'                            the check can fail.
 #'   K3 shift invariance      exp(w - mean(w)) must leave relative weights alone
-#'   K4 rasterisation         terra::rast(data.frame(x, y, w)) landing weights on
+#'   K4 rasterisation terra::rast(data.frame(x, y, w)) landing weights on
 #'                            the wrong cells; normalisation not summing to 1
 #'   K5 fit/predict agreement the covariates the kernel builds at simulation and
 #'                            scoring time differing from the ones the model was
-#'                            FIT on. Silent, and it invalidates every downstream
-#'                            number without raising an error.
+#'                            FIT on. Silent, and it invalidates every
+#'                            downstream number without raising an error.
 #'   K6 design contract       prepare_gam_data's stratified Cox layout
 #'   K7 metric identities     calc_energy_score / svf_score against themselves
 #'
 #' Usage: Rscript scripts/checks/check_kernel_gam.R [<id> <season> <year>]
 
 suppressPackageStartupMessages({
-  library(mgcv); library(amt); library(terra)
-  library(tidyverse); library(sf); library(ctmm); library(foreach)
+  library(mgcv)
+  library(amt)
+  library(terra)
+  library(tidyverse)
+  library(sf)
+  library(ctmm)
+  library(foreach)
 })
 source("scripts/helper_functions.R")
 source("scripts/checks/check_helpers.R")
 
 args <- commandArgs(trailingOnly = TRUE)
 if (length(args) == 3) {
-  id <- args[1]; season <- args[2]; year <- as.integer(args[3])
+  id <- args[1]
+  season <- args[2]
+  year <- as.integer(args[3])
 } else {
-  id <- "7193"; season <- "fa"; year <- 2020L
+  id <- "7193"
+  season <- "fa"
+  year <- 2020L
 }
 key <- sprintf("%s_%s_%d", id, season, year)
 cat(sprintf("GAM kernel checks on deer %s\n", key))
@@ -82,10 +91,15 @@ check("control: omitting the Jacobian breaks K2", cv_nj > 1e-6,
 
 # ---- K3 ---------------------------------------------------------------------
 check_section("K3  normalised weights invariant to a constant shift in eta")
-set.seed(3); e <- rnorm(400)
-a <- exp(e - mean(e)); a <- a / sum(a)
-b <- exp((e + 17.3) - mean(e + 17.3)); b <- b / sum(b)
-check_close("weights unchanged by +17.3 on eta", max(abs(a - b)), 0, tol = 1e-12)
+set.seed(3)
+e <- rnorm(400)
+a <- exp(e - mean(e))
+a <- a / sum(a)
+b <- exp((e + 17.3) - mean(e + 17.3))
+b <- b / sum(b)
+check_close(
+  "weights unchanged by +17.3 on eta", max(abs(a - b)), 0, tol = 1e-12
+)
 
 # ---- Build the runtime map exactly as the runners do ------------------------
 env <- load_landcover(year, season)
@@ -129,7 +143,8 @@ if (is.null(rk)) {
   # Independent recomputation at the raster's own cell centres. If rasterisation
   # misplaces weights this correlation drops below 1.
   cells <- which(!is.na(vals))
-  set.seed(4); cells <- sample(cells, min(2000, length(cells)))
+  set.seed(4)
+  cells <- sample(cells, min(2000, length(cells)))
   xyc <- terra::xyFromCell(kr, cells)
   cand <- tibble(
     x1_ = start$x_[1], y1_ = start$y_[1], x2_ = xyc[, 1], y2_ = xyc[, 2],
@@ -168,7 +183,8 @@ kern_cov <- purrr::map_dfr(split(obs, lubridate::month(obs$t1_)), function(g) {
   m <- lubridate::month(g$t1_[1])
   e <- envc
   e$ndvi <- terra::resample(ndvic[[m]], envc)
-  gg <- g; class(gg) <- c("steps_xyt", "steps_xy", class(gg))
+  gg <- g
+  class(gg) <- c("steps_xyt", "steps_xy", class(gg))
   attr(gg, "crs") <- 6610
   out <- gam_cov_fun(gg, e)
   out$.row <- g$.row
@@ -177,9 +193,11 @@ kern_cov <- purrr::map_dfr(split(obs, lubridate::month(obs$t1_)), function(g) {
 
 for (v in c("HR_center_end", "HR_edge_end", "ndvi_end")) {
   if (!v %in% names(kern_cov) || !v %in% names(used)) {
-    check(sprintf("%s present both sides", v), NA, "missing"); next
+    check(sprintf("%s present both sides", v), NA, "missing")
+    next
   }
-  A <- used[[v]]; B <- kern_cov[[v]]
+  A <- used[[v]]
+  B <- kern_cov[[v]]
   ok <- is.finite(A) & is.finite(B)
   d <- abs(A[ok] - B[ok])
   rel <- mean(d > 1e-6 * pmax(abs(A[ok]), 1))
@@ -188,9 +206,10 @@ for (v in c("HR_center_end", "HR_edge_end", "ndvi_end")) {
         sprintf("%.1f%% of %d steps differ; max |diff| = %.4g",
                 100 * rel, sum(ok), if (length(d)) max(d) else 0))
   if (!passed && v == "ndvi_end") {
-    cat("        ^ expected until data/tracks/ is re-wrangled: these files were\n",
-        "         built with the old 1st-of-month NDVI stamps. K5b below tests\n",
-        "         the current stamps directly and is the authoritative check.\n", sep = "")
+    cat("        ^ expected until data/tracks/ is re-wrangled: these\n",
+        "         files were built with the old 1st-of-month NDVI\n",
+        "         stamps. K5b below tests the current stamps directly\n",
+        "         and is the authoritative check.\n", sep = "")
   }
 }
 agree_lc <- mean(as.character(used$wiscland_end) ==
@@ -213,10 +232,12 @@ terra::values(probe) <- rep(1:12, each = 16)
 names(probe) <- month.abb
 terra::time(probe) <- ndvi_layer_times(year)
 days <- seq(as.POSIXct(sprintf("%d-01-01 12:00:00", year), tz = "UTC"),
-            as.POSIXct(sprintf("%d-12-31 12:00:00", year), tz = "UTC"), by = "day")
+            as.POSIXct(sprintf("%d-12-31 12:00:00", year), tz = "UTC"),
+            by = "day")
 ps <- tibble(x1_ = 500, y1_ = 500, x2_ = 500, y2_ = 500,
              t1_ = days, t2_ = days + 4 * 3600)
-class(ps) <- c("steps_xyt", "steps_xy", class(ps)); attr(ps, "crs") <- 6610
+class(ps) <- c("steps_xyt", "steps_xy", class(ps))
+attr(ps, "crs") <- 6610
 sel <- amt::extract_covariates_var_time(
   ps, probe, max_time = lubridate::days(31),
   when = "any", where = "both", name_covar = "ndvi")$ndvi_end
@@ -237,7 +258,11 @@ check("NDVI layer choice agrees outside the known Feb-adjacent days",
       sprintf("%d/%d days differ (%s); unexpected: %s",
               length(mism), length(days),
               if (length(lbl)) paste(lbl, collapse = ", ") else "none",
-              if (length(unexpected)) paste(unexpected, collapse = ", ") else "none"))
+              if (length(unexpected)) {
+                paste(unexpected, collapse = ", ")
+              } else {
+                "none"
+              }))
 
 # ---- K6 ---------------------------------------------------------------------
 check_section("K6  prepare_gam_data stratified Cox contract")
@@ -250,15 +275,20 @@ gd <- prepare_gam_data(stp_var)
 # why overlap_ud() is fine. Always as_tibble() a steps object before grouping.
 n_grp <- dplyr::n_distinct(gd$stratum)
 raw_grp <- nrow(
-  gd |> dplyr::group_by(stratum) |> dplyr::summarise(n = dplyr::n(), .groups = "drop")
+  gd |>
+    dplyr::group_by(stratum) |>
+    dplyr::summarise(n = dplyr::n(), .groups = "drop")
 )
 if (raw_grp != n_grp) {
   cat(sprintf(
-    "  NOTE: amt's summarise.steps_xy dropped grouping (%d rows, not %d) -- expected; as_tibble() first.\n",
+    paste("  NOTE: amt's summarise.steps_xy dropped grouping",
+          "(%d rows, not %d) -- expected; as_tibble() first.\n"),
     raw_grp, n_grp))
 }
 per <- tibble::as_tibble(gd) |> dplyr::group_by(stratum) |>
-  dplyr::summarise(n_used = sum(obs == 1), n_avail = sum(obs == 0), .groups = "drop")
+  dplyr::summarise(
+    n_used = sum(obs == 1), n_avail = sum(obs == 0), .groups = "drop"
+  )
 check("exactly one used point per stratum", all(per$n_used == 1),
       sprintf("range %d..%d", min(per$n_used), max(per$n_used)))
 check("constant number of available points per stratum",
@@ -277,11 +307,11 @@ check("as_tibble() restores correct grouping on steps objects",
 
 # ---- K8 ---------------------------------------------------------------------
 # The scoring code must condition on the deer's ACTUAL incoming heading. The
-# kernel converts a candidate endpoint to a turning angle via
-# ta_ = bearing - start$ta_, so start$ta_ is a reference direction, not a turning
-# angle. amt::make_start() on a bare one-row track returns ta_ = 0 (due east);
-# scoring every step from such a start evaluates each one as though the deer had
-# just been travelling east, which scrambles cos(ta_) by up to ~0.8 log units per
+# kernel converts a candidate endpoint to a turning angle via ta_ = bearing -
+# start$ta_, so start$ta_ is a reference direction, not a turning angle.
+# amt::make_start() on a bare one-row track returns ta_ = 0 (due east); scoring
+# every step from such a start evaluates each one as though the deer had just
+# been travelling east, which scrambles cos(ta_) by up to ~0.8 log units per
 # step and shifts delta_logp by roughly the size of the gate-3 threshold.
 check_section("K8  scoring conditions on the observed incoming heading")
 
@@ -292,10 +322,11 @@ check("amt::make_start() on one point still defaults to ta_ = 0 (the trap)",
       isTRUE(bare$ta_[1] == 0),
       sprintf("ta_ = %s", bare$ta_[1]))
 
-# First-in-burst steps have no preceding step, so no heading exists; they must be
-# skipped rather than scored from an invented direction.
+# First-in-burst steps have no preceding step, so no heading exists; they must
+# be skipped rather than scored from an invented direction.
 heads <- stp |> dplyr::group_by(burst_) |>
-  dplyr::mutate(ph = dplyr::lag(atan2(y2_ - y1_, x2_ - x1_))) |> dplyr::ungroup()
+  dplyr::mutate(ph = dplyr::lag(atan2(y2_ - y1_, x2_ - x1_))) |>
+  dplyr::ungroup()
 n_first <- sum(is.na(heads$ph))
 
 envk2 <- envc
@@ -314,7 +345,8 @@ check("every first-in-burst step is skipped, every other step scored",
 i2 <- which(!is.na(heads$ph))[1]
 lp_at <- function(ta_start) {
   st <- amt::make_start(c(heads$x1_[i2], heads$y1_[i2]), ta_ = ta_start,
-                        time = heads$t1_[i2], dt = lubridate::hours(4), crs = 6610)
+                        time = heads$t1_[i2],
+                        dt = lubridate::hours(4), crs = 6610)
   k <- tryCatch(redistribution_kernel_gam(
     x = gam_fit, map = envk2, start = st, fun = gam_cov_fun,
     sl_distr = sl_distr, ta_distr = ta_distr,

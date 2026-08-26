@@ -1,13 +1,13 @@
 #' @description
 #' Explore the fitted deer-movement GAMs (output of fit_GAM.R).
 #'
-#' Section 1 (here): the k / shrinkage audit. fit_GAM.R writes one row per smooth
-#' per (deer, model) fit to results/gam/k_audit_gam.rds, each labelled with a status
-#' from gam_smooth_diag():
+#' Section 1 (here): the k / shrinkage audit. fit_GAM.R writes one row per
+#' smooth per (deer, model) fit to results/gam/k_audit_gam.rds, each labelled
+#' with a status from gam_smooth_diag():
 #'   * "ok"          smooth is supported and below its basis ceiling
 #'   * "k-bound"     edf pressed against k' -> consider a higher k
 #'   * "near-linear" collapsed to the penalty null space (a straight line)
-#'   * "removed"     shrunk to ~zero (no support; expected for cc / re / fs terms
+#'   * "removed" shrunk to ~zero (no support; expected for cc / re / fs terms
 #'                   under ordinary REML, see gam_smooth_diag docs)
 #' We draw one bar plot per smooth showing how often it lands in each status
 #' across all deer x model fits, and save it to plots/.
@@ -139,7 +139,8 @@ cat(sprintf("\nSaved status bar plot -> %s\n", out_file))
 # covariate value x relative to a reference, other covariates held fixed. Each
 # term's contribution is pulled with predict(type = "terms"):
 #   * tod x sl   (model 1): s(tod_, by = sl_) movement modulation, shown at 3
-#                           step lengths (it scales with sl_), centred over the day
+#                           step lengths (it scales with sl_), centred over
+#                           the day
 #   * HR edge    (model 2): s(HR_edge_end), relative to its median
 #   * HR center  (model 3): s(HR_center_end), relative to its median
 #   * NDVI x LC  (model 5): global s(ndvi_end) + per-class fs together (the GS
@@ -252,9 +253,10 @@ p3 <- ggplot(g3, aes(HR_center_end, rss)) +
 
 # Panel 4: the NDVI x landcover GS block (model 5) = global s(ndvi_end) +
 # per-class fs deviations, evaluated for every landcover class over the observed
-# NDVI range, relative to forest at median NDVI. In the clean GS every class gets
-# its own NDVI curve, and the fs also carries the class intercept -- so vertical
-# offset is landcover selection and the shape is the class's NDVI response.
+# NDVI range, relative to forest at median NDVI. In the clean GS every class
+# gets its own NDVI curve, and the fs also carries the class intercept -- so
+# vertical offset is landcover selection and the shape is the class's
+# NDVI response.
 ndvi_rng <- range(dat$ndvi_end, na.rm = TRUE)
 g4 <- tidyr::expand_grid(
   ndvi_end = seq(ndvi_rng[1], ndvi_rng[2], length.out = 200),

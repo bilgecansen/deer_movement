@@ -4,15 +4,17 @@
 #' (deer x model) data frame, and apply four sequential model-selection gates.
 #'
 #' Inputs:
-#'   filters/issf/udoverlap_issf_<key>.rds — list keyed by model: list(bat_uds, svf_agree)
-#'   filters/issf/logscore_issf_<key>.rds  — df: model, total_logp, n_steps, delta_logp
-#'   filters/issf/es_issf.rds              — df: id, season, year, model, energy_score
+#'   filters/issf/udoverlap_issf_<key>.rds — list keyed by model: list(bat_uds,
+#'   svf_agree)
+#'   filters/issf/logscore_issf_<key>.rds — df: model, total_logp, n_steps,
+#'     delta_logp
+#'   filters/issf/es_issf.rds — df: id, season, year, model, energy_score
 #'   results/issf/results_issf_<key>.rds   — used to recover observed sl_
 #'
 #' Outputs:
-#'   filters/issf/filter_combined_issf.rds — every (deer, model) with all metrics
-#'   filters/issf/filter_selected_issf.rds — rows surviving all four gates
-#'   plots/filter_violins_pre.png, plots/filter_violins_post.png
+#'   filters/issf/filter_combined_issf.rds — every (deer, model) with all
+#'   metrics filters/issf/filter_selected_issf.rds — rows surviving all four
+#'   gates plots/filter_violins_pre.png, plots/filter_violins_post.png
 #'
 #' Gates (applied sequentially — only survivors flow into the next step):
 #'   1. bat_uds    >= 0.8
@@ -27,10 +29,13 @@ library(tidyverse)
 # Pipeline mode ---------------------------------------------------------------
 # FALSE: use in-sample filter outputs (filters/issf/udoverlap_issf_*.rds,
 #        filters/issf/logscore_issf_*.rds, filters/issf/es_issf.rds) and write
-#        filter_combined_issf.rds / filter_selected_issf.rds + non-suffixed plots.
-# TRUE:  use out-of-sample (test) filter outputs (filters/issf/udoverlap_issf_test_*.rds,
-#        filters/issf/logscore_issf_test_*.rds, filters/issf/es_issf_test.rds) and write
-#        filter_combined_issf_test.rds / filter_selected_issf_test.rds + _test plots.
+#        filter_combined_issf.rds / filter_selected_issf.rds +
+#        non-suffixed plots.
+# TRUE: use out-of-sample (test) filter outputs
+#   (filters/issf/udoverlap_issf_test_*.rds,
+#        filters/issf/logscore_issf_test_*.rds, filters/issf/es_issf_test.rds)
+#        and write filter_combined_issf_test.rds / filter_selected_issf_test.rds
+#        + _test plots.
 test_mode <- F
 
 null_model <- 2L
@@ -52,17 +57,23 @@ plot_post <- sprintf("plots/filter_violins_post%s.png", suffix)
 # Discover keys ---------------------------------------------------------------
 # Broad listing matches both test and non-test files (the regex
 # `^udoverlap_issf_.*` happily eats `udoverlap_issf_test_…`); narrow to the
-# requested mode explicitly. GAM outputs live in filters/gam/ and never appear
-# here.
-udov_files <- list.files("filters/issf", "^udoverlap_issf_.*\\.rds$", full.names = TRUE)
-logs_files <- list.files("filters/issf", "^logscore_issf_.*\\.rds$", full.names = TRUE)
+# requested mode explicitly. GAM outputs live in filters/gam/ and never
+# appear here.
+udov_files <- list.files(
+  "filters/issf", "^udoverlap_issf_.*\\.rds$", full.names = TRUE
+)
+logs_files <- list.files(
+  "filters/issf", "^logscore_issf_.*\\.rds$", full.names = TRUE
+)
 
 if (test_mode) {
   udov_files <- udov_files[grepl("^udoverlap_issf_test_", basename(udov_files))]
   logs_files <- logs_files[grepl("^logscore_issf_test_", basename(logs_files))]
 } else {
   # Exclude the test outputs, which share the filters/issf/ folder.
-  udov_files <- udov_files[!grepl("^udoverlap_issf_test_", basename(udov_files))]
+  udov_files <- udov_files[
+    !grepl("^udoverlap_issf_test_", basename(udov_files))
+  ]
   logs_files <- logs_files[!grepl("^logscore_issf_test_", basename(logs_files))]
 }
 
@@ -79,7 +90,7 @@ keys_logs <- gsub(
 keys <- intersect(keys_udov, keys_logs)
 
 cat(sprintf(
-  "Found %d deer with both udoverlap and logscore outputs (udov: %d, logs: %d)\n",
+  "Found %d deer with udoverlap and logscore (udov: %d, logs: %d)\n",
   length(keys),
   length(keys_udov),
   length(keys_logs)
@@ -239,7 +250,7 @@ saveRDS(all_df, combined_out)
 saveRDS(step4, selected_out)
 
 cat(sprintf(
-  "\nDeer-model rows: %d total -> step1 %d -> step2 %d -> step3 %d -> step4 %d\n",
+  "\nDeer-model rows: %d -> step1 %d -> step2 %d -> step3 %d -> step4 %d\n",
   nrow(all_df),
   nrow(step1),
   nrow(step2),
@@ -259,8 +270,8 @@ cat(sprintf(
 # Two figures of four violin panels (one per metric, one panel per model).
 #   *_pre.png  — every (deer, model) row in all_df, before any filtering.
 #   *_post.png — each panel shows the gate's input (previous step) split into
-#                kept vs. dropped at that gate, so you can see what got
-#                eliminated:
+#                kept vs. dropped at that gate, so you can see what
+#                got eliminated:
 #                   bat_uds:    all_df vs. step1
 #                   svf_agree:  step1  vs. step2
 #                   delta_logp: step2  vs. step3
@@ -478,7 +489,8 @@ panels_cov <- panels_cov +
   patchwork::plot_annotation(
     title = "Per-deer pass/fail by covariate",
     subtitle = sprintf(
-      "Passed = >=1 surviving model in formulas %d-%d; failed = none or only null (2, 3).",
+      paste("Passed = >=1 surviving model in formulas %d-%d;",
+            "failed = none or only null (2, 3)."),
       min(env_models),
       max(env_models)
     )
@@ -553,7 +565,9 @@ panels_compare <- panels_compare +
   patchwork::plot_annotation(
     title = "Null vs env among deer with surviving models",
     subtitle = sprintf(
-      "Deer with nothing in step4 excluded. env = >=1 surviving model in %d-%d; null = only models %s.",
+      paste("Deer with nothing in step4 excluded.",
+            "env = >=1 surviving model in %d-%d;",
+            "null = only models %s."),
       min(env_models),
       max(env_models),
       paste(null_models, collapse = ", ")

@@ -26,7 +26,7 @@
 #' would be truncated.
 #'
 #' @param r           SpatRaster or path to input raster
-#' @param template    SpatRaster or path defining target CRS / extent / resolution
+#' @param template SpatRaster or path defining target CRS / extent / resolution
 #' @param outfile     Output file path (string)
 #' @param method      GDAL resampling method ("near", "bilinear", "cubic", ...).
 #'                    Default "near".

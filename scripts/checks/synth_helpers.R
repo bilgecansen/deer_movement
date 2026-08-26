@@ -18,12 +18,13 @@
 
 #' Continuous covariate field on [0, 1].
 #'
-#' Wavelengths are deliberately SHORT (900-1500 m) relative to the 99th-percentile
-#' step length (~1 km). The covariate has to vary within a single step's reach or
-#' the control points in a stratum all carry nearly the same value, the design has
-#' no within-stratum contrast, and nothing is identifiable. A first attempt using
-#' broad Gaussian bumps (sigma ~2.5 km) failed exactly this way: the walk settled
-#' on a plateau and every realised endpoint had cov_ = 1.
+#' Wavelengths are deliberately SHORT (900-1500 m) relative to the
+#' 99th-percentile step length (~1 km). The covariate has to vary within a
+#' single step's reach or the control points in a stratum all carry nearly the
+#' same value, the design has no within-stratum contrast, and nothing is
+#' identifiable. A first attempt using broad Gaussian bumps (sigma ~2.5 km)
+#' failed exactly this way: the walk settled on a plateau and every realised
+#' endpoint had cov_ = 1.
 #'
 #' Not monotonic in space, so the covariate is not a proxy for
 #' distance-from-start and cannot be recovered by accident.
@@ -38,7 +39,8 @@ synth_field <- function(x, y, cx, cy) {
 #'   cov      the continuous covariate carrying the selection signal
 #'   wiscland a constant categorical layer (gam_cov_fun factors it; unused here)
 #' @param res_m cell size in metres; 30 matches the real landcover grid.
-synth_landscape <- function(cx = 512437, cy = 289293, half = 12000, res_m = 30) {
+synth_landscape <- function(cx = 512437, cy = 289293,
+                            half = 12000, res_m = 30) {
   r <- terra::rast(
     xmin = cx - half, xmax = cx + half,
     ymin = cy - half, ymax = cy + half,
@@ -48,9 +50,12 @@ synth_landscape <- function(cx = 512437, cy = 289293, half = 12000, res_m = 30) 
   # Layer is named "cov" (not "cov_"): amt::extract_covariates appends
   # "_start"/"_end", so "cov" yields cov_start / cov_end, matching the rest of
   # the pipeline's naming. "cov_" would yield "cov__end".
-  cov_ <- r; terra::values(cov_) <- synth_field(xy[, 1], xy[, 2], cx, cy)
+  cov_ <- r
+  terra::values(cov_) <- synth_field(xy[, 1], xy[, 2], cx, cy)
   names(cov_) <- "cov"
-  wl <- r; terra::values(wl) <- 1L; names(wl) <- "wiscland"
+  wl <- r
+  terra::values(wl) <- 1L
+  names(wl) <- "wiscland"
   levels(wl) <- data.frame(value = 1L, wiscland = "forest")
   c(cov_, wl)
 }
@@ -86,7 +91,9 @@ synth_track <- function(land, f_true, n_steps = 1000,
             ymin = unname(e[["ymin"]]), ymax = unname(e[["ymax"]]))
   margin <- 2500  # keep the walk clear of the edge so the disc is never clipped
 
-  x <- cx; y <- cy; head_ <- runif(1, -pi, pi)
+  x <- cx
+  y <- cy
+  head_ <- runif(1, -pi, pi)
   out <- vector("list", n_steps)
 
   for (i in seq_len(n_steps)) {
@@ -95,7 +102,8 @@ synth_track <- function(land, f_true, n_steps = 1000,
       sl <- rgamma(batch, shape = shape, scale = scale)
       ta <- circular_rvm(batch, kappa)
       ang <- head_ + ta
-      x2 <- x + sl * cos(ang); y2 <- y + sl * sin(ang)
+      x2 <- x + sl * cos(ang)
+      y2 <- y + sl * sin(ang)
       inside <- x2 > e$xmin + margin & x2 < e$xmax - margin &
         y2 > e$ymin + margin & y2 < e$ymax - margin
       cv <- rep(NA_real_, batch)
@@ -107,7 +115,9 @@ synth_track <- function(land, f_true, n_steps = 1000,
         j <- hit[1]
         out[[i]] <- c(x1_ = x, y1_ = y, x2_ = x2[j], y2_ = y2[j],
                       sl_ = sl[j], ta_ = ta[j], cov_end = cv[j])
-        x <- x2[j]; y <- y2[j]; head_ <- ang[j]
+        x <- x2[j]
+        y <- y2[j]
+        head_ <- ang[j]
         accepted <- TRUE
       }
     }
@@ -126,10 +136,13 @@ circular_rvm <- function(n, kappa) {
   a <- 1 + sqrt(1 + 4 * kappa^2)
   b <- (a - sqrt(2 * a)) / (2 * kappa)
   r <- (1 + b^2) / (2 * b)
-  out <- numeric(n); k <- 0L
+  out <- numeric(n)
+  k <- 0L
   while (k < n) {
     m <- n - k
-    u1 <- runif(m); u2 <- runif(m); u3 <- runif(m)
+    u1 <- runif(m)
+    u2 <- runif(m)
+    u3 <- runif(m)
     z <- cos(pi * u1)
     f <- (1 + r * z) / (r + z)
     c_ <- kappa * (r - f)
@@ -171,7 +184,8 @@ synth_design <- function(trk, land, n_ctrl = 25,
     x1_ = trk$x1_, y1_ = trk$y1_, x2_ = trk$x2_, y2_ = trk$y2_,
     sl_ = trk$sl_, ta_ = trk$ta_, t1_ = trk$t1_, t2_ = trk$t2_, burst_ = 1L
   )
-  d <- dplyr::bind_rows(used, ctrl) |> dplyr::arrange(step_id_, dplyr::desc(case_))
+  d <- dplyr::bind_rows(used, ctrl) |>
+    dplyr::arrange(step_id_, dplyr::desc(case_))
   d$cov_end <- terra::extract(land[["cov"]], cbind(d$x2_, d$y2_))[, 1]
   d$tod_ <- lubridate::hour(d$t1_) + lubridate::minute(d$t1_) / 60
   d |> dplyr::filter(!is.na(cov_end))

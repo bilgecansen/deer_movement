@@ -19,7 +19,11 @@ args <- commandArgs(trailingOnly = TRUE)
 
 if (length(args) != 3) {
   stop(
-    "Usage: Rscript scripts/gam/run_udoverlap_gam.R <id> <season> <year>\nExample: Rscript scripts/gam/run_udoverlap_gam.R 5004 fa 2017"
+    paste0(
+      "Usage: Rscript scripts/gam/run_udoverlap_gam.R ",
+      "<id> <season> <year>\n",
+      "Example: Rscript scripts/gam/run_udoverlap_gam.R 5004 fa 2017"
+    )
   )
 }
 

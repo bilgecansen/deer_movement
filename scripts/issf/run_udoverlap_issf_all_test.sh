@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
-# Iterate every deer with test-year simulations in sims/issf/sims_issf_test_*.rds and
-# run scripts/issf/run_udoverlap_issf_test.R on each. Driving off the test sims (rather
+# Iterate every deer with test-year simulations in
+# sims/issf/sims_issf_test_*.rds and
+# run scripts/issf/run_udoverlap_issf_test.R on each. Driving off the test
+# sims (rather
 # than fitted models) means deer with no test-year data are skipped naturally
 # — they have no sims_test_*.rds file. By default, skip deer whose test
 # UD-overlap output already exists; pass --overwrite to reprocess everything.
@@ -9,7 +11,7 @@
 # elapsed time.
 #
 # Usage:
-#   bash scripts/issf/run_udoverlap_all_test.sh              # resumable (default)
+#   bash scripts/issf/run_udoverlap_all_test.sh            # resumable
 #   bash scripts/issf/run_udoverlap_all_test.sh --overwrite  # reprocess all
 
 shopt -s nullglob
@@ -38,7 +40,8 @@ for f in sims/issf/sims_issf_test_*.rds; do
   fi
 
   echo "[run]  $key"
-  if Rscript scripts/issf/run_udoverlap_issf_test.R "$id" "$season" "$year"; then
+  if Rscript scripts/issf/run_udoverlap_issf_test.R \
+    "$id" "$season" "$year"; then
     n_done=$((n_done + 1))
   else
     rc=$?
@@ -51,4 +54,5 @@ elapsed=$(( $(date +%s) - start ))
 mins=$(( elapsed / 60 ))
 secs=$(( elapsed % 60 ))
 echo
-echo "Done: $n_done   Skipped: $n_skipped   Failed: $n_failed   Elapsed: ${mins}m ${secs}s"
+echo "Done: $n_done   Skipped: $n_skipped   Failed: $n_failed"
+echo "Elapsed: ${mins}m ${secs}s"

@@ -30,7 +30,9 @@ check <- function(name, ok, detail = "") {
 #' Numeric comparison with an explicit tolerance, reporting the actual gap.
 check_close <- function(name, actual, expected, tol = 1e-8, scale = FALSE) {
   if (length(actual) != 1 || !is.finite(actual)) {
-    return(check(name, NA, sprintf("actual = %s", paste(actual, collapse = ", "))))
+    return(check(
+      name, NA, sprintf("actual = %s", paste(actual, collapse = ", "))
+    ))
   }
   gap <- abs(actual - expected)
   if (scale) {

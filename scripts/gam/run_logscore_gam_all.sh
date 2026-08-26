@@ -26,7 +26,8 @@ for f in results/gam/results_gam_*.rds; do
   base=$(basename "$f" .rds)
 
   # results_gam_null_<key>.rds also matches this glob. The null is not a deer of
-  # its own — run_logscore_gam.R loads it alongside the numbered models — so skip
+  # its own — run_logscore_gam.R loads it alongside the numbered
+  # models — so skip
   # it silently here rather than invoking R on a bogus key.
   [[ "$base" == results_gam_null_* ]] && continue
 
@@ -57,4 +58,5 @@ elapsed=$(( $(date +%s) - start ))
 mins=$(( elapsed / 60 ))
 secs=$(( elapsed % 60 ))
 echo
-echo "Done: $n_done   Skipped: $n_skipped   Failed: $n_failed   Elapsed: ${mins}m ${secs}s"
+echo "Done: $n_done   Skipped: $n_skipped   Failed: $n_failed"
+echo "Elapsed: ${mins}m ${secs}s"

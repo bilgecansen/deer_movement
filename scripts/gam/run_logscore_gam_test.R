@@ -24,7 +24,10 @@ args <- commandArgs(trailingOnly = TRUE)
 
 if (length(args) != 3) {
   stop(
-    "Usage: Rscript run_logscore_gam_test.R <id> <season> <year>\nExample: Rscript run_logscore_gam_test.R 5004 fa 2017"
+    paste0(
+      "Usage: Rscript run_logscore_gam_test.R <id> <season> <year>\n",
+      "Example: Rscript run_logscore_gam_test.R 5004 fa 2017"
+    )
   )
 }
 
@@ -121,8 +124,8 @@ deer_input <- list(
 )
 
 # Collect fitted GAMs ---------------------------------------------------------
-# No coefficient surgery (unlike the iSSF path): the fitted mgcv cox.ph object is
-# used directly by redistribution_kernel_gam. Failed fits become NULL.
+# No coefficient surgery (unlike the iSSF path): the fitted mgcv cox.ph object
+# is used directly by redistribution_kernel_gam. Failed fits become NULL.
 cat("Collecting fitted GAMs...\n")
 
 model_gams <- purrr::map(results_gam, function(r) {
@@ -130,11 +133,15 @@ model_gams <- purrr::map(results_gam, function(r) {
   if (is.character(g)) NULL else g
 })
 
-null_gam <- if (is.character(results_gam_null$gam)) NULL else results_gam_null$gam
+null_gam <- if (is.character(results_gam_null$gam)) {
+  NULL
+} else {
+  results_gam_null$gam
+}
 
-# One scoring pass over the null plus every numbered model; see run_logscore_gam.R
-# for why they share a run. The null is carried as a named unit ("null") so it
-# can never be mistaken for a model number.
+# One scoring pass over the null plus every numbered model; see
+# run_logscore_gam.R for why they share a run. The null is carried as a named
+# unit ("null") so it can never be mistaken for a model number.
 score_units <- c(list(null = null_gam), model_gams)
 units_to_run <- names(score_units)
 

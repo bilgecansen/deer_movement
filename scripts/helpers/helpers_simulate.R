@@ -16,12 +16,13 @@
 #' Builds a redistribution kernel from `model` and `env_test` and simulates one
 #' path that follows the observed step timing in `stp_data`. The caller is
 #' responsible for ensuring `env_test` already carries every covariate layer the
-#' model references (HR_edge, HR_center_log, the per-class landcover indicators,
-#' etc.).
+#' model references (HR_edge, HR_center_log, the per-class landcover
+#' indicators, etc.).
 #'
 #' `method` picks the route; the burst / month orchestration below is shared,
 #' only the kernel builder and path simulator differ:
-#'   * "issf" — amt::redistribution_kernel() + amt::simulate_path(); `model` is a
+#'   * "issf" — amt::redistribution_kernel() + amt::simulate_path(); `model` is
+#'     a
 #'     fitted iSSF (amt make_issf_model / fit_clogit).
 #'   * "gam"  — redistribution_kernel_gam() + simulate_path_gam(); `model` is an
 #'     mgcv cox.ph GAM, and the tentative movement distributions sl_distr /
@@ -30,7 +31,8 @@
 #'
 #' Two code paths inside, chosen automatically based on whether the model has
 #' any NDVI term:
-#'   * NDVI path — for each burst, walks month-by-month, swapping `env_test$ndvi`
+#'   * NDVI path — for each burst, walks month-by-month, swapping
+#'     `env_test$ndvi`
 #'     to that month's layer before building a fresh kernel. Required because
 #'     NDVI is the only time-varying covariate.
 #'   * Simple path — for each burst, builds one kernel and simulates every step
@@ -98,7 +100,9 @@ simulate_movement <- function(
   } else {
     if (compensate.movement && is.null(sl_distr)) {
       stop(
-        "method = 'gam' with compensate.movement = TRUE needs sl_distr (the tentative step-length distribution, e.g. attr(stp.var, 'sl_'))."
+        paste("method = 'gam' with compensate.movement = TRUE needs",
+              "sl_distr (the tentative step-length distribution,",
+              "e.g. attr(stp.var, 'sl_')).")
       )
     }
 
@@ -167,7 +171,8 @@ simulate_movement <- function(
           #
           #  * At a burst start no heading exists (nothing precedes the first
           #    step), so 0 is unavoidable and only that one step is affected.
-          #  * At a MONTH-CHUNK restart inside a burst a heading does exist -- the
+          #  * At a MONTH-CHUNK restart inside a burst a heading does exist --
+          #    the
           #    bearing of the last simulated step -- and discarding it made the
           #    path turn as if it had just been heading east. That is the same
           #    defect fixed in onestep_logscore_gam; here it hits once per month

@@ -41,7 +41,9 @@ existing <- if (!overwrite && file.exists(out_path)) {
 # Discover deer with (non-test) iSSF simulations in sims/issf/. Test-year sims
 # (sims_issf_test_*) share the folder but are handled by compute_es_issf_test.R,
 # so exclude them here. GAM sims live in sims/gam/ and never appear here.
-sim_files <- list.files("sims/issf", pattern = "^sims_issf_.*\\.rds$", full.names = TRUE)
+sim_files <- list.files(
+  "sims/issf", pattern = "^sims_issf_.*\\.rds$", full.names = TRUE
+)
 sim_files <- sim_files[!grepl("^sims_issf_test_", basename(sim_files))]
 keys      <- gsub("^sims_issf_(.*)\\.rds$", "\\1", basename(sim_files))
 

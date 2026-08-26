@@ -12,7 +12,10 @@ args <- commandArgs(trailingOnly = TRUE)
 
 if (length(args) != 3) {
   stop(
-    "Usage: Rscript run_logscore.R <id> <season> <year>\nExample: Rscript run_logscore.R 5000 fa 2017"
+    paste0(
+      "Usage: Rscript run_logscore.R <id> <season> <year>\n",
+      "Example: Rscript run_logscore.R 5000 fa 2017"
+    )
   )
 }
 

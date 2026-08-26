@@ -5,9 +5,11 @@
 #' frame, and apply four sequential model-selection gates.
 #'
 #' Inputs:
-#'   filters/gam/udoverlap_gam_<key>.rds  — list keyed by model: list(bat_uds, svf_agree)
-#'   filters/gam/logscore_gam_<key>.rds   — df: model, total_logp, n_steps, delta_logp
-#'   filters/gam/es_gam.rds               — df: id, season, year, model, energy_score
+#'   filters/gam/udoverlap_gam_<key>.rds — list keyed by model: list(bat_uds,
+#'     svf_agree)
+#'   filters/gam/logscore_gam_<key>.rds — df: model, total_logp, n_steps,
+#'     delta_logp
+#'   filters/gam/es_gam.rds — df: id, season, year, model, energy_score
 #'   data/tracks/data_<key>.rds       — observed steps (stp) -> observed sl_
 #'
 #' Outputs:
@@ -16,9 +18,9 @@
 #'   plots/filter_violins_pre_gam.png, plots/filter_violins_post_gam.png
 #'
 #' ONLY THE NUMBERED MODELS ARE FILTERED. The null model (movement +
-#' s(HR_center_end)) is fit and log-scored separately and does not go through the
-#' gates: it is the reference the numbered models are measured against, not a
-#' candidate competing with them. Concretely —
+#' s(HR_center_end)) is fit and log-scored separately and does not go through
+#' the gates: it is the reference the numbered models are measured against, not
+#' a candidate competing with them. Concretely —
 #'   * it is never simulated, so it has no bat_uds / svf_agree / energy_score;
 #'   * its log score lives in logscore_gam_null_<key>.rds, which this script
 #'     never reads (delta_logp, already differenced against it, is enough);
@@ -26,14 +28,15 @@
 #'     a deer with no passing numbered model simply contributes nothing.
 #'
 #' GAM model set is numbered 1..4 (see fit_GAM.R): 1 movement only, 2 & 3
-#' resource (HR-center + NDVI x landcover / NDVI x landcover alone; landcover-only
-#' substitutes in winter), 4 HR-center x landcover. The environmental
-#' (resource-selection) models are 2, 3, 4; model 1 is movement-only.
+#' resource (HR-center + NDVI x landcover / NDVI x landcover alone;
+#' landcover-only substitutes in winter), 4 HR-center x landcover. The
+#' environmental (resource-selection) models are 2, 3, 4; model 1
+#' is movement-only.
 #'
 #' Gates (applied sequentially — only survivors flow into the next step):
 #'   1. bat_uds    >= 0.8
 #'   2. svf_agree  >= 0.8
-#'   3. delta_logp >= 3   (must BEAT the null by this margin — see delta_logp_min)
+#'   3. delta_logp >= 3 (must BEAT the null by this margin — see delta_logp_min)
 #'   4. p_excd     >= 0.5  P(observed sl > energy_score); equivalent to ES below
 #'                         the deer's median step length.
 
@@ -43,9 +46,11 @@ library(tidyverse)
 # FALSE: use in-sample filter outputs (filters/gam/udoverlap_gam_*.rds,
 #        filters/gam/logscore_gam_*.rds, filters/gam/es_gam.rds) and write
 #        filter_combined_gam.rds / filter_selected_gam.rds + non-suffixed plots.
-# TRUE:  use out-of-sample (test) filter outputs (filters/gam/udoverlap_gam_test_*.rds,
-#        filters/gam/logscore_gam_test_*.rds, filters/gam/es_gam_test.rds) and write
-#        filter_combined_gam_test.rds / filter_selected_gam_test.rds + _test plots.
+# TRUE: use out-of-sample (test) filter outputs
+#   (filters/gam/udoverlap_gam_test_*.rds,
+#        filters/gam/logscore_gam_test_*.rds, filters/gam/es_gam_test.rds) and
+#        write filter_combined_gam_test.rds / filter_selected_gam_test.rds +
+#        _test plots.
 test_mode <- F
 
 # delta_logp_min is a *positive* margin: a numbered model must beat the null by
@@ -87,8 +92,8 @@ logs_files <- list.files(
 # Drop the null-model log scores in BOTH modes. They match the broad regex
 # (`logscore_gam_null_<key>` and `logscore_gam_null_test_<key>`) but are not
 # candidates: the null does not go through the gates, and the comparison against
-# it already rides on the numbered rows as delta_logp. Without this they would be
-# read as deer with keys like "null_5004_fa_2017".
+# it already rides on the numbered rows as delta_logp. Without this they would
+# be read as deer with keys like "null_5004_fa_2017".
 logs_files <- logs_files[!grepl("^logscore_gam_null_", basename(logs_files))]
 
 if (test_mode) {
@@ -112,7 +117,7 @@ keys_logs <- gsub(
 keys <- intersect(keys_udov, keys_logs)
 
 cat(sprintf(
-  "Found %d deer with both udoverlap and logscore outputs (udov: %d, logs: %d)\n",
+  "Found %d deer with udoverlap and logscore (udov: %d, logs: %d)\n",
   length(keys),
   length(keys_udov),
   length(keys_logs)
@@ -214,9 +219,9 @@ step2 <- step1 |>
   dplyr::filter(!is.na(svf_agree), svf_agree >= svf_min)
 
 # Step 3: a model passes iff it beats the null by at least delta_logp_min. This
-# is now a plain row-wise filter with no per-deer grouping: the null is no longer
-# one of the candidates, so there is no null row to fall back to when a deer has
-# no passing model. Such a deer simply drops out here.
+# is now a plain row-wise filter with no per-deer grouping: the null is no
+# longer one of the candidates, so there is no null row to fall back to when a
+# deer has no passing model. Such a deer simply drops out here.
 step3 <- step2 |>
   dplyr::filter(!is.na(delta_logp), delta_logp >= delta_logp_min)
 
@@ -246,7 +251,7 @@ saveRDS(all_df, combined_out)
 saveRDS(step4, selected_out)
 
 cat(sprintf(
-  "\nDeer-model rows: %d total -> step1 %d -> step2 %d -> step3 %d -> step4 %d\n",
+  "\nDeer-model rows: %d -> step1 %d -> step2 %d -> step3 %d -> step4 %d\n",
   nrow(all_df),
   nrow(step1),
   nrow(step2),
@@ -266,8 +271,8 @@ cat(sprintf(
 # Two figures of four violin panels (one per metric, one panel per model).
 #   *_pre.png  — every (deer, model) row in all_df, before any filtering.
 #   *_post.png — each panel shows the gate's input (previous step) split into
-#                kept vs. dropped at that gate, so you can see what got
-#                eliminated:
+#                kept vs. dropped at that gate, so you can see what
+#                got eliminated:
 #                   bat_uds:    all_df vs. step1
 #                   svf_agree:  step1  vs. step2
 #                   delta_logp: step2  vs. step3
@@ -490,7 +495,8 @@ panels_cov <- panels_cov +
   patchwork::plot_annotation(
     title = "Per-deer pass/fail by covariate",
     subtitle = sprintf(
-      "Passed = >=1 surviving model in formulas %d-%d; failed = none or only movement-only (%s).",
+      paste("Passed = >=1 surviving model in formulas %d-%d;",
+            "failed = none or only movement-only (%s)."),
       min(env_models),
       max(env_models),
       paste(nonenv_models, collapse = ", ")
@@ -512,8 +518,9 @@ ggplot2::ggsave(
 # otherwise its only survivor is the movement-only model (1).
 #
 # This used to be "null vs env" and compared against models 2/3 while they were
-# the null-ish structural models. Those are resource models now and the real null
-# sits outside this table entirely, so the contrast is movement-only vs env.
+# the null-ish structural models. Those are resource models now and the real
+# null sits outside this table entirely, so the contrast is movement-only
+# vs env.
 deer_compare <- step4 |>
   dplyr::group_by(key) |>
   dplyr::summarize(
@@ -533,7 +540,7 @@ deer_compare <- step4 |>
   )
 
 cat(sprintf(
-  "Movement-only vs env among passing deer: env %d / movement-only %d (of %d)\n",
+  "Movement vs env among passing deer: env %d / movement %d (of %d)\n",
   sum(deer_compare$status == "env"),
   sum(deer_compare$status == "movement"),
   nrow(deer_compare)
@@ -568,7 +575,9 @@ panels_compare <- panels_compare +
   patchwork::plot_annotation(
     title = "Movement-only vs env among deer with surviving models",
     subtitle = sprintf(
-      "Deer with nothing in step4 excluded. env = >=1 surviving model in %d-%d; movement = only model %s.",
+      paste("Deer with nothing in step4 excluded.",
+            "env = >=1 surviving model in %d-%d;",
+            "movement = only model %s."),
       min(env_models),
       max(env_models),
       paste(nonenv_models, collapse = ", ")

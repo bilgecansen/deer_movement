@@ -4,17 +4,18 @@ library(terra)
 # from Appendix B in https://p.widencdn.net/8ghipa/Wiscland_2_User_Guide_September_2016
 #
 # Two mutually exclusive modes:
-#   (a) Canned RAT-based level: pass L in 1:4. Uses the embedded raster attribute
+#   (a) Canned RAT-based level: pass L in 1:4. Uses the embedded raster
+#     attribute
 #       table (RAT) to map every source pixel value to its level-L class.
 #       Returns a factor raster with values 1..n and labels = level-L class
 #       descriptions from the RAT. At L=3/4, classes that are not actually
-#       subdivided to that level can be set to NA via na_when_unsubdivided = TRUE;
-#       otherwise the parent class label is carried forward
-#       (matching DNR's published behavior).
+#       subdivided to that level can be set to NA via na_when_unsubdivided =
+#       TRUE; otherwise the parent class label is carried forward (matching
+#       DNR's published behavior).
 #   (b) Custom reclass: pass `rc` as a data.frame with columns
 #       `from`, `to`, `id`, `label`. Uses range-based reclassification with
-#       half-open intervals [from, to). `id` values must be contiguous integers 1..n.
-#       Returns a factor raster with values 1..n and the supplied labels.
+#       half-open intervals [from, to). `id` values must be contiguous integers
+#       1..n. Returns a factor raster with values 1..n and the supplied labels.
 #
 # Mode precedence: if `rc` is supplied, it takes precedence and L is ignored
 # (warning issued if both given). If neither is supplied, L defaults to 1.
@@ -25,15 +26,15 @@ library(terra)
 # rather than separate NA and NaN rows.
 #
 # Validation (Mode B only): Mode B fails fast with informative errors on (i)
-# missing required columns, (ii) NA in id/label, (iii) inverted/empty
-# ranges (from >= to), (iv) non-contiguous ids, (v) inconsistent labels
-# for the same id, and (vi) overlapping ranges. Coverage validation (every source
-# value must fall in some [from, to) range) is controlled by `na_unmapped`:
-# by default (na_unmapped = FALSE), uncovered values cause a hard error listing
-# the offending codes -- typo-protection for handcrafted rc tables.
-# Pass na_unmapped = TRUE to allow uncovered values to silently map to NA,
-# useful when you want to factorize only a few classes of interest from a much
-# larger source vocabulary.
+# missing required columns, (ii) NA in id/label, (iii) inverted/empty ranges
+# (from >= to), (iv) non-contiguous ids, (v) inconsistent labels for the same
+# id, and (vi) overlapping ranges. Coverage validation (every source value must
+# fall in some [from, to) range) is controlled by `na_unmapped`: by default
+# (na_unmapped = FALSE), uncovered values cause a hard error listing the
+# offending codes -- typo-protection for handcrafted rc tables. Pass na_unmapped
+# = TRUE to allow uncovered values to silently map to NA, useful when you want
+# to factorize only a few classes of interest from a much larger
+# source vocabulary.
 
 #-------------------------------------------------------------------------------
 assign_landcover <- function(
@@ -102,9 +103,9 @@ assign_landcover <- function(
       )
     }
 
-    # Validate ids: must be contiguous integers 1..n
-    # Contiguity matters because the output factor will have integer levels 1..n;
-    # gaps would produce a sparse factor that's confusing
+    # Validate ids: must be contiguous integers 1..n Contiguity matters because
+    # the output factor will have integer levels 1..n; gaps would produce a
+    # sparse factor that's confusing
     unique_ids <- sort(unique(rc$id))
     expected <- seq_len(max(unique_ids))
     if (!identical(as.integer(unique_ids), as.integer(expected))) {
@@ -148,7 +149,8 @@ assign_landcover <- function(
             overlaps <- c(
               overlaps,
               sprintf(
-                "  rows %d and %d: [%s, %s) (id=%s, %s) overlaps [%s, %s) (id=%s, %s)",
+                paste("  rows %d and %d: [%s, %s) (id=%s, %s)",
+                      "overlaps [%s, %s) (id=%s, %s)"),
                 i,
                 j,
                 rc$from[i],
@@ -169,11 +171,11 @@ assign_landcover <- function(
       }
     }
 
-    # Validate coverage: every source value must fall in some [from, to),
-    # unless na_unmapped = TRUE. When na_unmapped = FALSE (default),
-    # uncovered source values cause a hard error -- typo-protection for handcrafted
-    # rc tables. When na_unmapped = TRUE, uncovered source values silently map
-    # to NA via the `others = NA` arg of terra::classify()
+    # Validate coverage: every source value must fall in some [from, to), unless
+    # na_unmapped = TRUE. When na_unmapped = FALSE (default), uncovered source
+    # values cause a hard error -- typo-protection for handcrafted rc tables.
+    # When na_unmapped = TRUE, uncovered source values silently map to NA via
+    # the `others = NA` arg of terra::classify()
     if (!na_unmapped) {
       src_vals <- sort(unique(terra::values(src, mat = FALSE, na.rm = TRUE)))
       in_any_range <- vapply(
@@ -193,9 +195,8 @@ assign_landcover <- function(
       }
     }
 
-    # Apply reclassification
-    # right = FALSE, include.lowest = TRUE makes terra::classify() use [from, to)
-    # semantics matching the validation above
+    # Apply reclassification right = FALSE, include.lowest = TRUE makes
+    # terra::classify() use [from, to) semantics matching the validation above
     # others = NA is defensive: any source value the validator missed becomes NA
     # rather than silently passing through
     rcl_mat <- as.matrix(rc[, c("from", "to", "id")])
@@ -242,13 +243,13 @@ assign_landcover <- function(
   desc_col <- paste0("cls_desc_", L)
   to_code <- rat[[code_col]]
 
-  # Optionally NA-out classes that aren't actually subdivided to level L
-  # In the RAT, classes that don't exist at finer levels are encoded by repeating
-  # the parent code (e.g. "Cranberries" has cls_lvl_3 == cls_lvl_2)
-  # When the user wants to *see* where the classification thins out, set those
-  # rows to NA so the output raster is missing there. Only meaningful at L >= 3;
-  # at L=1 and L=2 every class has a real subdivision, so the equality check
-  # would never trigger
+  # Optionally NA-out classes that aren't actually subdivided to level L In the
+  # RAT, classes that don't exist at finer levels are encoded by repeating the
+  # parent code (e.g. "Cranberries" has cls_lvl_3 == cls_lvl_2) When the user
+  # wants to *see* where the classification thins out, set those rows to NA so
+  # the output raster is missing there. Only meaningful at L >= 3; at L=1 and
+  # L=2 every class has a real subdivision, so the equality check would
+  # never trigger
   if (na_when_unsubdivided && L >= 3) {
     parent_col <- paste0("cls_lvl_", L - 1)
     to_code[rat[[code_col]] == rat[[parent_col]]] <- NA
@@ -276,17 +277,17 @@ assign_landcover <- function(
   out
 }
 
-# Usage
-# Load wiscland2 data which eoncodes pixels for all levels with accompanying RAT table
-# this has already been resampled 'EPSG:6610' wisconsin transverse mercator projection
-# wiscland_archive_path <- "/Volumes/checastaldo/special/wi_data/env/wiscland/"
-# wiscland2 <- terra::rast(paste0(wiscland_archive_path, "wiscland2.tif"))
+# Usage Load wiscland2 data which eoncodes pixels for all levels with
+# accompanying RAT table this has already been resampled 'EPSG:6610' wisconsin
+# transverse mercator projection wiscland_archive_path <-
+# "/Volumes/checastaldo/special/wi_data/env/wiscland/" wiscland2 <-
+# terra::rast(paste0(wiscland_archive_path, "wiscland2.tif"))
 
 # Create a level 3 wiscland2 raster
 # r <- assign_landcover(src = wiscland2, L = 3)
 
-# Create a level 3 wiscland2 raster where pixels without level 3 data are set to NA
-# r <- assign_landcover(src = wiscland2, L = 3, na_when_unsubdivided = TRUE)
+# Create a level 3 wiscland2 raster where pixels without level 3 data are set to
+# NA r <- assign_landcover(src = wiscland2, L = 3, na_when_unsubdivided = TRUE)
 
 # Create a custom wiscland2 raster that combines certain categories
 # Here the rc input must cover all possible pixel vales

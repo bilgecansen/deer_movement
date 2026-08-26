@@ -60,17 +60,18 @@ gam_input <- "stp.var"
 #         non-4h data gaps shifting the fix phase + ~1-min timestamp jitter), so
 #         it never binds -- the true resolution ceiling is ~12 (see MOVE comment
 #         and doc gam_modeling_decisions.md sec 4).
-# K_NDVI  basis dimension (per landcover class) of the NDVI 'fs' smooths. NDVI is
-#         continuous with rich support, so it is NOT tod-constrained; the k-audit
-#         reports whether it is ever the binding constraint (it has wide headroom
-#         at 5, so bumping it is unnecessary unless the audit says otherwise).
+# K_NDVI basis dimension (per landcover class) of the NDVI 'fs' smooths. NDVI is
+#         continuous with rich support, so it is NOT tod-constrained; the
+#         k-audit reports whether it is ever the binding constraint (it has wide
+#         headroom at 5, so bumping it is unnecessary unless the audit
+#         says otherwise).
 # SELECT  double-penalty shrinkage (Marra & Wood 2011). FALSE for the production
-#         fit: with a fixed, deliberate model set, between-model filtering is the
-#         selection step, so we don't also want per-deer within-model term removal
-#         (it makes "model 4" a different effective structure on different deer).
-#         REML smoothing penalties still regularise each fit; dropping the extra
-#         null-space penalty is also faster and converges more reliably. (TRUE was
-#         useful during exploration.)
+#         fit: with a fixed, deliberate model set, between-model filtering is
+#         the selection step, so we don't also want per-deer within-model term
+#         removal (it makes "model 4" a different effective structure on
+#         different deer). REML smoothing penalties still regularise each fit;
+#         dropping the extra null-space penalty is also faster and converges
+#         more reliably. (TRUE was useful during exploration.)
 K_TOD <- 10L
 K_NDVI <- 5L
 SELECT <- FALSE
@@ -106,26 +107,26 @@ source("scripts/helper_functions.R")
 # rate/shape, cos(ta_) -> von Mises concentration). Step length sl_ additionally
 # enters as a single cyclic-spline interaction with time of day (zebra model;
 # Klappstein et al. 2024): the by= smooth adds the (shrinkable) time-of-day
-# modulation of movement rate.
-# k_tod caps wiggliness below each deer's distinct-tod count (the RAW count is
-# ~24-50, inflated by non-4h data gaps that shift the fix phase off the grid plus
-# ~1-min timestamp jitter; the meaningful resolution is ~12). Landcover
-# interactions use a global
-# smooth plus hierarchical "fs" deviations (Pedersen et al. 2019 "Model GS":
-# one shrunk curve per class around a shared global response) rather than
-# independent by= smooths, which are unidentifiable when a deer visits only a few
-# classes. The global smooth mirrors the iSSF main effect and lets sparse classes
-# pool toward the shared response instead of toward zero.
+# modulation of movement rate. k_tod caps wiggliness below each deer's
+# distinct-tod count (the RAW count is ~24-50, inflated by non-4h data gaps that
+# shift the fix phase off the grid plus ~1-min timestamp jitter; the meaningful
+# resolution is ~12). Landcover interactions use a global smooth plus
+# hierarchical "fs" deviations (Pedersen et al. 2019 "Model GS": one shrunk
+# curve per class around a shared global response) rather than independent by=
+# smooths, which are unidentifiable when a deer visits only a few classes. The
+# global smooth mirrors the iSSF main effect and lets sparse classes pool toward
+# the shared response instead of toward zero.
 #
 # Models 2 & 3 (breeding) put NDVI in exactly this GS form over ALL landcover
-# classes: a global s(ndvi_end) plus an fs interaction s(ndvi_end, wiscland_end).
-# The fs carries each class's own intercept AND NDVI curve, so per-class landcover
-# selection is part of the GS term -- no separate random intercept is needed
-# (Pedersen et al. 2019; adding one would double-count the intercept). Where NDVI
-# is uninformative (e.g. forest / wetlands / developed) the shared penalty just
-# shrinks that class's deviation toward the global. GS also lets us predict
-# classes a deer never visited (Model GS supports unobserved levels; GI does not).
-# Model 4 uses the same GS form for HR_center (s(HR_center_end) + hc_fs).
+# classes: a global s(ndvi_end) plus an fs interaction s(ndvi_end,
+# wiscland_end). The fs carries each class's own intercept AND NDVI curve, so
+# per-class landcover selection is part of the GS term -- no separate random
+# intercept is needed (Pedersen et al. 2019; adding one would double-count the
+# intercept). Where NDVI is uninformative (e.g. forest / wetlands / developed)
+# the shared penalty just shrinks that class's deviation toward the global. GS
+# also lets us predict classes a deer never visited (Model GS supports
+# unobserved levels; GI does not). Model 4 uses the same GS form for HR_center
+# (s(HR_center_end) + hc_fs).
 
 # Parametric movement kernel, shared by the null and every numbered model.
 make_move <- function(k_tod) {
@@ -216,14 +217,14 @@ process_deer <- function(i) {
 
       # Per-deer cyclic-tod basis cap: k must stay below the number of distinct
       # times of day this deer was fixed at (cc identifiability). Uses the RAW
-      # distinct-tod count (~24-50, inflated by gaps/jitter), so it never binds at
-      # K_TOD = 10; the meaningful tod resolution is ~12.
+      # distinct-tod count (~24-50, inflated by gaps/jitter), so it never binds
+      # at K_TOD = 10; the meaningful tod resolution is ~12.
       n_tod <- length(unique(gam_data$tod_))
       k_tod <- max(3L, min(K_TOD, n_tod - 1L))
 
-      # Null model first, saved on its own. It shares the data prep and k_tod cap
-      # with the candidates but nothing else, so downstream code loads exactly
-      # one reference model without indexing into the candidate list.
+      # Null model first, saved on its own. It shares the data prep and k_tod
+      # cap with the candidates but nothing else, so downstream code loads
+      # exactly one reference model without indexing into the candidate list.
       results_gam_null <- fit_gam_mod(
         gam_data,
         make_null_formula(k_tod),
@@ -335,7 +336,7 @@ if (length(audit_rows)) {
   simp <- audit[audit$status %in% c("near-linear", "removed"), , drop = FALSE]
   if (nrow(simp)) {
     cat(
-      "\nselect = TRUE simplified these smooths (collapsed to linear / removed):\n"
+      "\nselect = TRUE simplified these smooths (linear / removed):\n"
     )
     print(table(smooth = simp$smooth, status = simp$status))
   }

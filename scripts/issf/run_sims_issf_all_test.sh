@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Iterate every deer with a fitted iSSF model in results/ and run
-# scripts/issf/run_sims_issf_test.R on each — i.e. simulate year+1 paths using the
+# scripts/issf/run_sims_issf_test.R on each — i.e. simulate year+1 paths
+# using the
 # year-trained model. By default, skip deer whose test-simulation output
 # already exists; pass --overwrite to reprocess everything.
 #
@@ -61,4 +62,5 @@ elapsed=$(( $(date +%s) - start ))
 mins=$(( elapsed / 60 ))
 secs=$(( elapsed % 60 ))
 echo
-echo "Done: $n_done   Skipped: $n_skipped   No data: $n_no_data   Failed: $n_failed   Elapsed: ${mins}m ${secs}s"
+echo "Done: $n_done   Skipped: $n_skipped   No data: $n_no_data"
+echo "Failed: $n_failed   Elapsed: ${mins}m ${secs}s"

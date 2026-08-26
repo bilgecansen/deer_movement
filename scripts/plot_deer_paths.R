@@ -1,6 +1,6 @@
 #' @description
-#' Per-deer plots of observed track vs. simulated paths, faceted by model.
-#' Reads `filters/issf/filter_combined_issf.rds` (which carries a `dropped_at` column
+#' Per-deer plots of observed track vs. simulated paths, faceted by model. Reads
+#' `filters/issf/filter_combined_issf.rds` (which carries a `dropped_at` column
 #' marking the gate that eliminated each row; NA = survived all four).
 #'
 #' Outputs five PDFs in plots/, all with the same aesthetic:

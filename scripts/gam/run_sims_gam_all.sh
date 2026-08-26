@@ -55,4 +55,5 @@ elapsed=$(( $(date +%s) - start ))
 mins=$(( elapsed / 60 ))
 secs=$(( elapsed % 60 ))
 echo
-echo "Done: $n_done   Skipped: $n_skipped   Failed: $n_failed   Elapsed: ${mins}m ${secs}s"
+echo "Done: $n_done   Skipped: $n_skipped   Failed: $n_failed"
+echo "Elapsed: ${mins}m ${secs}s"

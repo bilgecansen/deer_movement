@@ -65,7 +65,9 @@ for (path in paths) {
   }
 
   # ---- UD overlap + SVF -----------------------------------------------------
-  udf <- list.files(dir, sprintf("^udoverlap_%s_[^t].*\\.rds$", path), full.names = TRUE)
+  udf <- list.files(
+    dir, sprintf("^udoverlap_%s_[^t].*\\.rds$", path), full.names = TRUE
+  )
   udf <- udf[!grepl("_test_", basename(udf))]
   if (length(udf)) {
     ud <- purrr::map_dfr(udf, read_udoverlap)
@@ -94,7 +96,8 @@ for (path in paths) {
       check(
         sprintf("%s has no over-repeated value", v),
         worst <= max(2, DUP_FRAC * length(xf)),
-        sprintf("most repeated value occurs %d times (of %d)", worst, length(xf))
+        sprintf("most repeated value occurs %d times (of %d)",
+                worst, length(xf))
       )
     }
   } else {
@@ -102,7 +105,9 @@ for (path in paths) {
   }
 
   # ---- Log score ------------------------------------------------------------
-  lsf <- list.files(dir, sprintf("^logscore_%s_.*\\.rds$", path), full.names = TRUE)
+  lsf <- list.files(
+    dir, sprintf("^logscore_%s_.*\\.rds$", path), full.names = TRUE
+  )
   lsf <- lsf[!grepl("_test_|_null_", basename(lsf))]
   if (length(lsf)) {
     ls_df <- purrr::map_dfr(lsf, function(f) {
@@ -116,7 +121,8 @@ for (path in paths) {
     # differencing likelihoods computed over different data.
     per_deer <- ls_df |>
       group_by(key) |>
-      summarise(n_distinct_steps = n_distinct(n_steps[n_steps > 0]), .groups = "drop")
+      summarise(n_distinct_steps = n_distinct(n_steps[n_steps > 0]),
+                .groups = "drop")
     bad <- sum(per_deer$n_distinct_steps > 1)
     check(
       "n_steps identical across models within a deer",
@@ -151,7 +157,8 @@ for (path in paths) {
     # Model set consistency
     sets <- ls_df |>
       group_by(key) |>
-      summarise(s = paste(sort(unique(model)), collapse = ","), .groups = "drop")
+      summarise(s = paste(sort(unique(model)), collapse = ","),
+                .groups = "drop")
     check(
       "same model set in every deer",
       n_distinct(sets$s) == 1,

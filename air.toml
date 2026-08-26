@@ -1,0 +1,5 @@
+# Air formatter settings.
+# 80 columns, so scripts stay readable side by side and in diffs.
+line-width = 80
+indent-style = "space"
+indent-width = 2

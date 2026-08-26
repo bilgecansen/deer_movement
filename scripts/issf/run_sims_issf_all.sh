@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Iterate every deer with a fitted iSSF model in results/ and run
-# scripts/issf/run_sims_issf.R on each. By default, skip deer whose simulation output
+# scripts/issf/run_sims_issf.R on each. By default, skip deer whose
+# simulation output
 # already exists; pass --overwrite to reprocess everything.
 #
 # Failures in Rscript do not halt the loop — we capture the exit code and
@@ -49,4 +50,5 @@ elapsed=$(( $(date +%s) - start ))
 mins=$(( elapsed / 60 ))
 secs=$(( elapsed % 60 ))
 echo
-echo "Done: $n_done   Skipped: $n_skipped   Failed: $n_failed   Elapsed: ${mins}m ${secs}s"
+echo "Done: $n_done   Skipped: $n_skipped   Failed: $n_failed"
+echo "Elapsed: ${mins}m ${secs}s"

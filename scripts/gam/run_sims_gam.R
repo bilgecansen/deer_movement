@@ -2,11 +2,11 @@
 #' Simulate deer movement from the numbered GAM models for a single deer. GAM
 #' analogue of scripts/issf/run_sims.R.
 #'
-#' Only the NUMBERED models are simulated. The null model (fit_GAM.R writes it to
-#' results/gam/results_gam_null_<key>.rds) is deliberately left out: it is scored
-#' by log score for comparison, not simulated. Everything built on simulations —
-#' UD overlap, SVF, energy score, and hence the four filter gates — is therefore
-#' numbered-models-only by construction.
+#' Only the NUMBERED models are simulated. The null model (fit_GAM.R writes it
+#' to results/gam/results_gam_null_<key>.rds) is deliberately left out: it is
+#' scored by log score for comparison, not simulated. Everything built on
+#' simulations — UD overlap, SVF, energy score, and hence the four filter gates
+#' — is therefore numbered-models-only by construction.
 #'
 #' Usage: Rscript scripts/gam/run_sims_gam.R <id> <season> <year>
 #'   id     — deer ID
@@ -109,8 +109,8 @@ deer_input <- list(
 )
 
 # Collect fitted GAMs ---------------------------------------------------------
-# No coefficient surgery (unlike the iSSF path): the fitted mgcv cox.ph object is
-# used directly by redistribution_kernel_gam. Failed fits become NULL.
+# No coefficient surgery (unlike the iSSF path): the fitted mgcv cox.ph object
+# is used directly by redistribution_kernel_gam. Failed fits become NULL.
 cat("Collecting fitted GAMs...\n")
 
 model_gams <- purrr::map(results_gam, function(r) {

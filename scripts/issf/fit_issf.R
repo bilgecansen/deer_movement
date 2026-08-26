@@ -43,7 +43,8 @@ make_formulas <- function(season) {
   ) # 6 + HR-center x LC
 
   if (season == "nb") {
-    f4 <- paste(move, "+ HR_center_end + wiscland_end") # 4 landcover (with HR-center)
+    # 4 landcover (with HR-center)
+    f4 <- paste(move, "+ HR_center_end + wiscland_end")
     f5 <- paste(move, "+ wiscland_end") # 5 landcover (no HR-center)
   } else {
     f4 <- paste(
@@ -95,8 +96,8 @@ for (i in seq_along(track_files)) {
 
   # Process — wrapped so per-deer errors don't halt the loop. fit_mod itself
   # already returns failure-status objects per model, so the global tryCatch
-  # is here for unforeseen errors only (data load issues, missing columns,
-  # etc.).
+  # is here for unforeseen errors only (data load issues, missing
+  # columns, etc.).
   cat(sprintf("[run]           %s\n", key))
   ok <- tryCatch(
     {

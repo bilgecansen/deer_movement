@@ -8,9 +8,9 @@
 #'   season — season string (e.g. "fa", "nb")
 #'   year   — training year (test year is year + 1)
 #'
-#' Assumes sims/issf/sims_issf_test_<train_key>.rds and the test-year wrangled track
-#' both exist; the bash wrapper iterates over the test sims directly so this
-#' script does not need a "no test data" guard.
+#' Assumes sims/issf/sims_issf_test_<train_key>.rds and the test-year wrangled
+#' track both exist; the bash wrapper iterates over the test sims directly so
+#' this script does not need a "no test data" guard.
 
 # Parse command line arguments -------------------------------------------------
 args <- commandArgs(trailingOnly = TRUE)
@@ -103,7 +103,10 @@ gc()
 
 # Save -------------------------------------------------------------------------
 dir.create("filters/issf", showWarnings = FALSE, recursive = TRUE)
-saveRDS(results_ud, sprintf("filters/issf/udoverlap_issf_test_%s.rds", train_key))
+saveRDS(
+  results_ud,
+  sprintf("filters/issf/udoverlap_issf_test_%s.rds", train_key)
+)
 
 elapsed <- difftime(Sys.time(), start_time, units = "mins")
 cat(sprintf(
