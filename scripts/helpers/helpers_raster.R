@@ -103,31 +103,23 @@ load_ndvi <- function(year, folder = "library/ndvi") {
   r
 }
 
-#' Representative timestamp for each monthly NDVI composite: the MIDPOINT of the
-#' month, not its first day.
+#' Representative timestamp for each monthly NDVI composite: the midpoint of
+#' the month.
 #'
-#' This matters because the two sides of the pipeline select an NDVI layer by
-#' different rules, and they have to agree:
-#'   * fit time — extract_step_variables() uses amt::extract_covariates_var_time
-#'     with when = "any", i.e. the layer NEAREST IN TIME to the step;
+#' The two sides of the pipeline select an NDVI layer by different rules, and
+#' they have to agree:
+#'   * fit time — extract_step_variables() uses
+#'     amt::extract_covariates_var_time with when = "any", i.e. the layer
+#'     nearest in time to the step;
 #'   * kernel time — simulate_movement() / onestep_logscore*() index the stack
-#'     by
-#'     lubridate::month(t1_), i.e. the step's calendar month.
+#'     by lubridate::month(t1_), i.e. the step's calendar month.
 #'
-#' Stamped on the 1st, "nearest in time" resolves to the FOLLOWING month for any
-#' step past mid-month: a step on 20 May sits 12 days from 1 Jun but 19 days
-#' from 1 May. Models were therefore fit on one NDVI layer and simulated /
-#' scored on another for roughly half of all steps (confirmed: 0% mismatch on
-#' days 1-15, 100% on days 16+; see scripts/checks/check_kernel_gam.R,
-#' check K5).
-#'
-#' Stamping the midpoint makes the two rules agree on 364-365 days a year,
-#' against 195 under the old stamps. Measured exhaustively over 2016-2022, the
-#' residual is always and only Jan 31 and Mar 01: months differ in length, so
-#' the nearest-layer boundary cannot sit exactly on the month boundary either
-#' side of February. Both days fall in winter, where the models use landcover
-#' rather than NDVI, so no NDVI-using model is affected. check K5b asserts the
-#' residual stays confined to those two days.
+#' With each layer stamped at its month's midpoint, the nearest layer is the
+#' step's own month. The match cannot be exact at every hour, because months
+#' differ in length and the stamps are UTC while the tracks are local time, so
+#' a few steps on the first or last day of a month can still pick the
+#' neighbouring layer. check K5b and check_wrangle.R W3.7 assert that any
+#' disagreement stays on those days.
 #'
 #' @param year Year (integer)
 #' @return POSIXct vector of length 12, the midpoint of each month.

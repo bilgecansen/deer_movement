@@ -241,7 +241,7 @@ gc()
 #                       incoming heading exists. By design, ~19% of steps.
 #   failed_*            a real failure, overwhelmingly failed_outside_disc: the
 #                       observed step was longer than the candidate disc's
-#                       radius. Routine, and previously invisible.
+#                       radius. Routine rather than exceptional.
 per_step <- dplyr::bind_rows(results_logscore)
 
 scored <- per_step %>% dplyr::filter(!is.na(logp))

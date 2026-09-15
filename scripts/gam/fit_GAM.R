@@ -159,16 +159,13 @@ make_formulas <- function(k_tod, k_ndvi, season) {
   # slots 2 & 3. Either way the object holds 4 models and slots 2/3 always mean
   # "the resource-selection model".
   #
-  # WHY it is unusable is NOT snow or dormancy, as this comment used to claim.
-  # The nb season is named for the year it STARTS in and runs into the next one,
-  # but load_ndvi(year) stacks only that one year's twelve layers. Every step
-  # from January on is then outside extract_covariates_var_time's 31-day window
-  # and comes back NA, and late-December steps go NA too because there is no
-  # following layer to fall back on. The 2021 rasters exist in library/ndvi/ and
-  # are 100% non-NA at those deer's own step endpoints. See
-  # scripts/checks/check_wrangle.R W3.5 and docs/gam_decision_inventory.md #46.
-  # Fixing the loader would make winter NDVI models available; that is an open
-  # decision, not something this comment should keep foreclosing.
+  # Winter ndvi_end is NA because the nb season is named for the year it starts
+  # in and runs into the next, while load_ndvi(year) stacks only that year's
+  # twelve layers. Steps from January on fall outside
+  # extract_covariates_var_time's 31-day window, and late-December steps have
+  # no following layer to fall back on. The next year's rasters are in
+  # library/ndvi/, so loading them too would make winter NDVI models possible.
+  # See docs/gam_decision_inventory.md #46-47 and check_wrangle.R W3.5.
   if (season == "nb") {
     # The landcover-only substitutes use a penalised
     # random effect on landcover, s(wiscland_end, bs = 're'), rather than a

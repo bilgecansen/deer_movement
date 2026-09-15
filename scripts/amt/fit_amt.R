@@ -39,9 +39,8 @@ source("scripts/helper_functions.R")
 # The resource block is season-dependent, exactly as in the GAM path: winter
 # (nb) deer have no usable ndvi_end in data/tracks/, so slots 2 and 3 fall back
 # to landcover alone. Either way slots 2/3 always mean "the resource-selection
-# model". The cause is the NDVI stack spanning one calendar year while the nb
-# season crosses into the next -- not snow, as this comment used to say. See the
-# longer note in fit_GAM.R's make_formulas() and check_wrangle.R W3.5.
+# model". Winter ndvi_end is NA because the NDVI stack covers one calendar year
+# while the nb season runs into the next; see make_formulas() in fit_GAM.R.
 #
 # Retired relative to the old 1..6 set: the HR-edge model (old 2), and the
 # HR-center-only model (old 3), which is now the GAM null and is not refit here.

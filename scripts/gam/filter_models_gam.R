@@ -515,12 +515,8 @@ ggplot2::ggsave(
 # "Did pass" here = at least one model survived all four gates (i.e. the deer
 # has rows in step4). Deer with nothing in step4 are dropped entirely. Among the
 # rest, classify the deer by whether any surviving model is an env model (2-4);
-# otherwise its only survivor is the movement-only model (1).
-#
-# This used to be "null vs env" and compared against models 2/3 while they were
-# the null-ish structural models. Those are resource models now and the real
-# null sits outside this table entirely, so the contrast is movement-only
-# vs env.
+# otherwise its only survivor is the movement-only model (1). The null is never
+# a candidate, so it does not appear in this table.
 deer_compare <- step4 |>
   dplyr::group_by(key) |>
   dplyr::summarize(

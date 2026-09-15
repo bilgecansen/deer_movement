@@ -198,8 +198,8 @@ gc()
 #   failed_*            a real failure. Overwhelmingly failed_outside_disc: the
 #                       observed step was longer than max.dist (the 0.99
 #                       quantile of the tentative gamma) so its endpoint lies
-#                       outside the candidate disc. Routine -- about 75% of deer
-#                       have at least one -- and previously invisible.
+#                       outside the candidate disc. Routine: about 75% of deer
+#                       have at least one.
 per_step <- dplyr::bind_rows(results_logscore)
 
 step_key <- function(d) paste(d$burst_, d$step_index)

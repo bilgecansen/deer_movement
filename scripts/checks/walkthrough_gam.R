@@ -1,27 +1,19 @@
 #' @description
 #' MANUAL WALKTHROUGH of the GAM path: fit one model, build one redistribution
-#' kernel, simulate one step, score one step. Straight-line code meant to be
-#' stepped through line by line, not run as a job.
+#' kernel, simulate one step, score one step.
 #'
 #' Every function in scripts/helpers/ is INLINED here. Library calls (mgcv, amt,
-#' terra, sf) stay as calls -- that is the boundary of what this file lets you
-#' review, and it is the right one: our code is what carries the
-#' project's assumptions.
+#' terra, sf) stay as calls.
 #'
 #' There are no loops. Fixing one deer, one model and one step removes every
 #' loop in the GAM path: the deer/model loops in fit_GAM.R, the burst and step
 #' loops in onestep_logscore_gam(), the step loop in simulate_path_gam(), and
 #' the burst and month-chunk loops in simulate_movement().
-#' redistribution_kernel_gam() has none to begin with -- it is vectorised over
-#' candidate cells.
 #'
-#' WHY THE ASSERTIONS MATTER. An inlined copy is a second implementation of the
-#' same computation, and a second implementation can drift. If it does, you
-#' would be carefully reviewing code that is not what runs -- worse than not
-#' reviewing, because it produces false confidence. So every stage ends with a
-#' stopifnot() comparing the hand-built object against what the production
-#' helper returns on the same inputs. They are what make this file trustworthy,
-#' and they will fail loudly the day a helper changes. Do not delete them.
+#' Every stage ends with a stopifnot() comparing the hand-built object against
+#' what the production helper returns on the same inputs.
+#' They are what make this file trustworthy, and they will fail loudly the day
+#' a helper changes. Do not delete them.
 #'
 #' Sections:
 #'   0  configuration
@@ -90,19 +82,21 @@ ta_distr <- attr(stp_var, "ta_")
 
 cat(sprintf(
   "track: %d observed steps in %d bursts | design: %d rows, %d strata\n",
-  nrow(stp), dplyr::n_distinct(stp$burst_),
-  nrow(stp_var), dplyr::n_distinct(stp_var$step_id_)
+  nrow(stp),
+  dplyr::n_distinct(stp$burst_),
+  nrow(stp_var),
+  dplyr::n_distinct(stp_var$step_id_)
 ))
 cat(sprintf(
   "tentative gamma(shape=%.3f, scale=%.1f), von Mises(kappa=%.3f)\n",
-  sl_distr$params$shape, sl_distr$params$scale, ta_distr$params$kappa
+  sl_distr$params$shape,
+  sl_distr$params$scale,
+  ta_distr$params$kappa
 ))
 
 # Fewer strata than observed steps: amt::random_steps drops bursts shorter than
-# 3 steps entirely, and every surviving burst loses its first step (no turning
-# angle). So the model is fit on fewer steps than exist. See #15 in
-# docs/gam_decision_inventory.md.
-
+# 3 steps, and every surviving burst loses its first step (no turning
+# angle). So the model is fit on fewer steps than exist.
 
 # 2 ---- The stratified Cox design (prepare_gam_data, inlined) -----------------
 # An SSF is fit as a stratified Cox PH model: one stratum per observed step, one
@@ -124,17 +118,21 @@ stopifnot(identical(
 # ones, one shared event time.
 per_stratum <- tibble::as_tibble(gam_data) |>
   dplyr::group_by(stratum) |>
-  dplyr::summarise(used = sum(obs == 1), avail = sum(obs == 0),
-                   .groups = "drop")
+  dplyr::summarise(
+    used = sum(obs == 1),
+    avail = sum(obs == 0),
+    .groups = "drop"
+  )
 cat(sprintf(
   "design: %d strata, %d used, %d available each, %d event time\n",
-  nrow(per_stratum), unique(per_stratum$used), unique(per_stratum$avail),
+  nrow(per_stratum),
+  unique(per_stratum$used),
+  unique(per_stratum$avail),
   dplyr::n_distinct(gam_data$times)
 ))
 # NOTE: as_tibble() above is deliberate. amt registers group_by.steps_xy and
 # summarise.steps_xy, and the pair SILENTLY drops the grouping on a steps object
 # -- you get one aggregate row instead of one per stratum, with no warning.
-
 
 # 3 ---- Fit one model, and the null (fit_gam_mod, inlined) -------------------
 # k for the cyclic time-of-day smooth, capped below this deer's distinct-tod
@@ -143,12 +141,14 @@ K_TOD <- max(3L, min(10L, length(unique(gam_data$tod_)) - 1L))
 K_NDVI <- 5L
 
 MOVE <- sprintf(
-  "sl_ + log(sl_) + cos(ta_) + s(tod_, bs = 'cc', k = %d, by = sl_)", K_TOD
+  "sl_ + log(sl_) + cos(ta_) + s(tod_, bs = 'cc', k = %d, by = sl_)",
+  K_TOD
 )
 # Numbered model 2 (non-winter): home-range centre plus the NDVI-by-landcover
 # GS block -- a global NDVI smooth plus shrunk per-class deviations.
 RHS_MODEL <- paste(
-  MOVE, "+ s(HR_center_end) + s(ndvi_end) +",
+  MOVE,
+  "+ s(HR_center_end) + s(ndvi_end) +",
   sprintf("s(ndvi_end, wiscland_end, bs = 'fs', k = %d)", K_NDVI)
 )
 # The null: movement plus distance to the home-range centre. Everything is
@@ -170,8 +170,11 @@ fit_one <- function(rhs) {
 gam_fit <- fit_one(RHS_MODEL)
 gam_null <- fit_one(RHS_NULL)
 
-cat(sprintf("model: %.1f edf | null: %.1f edf\n",
-            sum(gam_fit$edf), sum(gam_null$edf)))
+cat(sprintf(
+  "model: %.1f edf | null: %.1f edf\n",
+  sum(gam_fit$edf),
+  sum(gam_null$edf)
+))
 print(round(coef(gam_fit)[c("sl_", "log(sl_)", "cos(ta_)")], 5))
 
 stopifnot(all.equal(
@@ -195,63 +198,88 @@ env_cropped$HR_center <- load_hr_center_raster(ID, SEASON, YEAR, env_cropped)
 env_cropped$HR_center_log <- log1p(env_cropped$HR_center)
 ndvi_cropped <- terra::crop(ndvi_year, crop_extent)
 
-cat(sprintf("cropped map: %d x %d cells, %d layers: %s\n",
-            terra::ncol(env_cropped), terra::nrow(env_cropped),
-            terra::nlyr(env_cropped),
-            paste(names(env_cropped), collapse = ", ")))
+cat(sprintf(
+  "cropped map: %d x %d cells, %d layers: %s\n",
+  terra::ncol(env_cropped),
+  terra::nrow(env_cropped),
+  terra::nlyr(env_cropped),
+  paste(names(env_cropped), collapse = ", ")
+))
 
 
 # 5 ---- One step, and its incoming heading -----------------------------------
-# Heading = the ABSOLUTE bearing of the PRECEDING step in the same burst. The
-# kernel converts a candidate endpoint into a turning angle by subtracting it,
-# so it is a reference direction, NOT a turning angle -- despite living in a
-# field called ta_.
+# When the deer arrives at the start of this step it is already moving in some
+# direction. Call that the incoming heading: the direction of the step
+# immediately before this one, measured the way atan2() measures angles
+# (0 = east, counterclockwise positive -- not a compass, where 0 = north). It is
+# an absolute direction, not a turn.
+#
+# We need it because the model scores turns, and a turn only has meaning
+# relative to where the animal was already going. Section 7 uses it to convert
+# each candidate endpoint into a turning angle.
 steps <- stp |>
   dplyr::group_by(burst_) |>
   dplyr::mutate(prev_head = dplyr::lag(atan2(y2_ - y1_, x2_ - x1_))) |>
   dplyr::ungroup()
 
+# stp also has a ta_ column, but that is the turn the deer made, measured from
+# this heading -- so it is not the heading itself. The two carry the same
+# information (prev_head is this step's bearing minus ta_, agreeing to within
+# 1e-15 rad over all 110,143 observed steps), and lagging gets at it directly.
+
 # Only steps with a predecessor are scoreable. The first step of a burst has no
 # incoming heading and is skipped rather than scored from an invented one.
+# prev_head and ta_ go NA on exactly the same rows: the 14,963 first-in-burst
+# steps across the cohort, none anywhere else, in either direction. So this
+# filter keeps every step a !is.na(ta_) filter would have kept.
 scoreable <- which(!is.na(steps$prev_head))
-cat(sprintf("%d of %d observed steps have a heading and are scoreable\n",
-            length(scoreable), nrow(steps)))
+cat(sprintf(
+  "%d of %d observed steps have a heading and are scoreable\n",
+  length(scoreable),
+  nrow(steps)
+))
 
 i <- scoreable[STEP_I] # <- THE step this file walks through
 step <- steps[i, ]
 
 cat(sprintf(
   "step %d: from (%.0f, %.0f) at %s, observed end (%.0f, %.0f), sl_ %.1f m\n",
-  i, step$x1_, step$y1_, format(step$t1_), step$x2_, step$y2_, step$sl_
+  i,
+  step$x1_,
+  step$y1_,
+  format(step$t1_),
+  step$x2_,
+  step$y2_,
+  step$sl_
 ))
-cat(sprintf("incoming heading: %.4f rad (%.1f deg)\n",
-            step$prev_head, step$prev_head * 180 / pi))
+cat(sprintf(
+  "incoming heading: %.4f rad (%.1f deg)\n",
+  step$prev_head,
+  step$prev_head * 180 / pi
+))
 
 # The month whose NDVI layer applies. Layers are stamped mid-month so that this
 # calendar-month lookup agrees with the nearest-in-time lookup used at fit time.
 mo <- lubridate::month(step$t1_)
 env_test <- env_cropped
 env_test$ndvi <- terra::resample(
-  ndvi_cropped[[mo]], env_cropped, method = "near"
+  ndvi_cropped[[mo]],
+  env_cropped,
+  method = "near"
 )
 cat(sprintf("NDVI layer: %s (month %d)\n", names(ndvi_cropped)[mo], mo))
 
 
 # 6 ---- Fit-time vs kernel-time covariates -----------------------------------
-# The model must be scored on the covariates it was FIT on. Here the same step
-# is extracted both ways and compared. A mismatch here is silent and invalidates
-# everything downstream -- it is exactly where the NDVI bug lived.
-#
-# CAVEAT while data/tracks/ is still stale. The stored fit-time values were
-# wrangled when NDVI layers were stamped on the 1st of the month, so amt's
-# nearest-in-time lookup picked the FOLLOWING month's layer for any step past
-# mid-month. Layers are now stamped mid-month and the two rules agree, but the
-# stored files have not caught up. So until the tracks are re-wrangled:
-#   * a step in the first half of a month  -> ndvi_end agrees (as it always did)
-#   * a step in the second half -> ndvi_end DISAGREES, and that is the
-#                                             stale data, not the code
-# Change STEP_I to a late-month step to see it. HR_center_end and wiscland_end
-# are unaffected either way and should always agree exactly.
+# Two different pieces of code produce covariates for the same place and time.
+# The wrangle built stp.var (extract_step_variables), and that is what the model
+# was fit on. The kernel builds them again from scratch when scoring and
+# simulating (gam_cov_fun, section 8). Nothing keeps the two in step: they crop
+# different windows, and for NDVI they pick the layer by different rules
+# entirely -- the wrangle takes the layer nearest in time, the kernel indexes by
+# calendar month. We make sure they match before using models to predict
+# kernels.
+
 step_steps <- step
 class(step_steps) <- c("steps_xyt", "steps_xy", class(step_steps))
 attr(step_steps, "crs") <- 6610
@@ -265,33 +293,41 @@ fit_time <- stp_var[stp_var$case_ & stp_var$t1_ == step$t1_, ]
 if (nrow(fit_time) == 1) {
   cat(sprintf(
     "HR_center_end  fit %.3f  kernel %.3f  | ndvi_end  fit %.4f  kernel %.4f\n",
-    fit_time$HR_center_end, kernel_time$HR_center_end,
-    fit_time$ndvi_end, kernel_time$ndvi_end
+    fit_time$HR_center_end,
+    kernel_time$HR_center_end,
+    fit_time$ndvi_end,
+    kernel_time$ndvi_end
   ))
-  cat(sprintf("wiscland_end   fit %s  kernel %s\n",
-              as.character(fit_time$wiscland_end),
-              as.character(kernel_time$wiscland_end)))
+  cat(sprintf(
+    "wiscland_end   fit %s  kernel %s\n",
+    as.character(fit_time$wiscland_end),
+    as.character(kernel_time$wiscland_end)
+  ))
 } else {
-  cat("this step was not in the fitting design",
-      "(short burst or first in burst)\n")
+  cat(
+    "this step was not in the fitting design",
+    "(short burst or first in burst)\n"
+  )
 }
 
 
 # 7 ---- The candidate disc (redistribution_kernel_gam, part 1) ---------------
 # Radius: the 0.99 quantile of the tentative step length. An OBSERVED step
-# longer than this cannot be scored -- its endpoint falls outside the disc. That
-# is the cause of essentially every scoring failure in the pipeline.
+# longer than this cannot be scored -- its endpoint falls outside the disc.
 max_dist <- ceiling(do.call(
   paste0("q", sl_distr$name),
   c(list(p = 0.99), sl_distr$params)
 ))
-cat(sprintf("max.dist = %d m | this step is %.0f m -> %s\n",
-            max_dist, step$sl_,
-            if (step$sl_ <= max_dist) {
-              "inside the disc"
-            } else {
-              "OUTSIDE, unscoreable"
-            }))
+cat(sprintf(
+  "max.dist = %d m | this step is %.0f m -> %s\n",
+  max_dist,
+  step$sl_,
+  if (step$sl_ <= max_dist) {
+    "inside the disc"
+  } else {
+    "OUTSIDE, unscoreable"
+  }
+))
 
 start_xy <- c(step$x1_, step$y1_)
 
@@ -303,13 +339,27 @@ xy_crds <- terra::crds(r1)
 
 k <- tibble::tibble(x2_ = xy_crds[, 1], y2_ = xy_crds[, 2])
 
-# Absolute bearing of each candidate, then the turning angle relative to the
-# incoming heading, wrapped to (-pi, pi].
+# Turning angle and step length for every candidate. Angles are radians,
+# measured the atan2 way: 0 = east, counterclockwise positive. Example, in
+# degrees: heading 45 (north-east), candidate due south gives
+# 1: -90, 2: 270, 3: 225, 4: -135 (a 135-degree right turn).
+
+# 1. Direction from the start to the candidate, measured from east. atan2
+#    returns -pi..pi, so due south is -pi/2.
 ta <- atan2(k$y2_ - start_xy[2], k$x2_ - start_xy[1])
+# 2. Same direction, renamed into 0..2*pi. (Line 3's %% would do this anyway;
+#    the line mirrors amt's kernel_setup().)
 ta <- ifelse(ta < 0, 2 * pi + ta, ta)
-ta <- (ta - step$prev_head) %% (2 * pi) # <- the heading enters HERE
+# 3. Subtract the incoming heading, which is also measured from east. The angle
+#    is now measured counterclockwise from straight ahead; %% wraps it into
+#    0..2*pi. This is the only line where the heading enters.
+ta <- (ta - step$prev_head) %% (2 * pi)
+# 4. Past half a circle the other way round is shorter, so call it a clockwise
+#    (negative) turn. Result in (-pi, pi]: 0 straight ahead, positive left,
+#    negative right, pi a U-turn.
 ta <- ifelse(ta > pi, (2 * pi - ta) * -1, ta)
 k$ta_ <- ta
+# Step length: Pythagoras on the east and north distances.
 k$sl_ <- sqrt((k$x2_ - start_xy[1])^2 + (k$y2_ - start_xy[2])^2)
 k$x1_ <- start_xy[1]
 k$y1_ <- start_xy[2]
@@ -318,8 +368,14 @@ k$t2_ <- step$t1_ + lubridate::hours(DT_HOURS)
 class(k) <- c("steps_xyt", "steps_xy", class(k))
 attr(k, "crs") <- 6610
 
-cat(sprintf("%d candidates | sl_ %.0f-%.0f m | ta_ %.2f-%.2f rad\n",
-            nrow(k), min(k$sl_), max(k$sl_), min(k$ta_), max(k$ta_)))
+cat(sprintf(
+  "%d candidates | sl_ %.0f-%.0f m | ta_ %.2f-%.2f rad\n",
+  nrow(k),
+  min(k$sl_),
+  max(k$sl_),
+  min(k$ta_),
+  max(k$ta_)
+))
 
 
 # 8 ---- Covariates at the candidates (gam_cov_fun, inlined) ------------------
@@ -334,24 +390,34 @@ stopifnot(all.equal(
   as.data.frame(k_cov),
   as.data.frame(gam_cov_fun(k, env_test))
 ))
-cat(sprintf("candidate landcover classes present: %s\n",
-            paste(levels(droplevels(k_cov$wiscland_end)), collapse = ", ")))
+cat(sprintf(
+  "candidate landcover classes present: %s\n",
+  paste(levels(droplevels(k_cov$wiscland_end)), collapse = ", ")
+))
 
 
 # 9 ---- The habitat term, eta -------------------------------------------------
 # The GAM's linear predictor at every candidate. cox.ph has no intercept, so eta
 # is on a relative scale already.
 eta <- as.numeric(stats::predict(
-  gam_fit, newdata = k_cov, type = "link", na.action = stats::na.pass
+  gam_fit,
+  newdata = k_cov,
+  type = "link",
+  na.action = stats::na.pass
 ))
-cat(sprintf("eta: range %.3f to %.3f, %d NA\n",
-            min(eta, na.rm = TRUE), max(eta, na.rm = TRUE), sum(is.na(eta))))
+cat(sprintf(
+  "eta: range %.3f to %.3f, %d NA\n",
+  min(eta, na.rm = TRUE),
+  max(eta, na.rm = TRUE),
+  sum(is.na(eta))
+))
 
 
 # 10 ---- The movement term, phi (gam_movement_kernel, inlined) ---------------
 # The log density of the TENTATIVE movement kernel at each candidate, in polar
 # coordinates: log gamma(sl_) + kappa*cos(ta_), each up to a constant.
-phi <- -(1 / sl_distr$params$scale) * k_cov$sl_ +
+phi <- -(1 / sl_distr$params$scale) *
+  k_cov$sl_ +
   log(k_cov$sl_) * (sl_distr$params$shape - 1) +
   cos(k_cov$ta_) * ta_distr$params$kappa
 
@@ -359,22 +425,36 @@ stopifnot(all.equal(phi, gam_movement_kernel(k_cov, sl_distr, ta_distr)))
 
 # Independent confirmation: phi differs from the textbook log densities only by
 # a constant.
-phi_check <- dgamma(k_cov$sl_, shape = sl_distr$params$shape,
-                    scale = sl_distr$params$scale, log = TRUE) +
+phi_check <- dgamma(
+  k_cov$sl_,
+  shape = sl_distr$params$shape,
+  scale = sl_distr$params$scale,
+  log = TRUE
+) +
   ta_distr$params$kappa * cos(k_cov$ta_) -
   log(2 * pi * besselI(ta_distr$params$kappa, 0))
-cat(sprintf("phi - (log gamma + log vonMises) is constant: sd = %.3g\n",
-            sd(phi - phi_check)))
+cat(sprintf(
+  "phi - (log gamma + log vonMises) is constant: sd = %.3g\n",
+  sd(phi - phi_check)
+))
 
 
 # 11 ---- The weights (gam_kernel_weights, inlined) ---------------------------
-# w = exp(eta + phi - log(sl_)).
+# Each candidate's weight is exp(eta + phi - log(sl_)): the habitat score, plus
+# the movement score, minus one correction.
 #
-# The -log(sl_) is the polar-to-planar Jacobian. phi is a density over (step
-# length, turning angle); the candidates are cells on a PLANE. Converting from
-# polar to Cartesian divides by sl_, hence minus its log. Drop this term and the
-# kernel over-weights long steps, because a ring at radius r contains more cells
-# than one at radius r/2.
+# The correction is needed because phi and the map count candidates
+# differently. phi scores a distance and a turn -- how likely is a 240 m step?
+# But the kernel chooses among map cells, and there are more cells far away
+# than close by: a ring 240 m out holds about twice as many cells as a ring
+# 120 m out. If every cell got the full score for its distance, the far rings
+# would win just by having more cells, and the kernel would favour long steps.
+# So each cell's weight is divided by its distance, which shares a ring's
+# probability out among its cells. On this log scale, dividing by sl_ is
+# subtracting log(sl_).
+#
+# (Textbooks call this correction the Jacobian of the change from distance and
+# angle to map coordinates.)
 w_raw <- eta + phi - log(k_cov$sl_)
 
 # Subtracting the mean before exponentiating is numerical hygiene only -- it
@@ -383,10 +463,15 @@ w <- exp(w_raw - mean(w_raw[is.finite(w_raw)], na.rm = TRUE))
 w[!is.finite(w)] <- 0
 
 stopifnot(all.equal(
-  w, gam_kernel_weights(k_cov, gam_fit, sl_distr, ta_distr, TRUE)
+  w,
+  gam_kernel_weights(k_cov, gam_fit, sl_distr, ta_distr, TRUE)
 ))
-cat(sprintf("weights: %d candidates, %d with positive mass, max/min = %.1f\n",
-            length(w), sum(w > 0), max(w) / min(w[w > 0])))
+cat(sprintf(
+  "weights: %d candidates, %d with positive mass, max/min = %.1f\n",
+  length(w),
+  sum(w > 0),
+  max(w) / min(w[w > 0])
+))
 
 
 # 12 ---- Rasterise and normalise (redistribution_kernel_gam, part 2) ---------
@@ -395,19 +480,36 @@ kernel_rast <- kernel_rast /
   terra::global(kernel_rast, "sum", na.rm = TRUE)[1, 1]
 names(kernel_rast) <- "kernel"
 
-cat(sprintf("normalised kernel sums to %.10f\n",
-            terra::global(kernel_rast, "sum", na.rm = TRUE)[1, 1]))
+cat(sprintf(
+  "normalised kernel sums to %.10f\n",
+  terra::global(kernel_rast, "sum", na.rm = TRUE)[1, 1]
+))
 
 # The same object the production function returns.
+#
+# make_start()'s ta_ gets prev_head, because that is the direction the kernel
+# measures turns from (section 7, line 3). amt's default of 0 suits a path
+# started from nothing; here we are continuing from a step we already know.
 rk_prod <- redistribution_kernel_gam(
-  x = gam_fit, map = env_test,
-  start = amt::make_start(start_xy, ta_ = step$prev_head, time = step$t1_,
-                          dt = lubridate::hours(DT_HOURS), crs = 6610),
-  fun = gam_cov_fun, sl_distr = sl_distr, ta_distr = ta_distr,
-  compensate.movement = TRUE, normalize = TRUE, as.rast = TRUE
+  x = gam_fit,
+  map = env_test,
+  start = amt::make_start(
+    start_xy,
+    ta_ = step$prev_head,
+    time = step$t1_,
+    dt = lubridate::hours(DT_HOURS),
+    crs = 6610
+  ),
+  fun = gam_cov_fun,
+  sl_distr = sl_distr,
+  ta_distr = ta_distr,
+  compensate.movement = TRUE,
+  normalize = TRUE,
+  as.rast = TRUE
 )
 stopifnot(all.equal(
-  terra::values(kernel_rast), terra::values(rk_prod$redistribution.kernel)
+  terra::values(kernel_rast),
+  terra::values(rk_prod$redistribution.kernel)
 ))
 
 
@@ -419,13 +521,21 @@ set.seed(1)
 idx <- sample.int(nrow(k_cov), size = 1, prob = w)
 sim_end <- c(k_cov$x2_[idx], k_cov$y2_[idx])
 
-cat(sprintf("simulated endpoint: (%.0f, %.0f), sl_ %.0f m, ta_ %.2f rad\n",
-            sim_end[1], sim_end[2], k_cov$sl_[idx], k_cov$ta_[idx]))
-cat(sprintf("observed  endpoint: (%.0f, %.0f), sl_ %.0f m\n",
-            step$x2_, step$y2_, step$sl_))
+cat(sprintf(
+  "simulated endpoint: (%.0f, %.0f), sl_ %.0f m, ta_ %.2f rad\n",
+  sim_end[1],
+  sim_end[2],
+  k_cov$sl_[idx],
+  k_cov$ta_[idx]
+))
+cat(sprintf(
+  "observed  endpoint: (%.0f, %.0f), sl_ %.0f m\n",
+  step$x2_,
+  step$y2_,
+  step$sl_
+))
 # NOTE: sample.int here draws WITHOUT replacement. Harmless at size = 1, which
 # is the only value production uses, but wrong for any larger size.
-
 
 # 14 ---- SCORE one step (onestep_logscore_gam, one iteration) ----------------
 # Scoring reads the normalised density at the endpoint the deer ACTUALLY chose.
@@ -444,19 +554,29 @@ status <- if (is.na(p)) {
 }
 logp <- if (status == "ok") log(p) else NA_real_
 
-cat(sprintf("density at observed endpoint: %.3e -> logp %.4f (%s)\n",
-            p, logp, status))
+cat(sprintf(
+  "density at observed endpoint: %.3e -> logp %.4f (%s)\n",
+  p,
+  logp,
+  status
+))
 
 # Against the production function, for this same step.
 prod_scores <- onestep_logscore_gam(
   stp_data = stp |> dplyr::filter(burst_ == step$burst_),
-  env_test = env_test, ndvi_test = ndvi_cropped,
-  gam_train = gam_fit, sl_distr = sl_distr, ta_distr = ta_distr
+  env_test = env_test,
+  ndvi_test = ndvi_cropped,
+  gam_train = gam_fit,
+  sl_distr = sl_distr,
+  ta_distr = ta_distr
 )
 prod_row <- prod_scores[prod_scores$t1_ == step$t1_, ]
 stopifnot(all.equal(logp, prod_row$logp))
-cat(sprintf("matches onestep_logscore_gam: %.4f (status %s)\n",
-            prod_row$logp, prod_row$status))
+cat(sprintf(
+  "matches onestep_logscore_gam: %.4f (status %s)\n",
+  prod_row$logp,
+  prod_row$status
+))
 
 
 # 15 ---- delta_logp against the null -----------------------------------------
@@ -464,34 +584,55 @@ cat(sprintf("matches onestep_logscore_gam: %.4f (status %s)\n",
 # comparison is done for one step; in production it is the sum over every step
 # both models scored.
 rk_null <- redistribution_kernel_gam(
-  x = gam_null, map = env_test,
-  start = amt::make_start(start_xy, ta_ = step$prev_head, time = step$t1_,
-                          dt = lubridate::hours(DT_HOURS), crs = 6610),
-  fun = gam_cov_fun, sl_distr = sl_distr, ta_distr = ta_distr,
-  compensate.movement = TRUE, normalize = TRUE, as.rast = TRUE
+  x = gam_null,
+  map = env_test,
+  start = amt::make_start(
+    start_xy,
+    ta_ = step$prev_head,
+    time = step$t1_,
+    dt = lubridate::hours(DT_HOURS),
+    crs = 6610
+  ),
+  fun = gam_cov_fun,
+  sl_distr = sl_distr,
+  ta_distr = ta_distr,
+  compensate.movement = TRUE,
+  normalize = TRUE,
+  as.rast = TRUE
 )
 p_null <- terra::extract(rk_null$redistribution.kernel, obs_pt)[1, 1]
 logp_null <- if (!is.na(p_null) && p_null > 0) log(p_null) else NA_real_
 
-cat(sprintf("logp model %.4f | logp null %.4f | delta %.4f (this step only)\n",
-            logp, logp_null, logp - logp_null))
+cat(sprintf(
+  "logp model %.4f | logp null %.4f | delta %.4f (this step only)\n",
+  logp,
+  logp_null,
+  logp - logp_null
+))
 
 
 # 16 ---- The handoff to step 2 ------------------------------------------------
 # What simulate_path_gam does between iterations, without looping. The heading
-# for the NEXT step is the bearing of the step just taken -- this is what keeps
-# the turning-angle term meaningful along a simulated path, and it is exactly
-# what the scoring path failed to do before it was fixed.
+# for the NEXT step is the direction of the step just taken, so the next turn
+# is measured from where the simulated deer is actually going.
 next_head <- atan2(sim_end[2] - start_xy[2], sim_end[1] - start_xy[1])
 next_start <- amt::make_start(
-  sim_end, ta_ = next_head,
+  sim_end,
+  ta_ = next_head,
   time = step$t1_ + lubridate::hours(DT_HOURS),
-  dt = lubridate::hours(DT_HOURS), crs = 6610
+  dt = lubridate::hours(DT_HOURS),
+  crs = 6610
 )
-cat(sprintf("next start: (%.0f, %.0f), heading %.4f rad, t %s\n",
-            next_start$x_, next_start$y_, next_start$ta_,
-            format(next_start$t_)))
+cat(sprintf(
+  "next start: (%.0f, %.0f), heading %.4f rad, t %s\n",
+  next_start$x_,
+  next_start$y_,
+  next_start$ta_,
+  format(next_start$t_)
+))
 cat("\nSection 7 onwards would now repeat with next_start in place of step.\n")
 
-cat("\nAll assertions passed:",
-    "this walkthrough computes what the helpers compute.\n")
+cat(
+  "\nAll assertions passed:",
+  "this walkthrough computes what the helpers compute.\n"
+)

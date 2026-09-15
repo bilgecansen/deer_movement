@@ -151,10 +151,11 @@ cat(sprintf("cropped map: %d x %d cells, %d layers\n",
 
 
 # 4 ---- One step, and its incoming heading -----------------------------------
-# Heading = the ABSOLUTE bearing of the PRECEDING step in the same burst. The
-# kernel converts a candidate endpoint into a turning angle by subtracting it,
-# so it is a reference direction, NOT a turning angle -- despite living in a
-# field called ta_.
+# When the deer arrives at the start of this step it is already moving in some
+# direction: the direction of the step immediately before this one, measured
+# the way atan2() measures angles (0 = east, counterclockwise). The kernel
+# measures each candidate's turn from this heading. The first step of a burst
+# has no step before it, so it has no heading and is not scoreable.
 steps <- stp |>
   dplyr::group_by(burst_) |>
   dplyr::mutate(prev_head = dplyr::lag(atan2(y2_ - y1_, x2_ - x1_))) |>
@@ -243,9 +244,9 @@ amt_model <- amt::make_issf_model(coefs = coefs, sl = iss$sl_, ta = iss$ta_)
 
 
 # 7 ---- The start point -------------------------------------------------------
-# ta_ carries the observed incoming heading. Called WITHOUT ta_ (as on a bare
-# one-row track) make_start() silently returns 0 -- due east -- which is the bug
-# that was scoring every step as though the deer had just been heading east.
+# make_start()'s ta_ gets prev_head, because that is the direction the kernel
+# measures turns from. amt's default of 0 suits a path started from nothing;
+# here we are continuing from a step we already know.
 start_pt <- amt::make_start(
   c(step$x1_, step$y1_),
   ta_ = step$prev_head,

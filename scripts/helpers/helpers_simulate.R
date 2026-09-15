@@ -162,21 +162,17 @@ simulate_movement <- function(
             method = 'near'
           )
 
-          # Start from previous chunk's last point, or burst start.
+          # Start from the previous chunk's last point, or the burst start.
           #
-          # The start's ta_ is the INCOMING HEADING -- the absolute bearing of
-          # the preceding step -- which the kernel subtracts from each candidate
-          # bearing to get a turning angle. make_start() on a bare one-row track
-          # cannot know it and silently returns 0, i.e. due east.
+          # The start's ta_ is the incoming heading: the direction of the
+          # preceding step, which the kernel measures each candidate's turn
+          # from.
           #
-          #  * At a burst start no heading exists (nothing precedes the first
-          #    step), so 0 is unavoidable and only that one step is affected.
-          #  * At a MONTH-CHUNK restart inside a burst a heading does exist --
-          #    the bearing of the last simulated step -- and discarding it made
-          #    the
-          #    path turn as if it had just been heading east. That is the same
-          #    defect fixed in onestep_logscore_gam; here it hits once per month
-          #    boundary per burst rather than at every step.
+          #  * At a burst start nothing precedes the first step, so there is
+          #    no heading and 0 is used.
+          #  * At a month-chunk restart inside a burst, the heading is the
+          #    direction of the last simulated step, so the path keeps turning
+          #    relative to where it was going.
           if (is.null(sim_burst)) {
             start_pt <- amt::make_start(
               as.numeric(mo_data[1, c('x1_', 'y1_')]),
@@ -215,13 +211,10 @@ simulate_movement <- function(
             return(NULL)
           }
 
-          # run_path returns the START position followed by n_steps simulated
-          # ones. For a continuation chunk that start IS the previous chunk's
-          # last position, so binding it unchanged duplicated one position --
-          # identical coordinates AND timestamp -- at every month boundary,
-          # injecting a zero-length step and a repeated time into the path
-          # (a 193-step burst came out with 195 positions instead of 194).
-          # Drop it; only the first chunk contributes its start.
+          # run_path returns the start position followed by n_steps simulated
+          # ones. For a continuation chunk that start is the previous chunk's
+          # last position, which sim_burst already holds, so it is dropped.
+          # Only the first chunk contributes its start.
           new_rows <- sim_result |> dplyr::select(x_, y_, t_)
           if (!is.null(sim_burst)) {
             new_rows <- new_rows[-1, , drop = FALSE]

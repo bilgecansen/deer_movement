@@ -548,23 +548,13 @@ onestep_logscore_gam <- function(
     {
       burst_data <- stp_data |> dplyr::filter(burst_ == b)
 
-      # Incoming heading: the ABSOLUTE bearing of the preceding step in this
-      # burst. The kernel turns a candidate endpoint into a turning angle with
-      # ta_ = bearing - start$ta_, so start$ta_ must carry that heading -- it is
-      # a reference direction, not a turning angle, despite the name.
+      # Incoming heading: the direction of the preceding step in this burst.
+      # The kernel measures each candidate's turning angle from start$ta_, so
+      # the start carries this heading. amt's default of 0 suits a path started
+      # from nothing; here every step continues from a known one.
       #
-      # make_start() on a single point cannot know the heading and returns 0,
-      # i.e. due east. Scoring every step from a start built that way evaluates
-      # each one as though the deer had just been travelling east, so cos(ta_)
-      # is measured off the wrong baseline. Measured on 7193_fa_2020: per-step
-      # log p off by up to 0.81 (sd 0.44), and because each model fits its own
-      # cos(ta_) coefficient the error does not cancel in delta_logp -- it
-      # shifted by ~4.4 for a median-length deer, against a gate-3 threshold
-      # of 3.
-      #
-      # The first step of a burst has no preceding step, so no heading exists
-      # for it. Rather than invent one, it is skipped (logp = NA) -- inventing a
-      # heading is what produced the bug.
+      # The first step of a burst has no preceding step, so it has no heading
+      # and is skipped (logp = NA).
       burst_data$prev_head <- dplyr::lag(
         atan2(
           burst_data$y2_ - burst_data$y1_,
