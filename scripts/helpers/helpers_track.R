@@ -1,9 +1,9 @@
 # Track / step-data wrangling --------------------------------------------------
 #
 # Turning observed relocations into step-selection data: random-point
-# generation and the covariate extraction that attaches landcover, NDVI and
-# home-range values to each observed and random step. Shared by the amt and
-# GAM paths, which both fit on the output.
+# generation and the covariate extraction that attaches landcover, NDVI,
+# LANDFIRE and home-range values to each observed and random step. Shared by
+# the amt and GAM paths, which both fit on the output.
 #
 # Part of the helper library split out of scripts/helper_functions.R, which
 # now sources every file in this folder. Scripts keep sourcing that one
@@ -101,14 +101,17 @@ make_random_pt_extraction <- function(
 #' Extract environmental variables for each step (single-deer)
 #'
 #' Operates on a single-row tibble. Builds a cropped env stack
-#' (env + NDVI + the three HR rasters keyed by id/season/year) and extracts
-#' covariates at every step start and end of the deer's random-steps tibble
-#' in `data[[random_col]]`.
+#' (env + NDVI + LANDFIRE + the three HR rasters keyed by id/season/year) and
+#' extracts covariates at every step start and end of the deer's random-steps
+#' tibble in `data[[random_col]]`.
 #'
 #' Produces design-matrix columns including:
-#'   * env layers (wiscland, ele, east, east2, north, dist) at start and end
+#'   * wiscland and its per-class indicators at start and end
+#'   * forest_edge_start/end (m; + inside forest, - outside)
 #'   * HR_bin_start/end, HR_edge_start/end (m), HR_center_start/end (km)
 #'   * ndvi_start/end (time-matched)
+#'   * oak_mast, oak_dist (m) and famd1..famd5 at start and end
+#'   * elevation (m), northness and eastness at start and end
 #'
 #' @param data Single-row dataframe; must contain id, season, year and the
 #'   random-steps column named by `random_col`. The HR raster files
@@ -116,11 +119,15 @@ make_random_pt_extraction <- function(
 #'   `HRcenter_<id>_<season>_<year>.tif` must exist in `hr_folder`.
 #' @param env Landcover stack for the deer's year+season (from load_landcover)
 #' @param ndvi 12-layer monthly NDVI stack for the deer's year (from load_ndvi)
+#' @param landfire LANDFIRE layers for the deer's year (from load_landfire)
+#' @param topo Elevation, northness and eastness (from load_topo)
 #' @param hr_folder Folder containing per-deer HR rasters
 extract_step_variables <- function(
   data,
   env,
   ndvi,
+  landfire,
+  topo,
   hr_folder = "data/HR",
   random_col = "random.stp",
   output_col = "stp.var"
@@ -136,6 +143,8 @@ extract_step_variables <- function(
 
   env_cropped <- terra::crop(env, crop_extent)
   ndvi_local <- terra::crop(ndvi, crop_extent)
+  landfire_local <- terra::crop(landfire, crop_extent)
+  topo_local <- terra::crop(topo, crop_extent)
 
   # Per-deer HR rasters, aligned to env_cropped via the load_hr_*_raster
   # helpers (which handle resample + NA fill)
@@ -193,7 +202,11 @@ extract_step_variables <- function(
       # GAM cyclic spline s(tod_, bs = "cc"); complements the day/night factor.
       tod_ = lubridate::hour(t1_) + lubridate::minute(t1_) / 60,
       days = lubridate::yday(t2_) - min(lubridate::yday(t2_)) + 1
-    )
+    ) |>
+    # Last, so these columns sit where add_covariates_to_tracks.R appends them
+    # to tracks wrangled before they existed
+    amt::extract_covariates(landfire_local, where = "both") |>
+    amt::extract_covariates(topo_local, where = "both")
 
   data[[output_col]] <- list(data_ssf)
   data

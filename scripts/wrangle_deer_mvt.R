@@ -28,9 +28,11 @@ source("scripts/helper_functions.R")
 # Load shared inputs ----------------------------------------------------------
 start_time <- Sys.time()
 
-# landscape data — landcover and NDVI are now annual, so both are loaded per
-# deer inside the loop (see load_landcover / make_water_mask / load_ndvi).
-# No env_old.
+# landscape data — landcover, NDVI and LANDFIRE are annual, so all three are
+# loaded per deer inside the loop (see load_landcover / make_water_mask /
+# load_ndvi / load_landfire). Elevation, northness and eastness are static,
+# so they are loaded once here. No env_old.
+topo <- load_topo()
 
 # Deer movement data
 sw_deer_tracks <- readRDS('library/SW_filtered_deer.RData')
@@ -74,10 +76,12 @@ for (i in seq_len(nrow(deer_mvt))) {
   cat(sprintf("[run]              %s\n", key))
   ok <- tryCatch(
     {
-      # Season-specific annual landcover (+ open-water mask) and NDVI stack
+      # Season-specific annual landcover (+ open-water mask), NDVI stack and
+      # LANDFIRE layers
       landcover <- load_landcover(one_deer$year, one_deer$season)
       water <- make_water_mask(landcover)
       ndvi <- load_ndvi(one_deer$year)
+      landfire <- load_landfire(one_deer$year, one_deer$season)
 
       # Gamma / von Mises design (parametric): used by amt and by parametric
       # GAMs -> stp.random / stp.var. 25 random points (Klappstein et al. 2024).
@@ -93,6 +97,8 @@ for (i in seq_len(nrow(deer_mvt))) {
         data = one_deer,
         env = landcover,
         ndvi = ndvi,
+        landfire = landfire,
+        topo = topo,
         random_col = "stp.random",
         output_col = "stp.var"
       )
@@ -112,6 +118,8 @@ for (i in seq_len(nrow(deer_mvt))) {
         data = one_deer,
         env = landcover,
         ndvi = ndvi,
+        landfire = landfire,
+        topo = topo,
         random_col = "stp.random.nonp",
         output_col = "stp.var.nonp"
       )

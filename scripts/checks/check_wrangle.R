@@ -22,7 +22,7 @@
 #' is where this pipeline's bugs have actually been: the NDVI mid-month bug
 #' was exactly a layer-choice bug, and this check would have named it.
 #'
-#' Checks are grouped W1..W6 (see the section banners). Results are counted
+#' Checks are grouped W1..W8 (see the section banners). Results are counted
 #' across deer and reported once per contract, with the offending deer named,
 #' rather than one PASS line per deer per check.
 #'
@@ -126,10 +126,10 @@ model_vars <- function(season) {
 }
 
 # Raster cache -----------------------------------------------------------------
-# Annual landcover and NDVI are shared across deer; opening them once per
-# (year, season) rather than once per deer is the difference between a 3-minute
-# and a 20-minute full run. SpatRasters are lazy, so this caches file handles,
-# not pixels.
+# Annual landcover, NDVI and LANDFIRE are shared across deer; opening them once
+# per (year, season) rather than once per deer is the difference between a
+# 3-minute and a 20-minute full run. SpatRasters are lazy, so this caches file
+# handles, not pixels.
 .RC <- new.env(parent = emptyenv())
 
 cached <- function(k, fn) {
@@ -139,21 +139,41 @@ cached <- function(k, fn) {
   .RC[[k]]
 }
 
+#' The annual rasters are keyed by deer-year, so spring and summer deer read
+#' the previous file (see deer_year). Everything here takes the deer's own
+#' year and season and resolves it the same way the loaders do.
 lc_band <- function(year, season) {
   band_for <- c(
     br = "breeding", nb = "non_breeding",
     fa = "fawning", pf = "post_fawning"
   )
   cached(sprintf("lc_%d_%s", year, season), function() {
-    terra::rast(sprintf("library/landcover/landcover_%d.tif", year))[[
-      band_for[[season]]
-    ]]
+    fname <- sprintf(
+      "library/landcover/landcover_%d.tif",
+      deer_year(year, season)
+    )
+    terra::rast(fname)[[band_for[[season]]]]
   })
 }
 
 ndvi_month <- function(year, mo) {
   cached(sprintf("ndvi_%d_%02d", year, mo), function() {
     terra::rast(sprintf("library/ndvi/ndvi_%d_%02d.tif", year, mo))
+  })
+}
+
+# One deer-year's band of a multi-year LANDFIRE raster (oak_mast, oak_dist)
+lf_band <- function(name, year, season) {
+  dyear <- deer_year(year, season)
+  cached(sprintf("lf_%s_%d", name, dyear), function() {
+    terra::rast(sprintf("library/landfire/%s.tif", name))[[as.character(dyear)]]
+  })
+}
+
+lf_famd <- function(year, season) {
+  dyear <- deer_year(year, season)
+  cached(sprintf("lf_famd_%d", dyear), function() {
+    terra::rast(sprintf("library/landfire/famd_%d.tif", dyear))
   })
 }
 
@@ -177,6 +197,79 @@ xtract <- function(r, xy) {
 #' comparison instead of failing it.
 identical_na <- function(a, b) {
   (is.na(a) & is.na(b)) | (!is.na(a) & !is.na(b) & a == b)
+}
+
+#' Rows where a stored raster value and its re-derived value disagree beyond
+#' TOL_REL. Both NA agrees; one NA does not.
+n_off <- function(stored, expect) {
+  both_na <- is.na(stored) & is.na(expect)
+  close <- abs(stored - expect) <= TOL_REL * pmax(abs(expect), 1)
+  sum(!both_na & !(close %in% TRUE))
+}
+
+#' Signed forest-edge distance at points, re-derived from the source band.
+#'
+#' Snaps each point to its cell centre, then finds the nearest cell centre of
+#' the other kind (FOREST_CLASSES vs everything else) with a nearest-neighbour
+#' search (FNN) over EVERY cell of a window around the points, not only the
+#' edge cells the loader searches. Returns that distance less half a cell,
+#' + inside forest and - outside, and a count of points the window cannot
+#' guarantee: those whose nearest cell is farther than the window's border, so
+#' a closer one could lie beyond it. Window sides on the map boundary do not
+#' count, since the loader cannot see past the map either. Also returns the
+#' window's forest and non-forest cell centres for the brute-force spot check.
+edge_by_nn <- function(lc, xy, margin = 4000) {
+  full <- as.vector(terra::ext(lc))
+  win <- terra::ext(
+    max(min(xy[, 1]) - margin, full[1]), min(max(xy[, 1]) + margin, full[2]),
+    max(min(xy[, 2]) - margin, full[3]), min(max(xy[, 2]) + margin, full[4])
+  )
+  wr <- terra::crop(lc, win)
+  w <- as.vector(terra::ext(wr))
+  cells <- terra::as.data.frame(wr, xy = TRUE, na.rm = TRUE)
+  is_f <- as.character(cells[[3]]) %in% FOREST_CLASSES
+  pool_f <- as.matrix(cells[is_f, 1:2])
+  pool_nf <- as.matrix(cells[!is_f, 1:2])
+
+  ctr <- terra::xyFromCell(lc, terra::cellFromXY(lc, xy))
+  pt_f <- as.character(xtract(lc, ctr)) %in% FOREST_CLASSES
+  d <- rep(NA_real_, nrow(ctr))
+  nearest <- function(pool, pts) {
+    FNN::get.knnx(pool, pts, k = 1)$nn.dist[, 1]
+  }
+  if (any(pt_f)) {
+    d[pt_f] <- nearest(pool_nf, ctr[pt_f, , drop = FALSE])
+  }
+  if (any(!pt_f)) {
+    d[!pt_f] <- nearest(pool_f, ctr[!pt_f, , drop = FALSE])
+  }
+
+  to_side <- pmin(
+    if (w[1] > full[1]) ctr[, 1] - w[1] else Inf,
+    if (w[2] < full[2]) w[2] - ctr[, 1] else Inf,
+    if (w[3] > full[3]) ctr[, 2] - w[3] else Inf,
+    if (w[4] < full[4]) w[4] - ctr[, 2] else Inf
+  )
+  half <- terra::res(lc)[1] / 2
+  list(
+    value = ifelse(pt_f, d - half, half - d),
+    unsure = sum(d > to_side),
+    ctr = ctr,
+    pt_f = pt_f,
+    pool_f = pool_f,
+    pool_nf = pool_nf
+  )
+}
+
+#' Exact signed forest-edge distance for a few points by scanning every
+#' window cell directly: no FNN, no terra::distance. `nn` is edge_by_nn()'s
+#' result, whose window and cell centres it reuses.
+edge_by_scan <- function(nn, idx, half) {
+  vapply(idx, function(j) {
+    pool <- if (nn$pt_f[j]) nn$pool_nf else nn$pool_f
+    d <- sqrt(min((pool[, 1] - nn$ctr[j, 1])^2 + (pool[, 2] - nn$ctr[j, 2])^2))
+    if (nn$pt_f[j]) d - half else half - d
+  }, numeric(1))
 }
 
 #' Record one contract result for one deer.
@@ -605,6 +698,120 @@ check_one_deer <- function(path, spec) {
     sum(lost$ctrl_lost > 0), nrow(lost),
     extra = sum(lost$ctrl_lost), extra_lab = "control rows lost"
   )
+
+  # ---- W7  LANDFIRE covariates ----------------------------------------------
+  # load_landfire() maps the source rasters to model-ready layers: the oak
+  # mask's NA becomes 0, and the FAMD scores pass through with their NA kept.
+  # Re-derive that mapping here from the source files at both stored
+  # endpoints, without load_landfire.
+  lf_names <- c("oak_mast", "oak_dist", sprintf("famd%d", 1:5))
+  lf_cols <- c(paste0(lf_names, "_start"), paste0(lf_names, "_end"))
+  lf_missing <- setdiff(lf_cols, names(sv))
+  acc <- rec(
+    acc, "W7.1 LANDFIRE columns present",
+    length(lf_missing), length(lf_cols),
+    "missing -- run scripts/add_covariates_to_tracks.R"
+  )
+
+  if (length(lf_missing) == 0) {
+    ends <- list(start = cbind(sv$x1_, sv$y1_), end = xy_end)
+    fm <- lf_famd(year, season)
+    bad <- c(mast = 0, dist = 0, famd = 0)
+    worst <- c(dist = NA_real_, famd = NA_real_)
+    n_off_mask <- 0
+
+    for (sfx in names(ends)) {
+      xy <- ends[[sfx]]
+      stored <- function(nm) sv[[sprintf("%s_%s", nm, sfx)]]
+
+      src <- xtract(lf_band("oak_mast", year, season), xy)
+      bad[["mast"]] <- bad[["mast"]] +
+        n_off(stored("oak_mast"), ifelse(is.na(src), 0, src))
+
+      src <- xtract(lf_band("oak_dist", year, season), xy)
+      bad[["dist"]] <- bad[["dist"]] + n_off(stored("oak_dist"), src)
+      worst[["dist"]] <- safe_max(c(
+        worst[["dist"]], abs(stored("oak_dist") - src)
+      ))
+
+      src_f <- terra::extract(fm, xy)[, names(fm), drop = FALSE]
+      n_off_mask <- n_off_mask + sum(!stats::complete.cases(src_f))
+      for (k in seq_along(src_f)) {
+        got <- stored(sprintf("famd%d", k))
+        bad[["famd"]] <- bad[["famd"]] + n_off(got, src_f[[k]])
+        worst[["famd"]] <- safe_max(c(worst[["famd"]], abs(got - src_f[[k]])))
+      }
+    }
+
+    n_pts <- 2 * nrow(sv)
+    acc <- rec(
+      acc, "W7.2 oak_mast == the source mask, NA read as 0",
+      bad[["mast"]], n_pts
+    )
+    acc <- rec(
+      acc, "W7.3 oak_dist == the source band",
+      bad[["dist"]], n_pts,
+      worst = worst[["dist"]], worst_lab = "max |diff| m"
+    )
+    acc <- rec(
+      acc, "W7.4 famd1..famd5 == the source scores, NA where it has none",
+      bad[["famd"]], 5 * n_pts,
+      worst = worst[["famd"]],
+      extra = n_off_mask, extra_lab = "endpoints off the FAMD mask (NA)"
+    )
+    oak_cols <- grep("^oak_", lf_cols, value = TRUE)
+    acc <- rec(
+      acc, "W7.5 no NA in oak_mast / oak_dist",
+      sum(is.na(as.data.frame(sv)[oak_cols])), length(oak_cols) * nrow(sv)
+    )
+  }
+
+  # ---- W8  forest-edge distance ---------------------------------------------
+  # load_landcover() adds forest_edge, the signed distance to the nearest
+  # forest edge, from an FNN search over the edge cells of the whole band.
+  # W8.2 re-derives it at both stored endpoints by searching every cell of a
+  # window instead, which tests the edge-cell shortcut, the band, the sign and
+  # the half-cell shift, but still shares FNN. W8.5 shares nothing: it scans
+  # the window cell by cell for a sample of points.
+  fe_cols <- c("forest_edge_start", "forest_edge_end")
+  fe_missing <- setdiff(fe_cols, names(sv))
+  acc <- rec(
+    acc, "W8.1 forest_edge columns present",
+    length(fe_missing), length(fe_cols),
+    "missing -- run scripts/add_covariates_to_tracks.R"
+  )
+
+  if (length(fe_missing) == 0) {
+    xy_both <- rbind(cbind(sv$x1_, sv$y1_), xy_end)
+    stored <- c(sv$forest_edge_start, sv$forest_edge_end)
+    nn <- edge_by_nn(lc, xy_both)
+    acc <- rec(
+      acc, "W8.2 forest_edge == a nearest-neighbour recomputation",
+      n_off(stored, nn$value), length(stored),
+      worst = safe_max(abs(stored - nn$value)), worst_lab = "max |diff| m",
+      extra = nn$unsure, extra_lab = "points the search window can't guarantee"
+    )
+
+    in_forest <- as.character(xtract(lc, xy_both)) %in% FOREST_CLASSES
+    positive <- stored > 0
+    acc <- rec(
+      acc, "W8.3 forest_edge > 0 exactly where the band is forest",
+      sum(is.na(positive) | positive != in_forest), length(stored)
+    )
+    half <- terra::res(lc)[1] / 2
+    acc <- rec(
+      acc, "W8.4 forest_edge has no NA and |value| >= half a cell",
+      sum(is.na(stored) | abs(stored) < half - 1e-9), length(stored)
+    )
+
+    idx <- sample.int(length(stored), min(100L, length(stored)))
+    scan <- edge_by_scan(nn, idx, half)
+    acc <- rec(
+      acc, "W8.5 forest_edge == a cell-by-cell scan (100 points per deer)",
+      n_off(stored[idx], scan), length(idx),
+      worst = safe_max(abs(stored[idx] - scan)), worst_lab = "max |diff| m"
+    )
+  }
 
   list(key = key, rows = acc)
 }

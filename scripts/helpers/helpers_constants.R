@@ -26,6 +26,10 @@ LANDCOVER_LEVELS <- c(
   "developed"
 )
 
+# Landcover classes counted as forest for the forest-edge distance (see
+# forest_edge_distance). Every other class, open_water included, is non-forest.
+FOREST_CLASSES <- c("forest", "wetland_forested")
+
 # Crop buffer (metres, CRS 6610) added around each deer's track when cropping
 # rasters for random-step generation, covariate extraction, HR raster creation,
 # simulation, and scoring. Sized to clear the longest single observed/simulated
