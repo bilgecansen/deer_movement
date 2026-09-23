@@ -44,6 +44,23 @@
 # Configuration ---------------------------------------------------------------
 overwrite <- T # set to TRUE to refit deer that already have output
 
+# Which fits to produce. The null and the candidates are already saved to
+# separate files, so either can be produced without the other:
+#   "both"     — null + the four numbered models (default)
+#   "null"     — the null only; the candidates are left untouched
+#   "numbered" — the four candidates only; the null is left untouched
+# Overridable from the command line, e.g. Rscript fit_GAM.R null
+fit_which <- "both"
+.args <- commandArgs(trailingOnly = TRUE)
+if (length(.args) >= 1) {
+  fit_which <- .args[1]
+}
+if (!fit_which %in% c("both", "null", "numbered")) {
+  stop("fit_which must be 'both', 'null' or 'numbered', not '", fit_which, "'")
+}
+do_null <- fit_which %in% c("both", "null")
+do_numbered <- fit_which %in% c("both", "numbered")
+
 # Which per-deer design to fit:
 #   "stp.var"      — gamma / von Mises (parametric movement kernel; default)
 #   "stp.var.nonp" — uniform-disc (non-parametric movement kernel)
@@ -101,13 +118,23 @@ source("scripts/helper_functions.R")
 # covariate itself is untouched upstream — it is still computed in the wrangle
 # and available in the covariate table, just not fit here.
 #
-# MOVE = parametric gamma / von Mises movement kernel. The three movement
-# covariates enter as parametric main effects (sl_ + log(sl_) + cos(ta_)), which
-# carry the baseline correction to the tentative kernel (sl_/log(sl_) -> gamma
-# rate/shape, cos(ta_) -> von Mises concentration). Step length sl_ additionally
-# enters as a single cyclic-spline interaction with time of day (zebra model;
-# Klappstein et al. 2024): the by= smooth adds the (shrinkable) time-of-day
-# modulation of movement rate. k_tod caps wiggliness below each deer's
+# MOVE = parametric gamma / von Mises movement kernel. log(sl_) and cos(ta_)
+# enter as parametric main effects, carrying the baseline correction to the
+# tentative kernel (log(sl_) -> gamma shape, cos(ta_) -> von Mises
+# concentration). Step length enters only through a cyclic-spline interaction
+# with time of day (zebra model; Klappstein et al. 2024), which supplies both
+# the gamma rate correction and its time-of-day modulation.
+#
+# There is deliberately no standalone sl_ term. A by= smooth on a numeric
+# variable is not centred, so s(tod_, by = sl_) already spans sl_ times a
+# constant -- the same thing a standalone sl_ would contribute. Fitting both
+# gives mgcv two ways to express one effect: measured over 20 deer, it dropped
+# sl_ outright on 5 and on the other 15 spent a full effective parameter on a
+# coefficient of order 1e-3, with the effect itself sitting in the smooth.
+# Removing it frees that parameter, leaves the fit alone (log-likelihood moved
+# by at most 0.02 and the linear predictor by at most 0.01), and matches the
+# amt path, whose (sl_):tod_start_ is likewise interaction-only.
+# k_tod caps wiggliness below each deer's
 # distinct-tod count (the RAW count is ~24-50, inflated by non-4h data gaps that
 # shift the fix phase off the grid plus ~1-min timestamp jitter; the meaningful
 # resolution is ~12). Landcover interactions use a global smooth plus
@@ -132,7 +159,7 @@ source("scripts/helper_functions.R")
 make_move <- function(k_tod) {
   sprintf(
     paste0(
-      "sl_ + log(sl_) + cos(ta_) + ",
+      "log(sl_) + cos(ta_) + ",
       "s(tod_, bs = 'cc', k = %1$d, by = sl_)"
     ),
     k_tod
@@ -211,8 +238,10 @@ process_deer <- function(i) {
   out_path <- sprintf("results/gam/results_gam_%s.rds", key)
   null_path <- sprintf("results/gam/results_gam_null_%s.rds", key)
 
-  # Skip: both outputs already exist and we're not overwriting
-  if (!overwrite && file.exists(out_path) && file.exists(null_path)) {
+  # Skip: everything this run was asked to produce already exists
+  have_all <- (!do_null || file.exists(null_path)) &&
+    (!do_numbered || file.exists(out_path))
+  if (!overwrite && have_all) {
     return(list(status = "skip", key = key, audit = NULL))
   }
 
@@ -233,30 +262,40 @@ process_deer <- function(i) {
       # Null model first, saved on its own. It shares the data prep and k_tod
       # cap with the candidates but nothing else, so downstream code loads
       # exactly one reference model without indexing into the candidate list.
-      results_gam_null <- fit_gam_mod(
-        gam_data,
-        make_null_formula(k_tod),
-        select = SELECT
-      )
-      saveRDS(results_gam_null, null_path)
+      results_gam_null <- NULL
+      if (do_null) {
+        results_gam_null <- fit_gam_mod(
+          gam_data,
+          make_null_formula(k_tod),
+          select = SELECT
+        )
+        saveRDS(results_gam_null, null_path)
+      }
 
       # Season picks the slot-2/3 resource models (NDVI vs landcover; see
       # make_formulas). results_gam is named by model number ("1".."4").
-      season <- strsplit(key, "_")[[1]][2]
-      formulas <- make_formulas(k_tod, K_NDVI, season)
+      results_gam <- NULL
+      if (do_numbered) {
+        season <- strsplit(key, "_")[[1]][2]
+        formulas <- make_formulas(k_tod, K_NDVI, season)
 
-      results_gam <- purrr::map(
-        formulas,
-        function(f) fit_gam_mod(gam_data, f, select = SELECT)
-      )
+        results_gam <- purrr::map(
+          formulas,
+          function(f) fit_gam_mod(gam_data, f, select = SELECT)
+        )
 
-      saveRDS(results_gam, out_path)
+        saveRDS(results_gam, out_path)
+      }
 
       # Per-smooth k / shrinkage diagnostics for the end-of-run audit. imap's
       # index is the model-number name ("1".."4"); the null is tagged "null" so
       # the audit covers every fit this script produced.
+      fits <- c(
+        if (do_null) list(null = results_gam_null) else NULL,
+        if (do_numbered) results_gam else NULL
+      )
       audit <- purrr::imap_dfr(
-        c(list(null = results_gam_null), results_gam),
+        fits,
         function(r, model_no) {
           sd <- r$smooth_diag
           if (is.null(sd)) {
@@ -321,9 +360,18 @@ cat(sprintf(
 # fit this run. "k-bound" rows are the signal to raise k; "near-linear" /
 # "removed" show where shrinkage simplified a smooth (e.g. a movement parameter
 # with no time-of-day effect, or a habitat term with no support).
+#
+# A partial run writes its own audit file rather than overwriting the combined
+# one, which covers every model and is what downstream code reads. Only a
+# "both" run has the whole picture, so only a "both" run replaces it.
+audit_path <- if (fit_which == "both") {
+  "results/gam/k_audit_gam.rds"
+} else {
+  sprintf("results/gam/k_audit_gam_%s.rds", fit_which)
+}
 if (length(audit_rows)) {
   audit <- dplyr::bind_rows(audit_rows)
-  saveRDS(audit, "results/gam/k_audit_gam.rds")
+  saveRDS(audit, audit_path)
 
   cat(sprintf("\n=== k / shrinkage audit (%d smooth fits) ===\n", nrow(audit)))
   cat("status counts:\n")
@@ -348,5 +396,5 @@ if (length(audit_rows)) {
     )
     print(table(smooth = simp$smooth, status = simp$status))
   }
-  cat("\nFull per-fit audit -> results/gam/k_audit_gam.rds\n")
+  cat(sprintf("\nFull per-fit audit -> %s\n", audit_path))
 }
