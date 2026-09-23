@@ -203,8 +203,6 @@ extract_step_variables <- function(
       tod_ = lubridate::hour(t1_) + lubridate::minute(t1_) / 60,
       days = lubridate::yday(t2_) - min(lubridate::yday(t2_)) + 1
     ) |>
-    # Last, so these columns sit where add_covariates_to_tracks.R appends them
-    # to tracks wrangled before they existed
     amt::extract_covariates(landfire_local, where = "both") |>
     amt::extract_covariates(topo_local, where = "both")
 

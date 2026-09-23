@@ -129,7 +129,7 @@ single number changes which deer pass.
 | 50 | `oak_mast` off mast | Source NA → 0 | — | you |
 | 51 | `oak_dist` scale | Metres, raw; no log layer. Transform in the formula if needed | A `log1p` layer like `HR_center_log` | me |
 | 52 | LANDFIRE year | The band / file for the deer's `year` field, so `nb` deer use their start year into the next. The source only changes at 2020 and 2023, so only `nb_2019` deer cross a change | Match each step's calendar year | me |
-| 53 | Existing tracks | Columns added in place by `add_covariates_to_tracks.R`; random steps kept | Re-run the wrangle (redraws every random step, so every fit changes) | me |
+| 53 | Existing tracks | New columns were patched into the existing files in place, keeping their random steps, by a throwaway script | Re-run the wrangle (redraws every random step, so every fit changes) | me |
 | 54 | Forest-edge distance | `forest_edge`: one signed distance (m) to the nearest forest edge, + inside forest, − outside. Forest = `forest` + `wetland_forested`; every other class, water and roads included, is an edge; no minimum patch or gap size | The GEDI forest layer; roads not counted as edges; separate distances by edge type; two one-sided variables | you |
 | 55 | Edge position | Cell centre to nearest cell centre of the other kind, less half a cell, so the edge sits at 0 and the cells beside it read ±15 m | Raw ±30 m, never 0 | you |
 | 56 | Forest-edge band | Built inside `load_landcover()` from the deer's own seasonal band, so its sign always agrees with `wiscland_end` and simulation maps carry it | One map per year; stored rasters | you (band), me (placement) |

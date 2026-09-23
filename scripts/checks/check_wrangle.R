@@ -710,7 +710,7 @@ check_one_deer <- function(path, spec) {
   acc <- rec(
     acc, "W7.1 LANDFIRE columns present",
     length(lf_missing), length(lf_cols),
-    "missing -- run scripts/add_covariates_to_tracks.R"
+    "missing -- this deer's file predates them; re-wrangle it"
   )
 
   if (length(lf_missing) == 0) {
@@ -778,7 +778,7 @@ check_one_deer <- function(path, spec) {
   acc <- rec(
     acc, "W8.1 forest_edge columns present",
     length(fe_missing), length(fe_cols),
-    "missing -- run scripts/add_covariates_to_tracks.R"
+    "missing -- this deer's file predates it; re-wrangle it"
   )
 
   if (length(fe_missing) == 0) {
