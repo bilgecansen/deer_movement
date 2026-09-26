@@ -1,116 +1,145 @@
 #' @description
-#' Show which variable the model split on under which — the interaction
-#' structure of the fitted trees, for the record that there is little there.
+#' Which variable the selected shape split on under which — the interaction
+#' structure of its fitted trees, for the seasons whose selected shape has
+#' any.
 #'
 #' A tree using two variables is not yet an interaction. The unit is a
-#' root-to-leaf path: the root splits on A, a child splits on B, so the tree
-#' says how B matters depends on which side of A's threshold you are. At
-#' max_depth 2 that parent-child pair is the whole of it.
-#'
-#' Cells are observed pairs over what independence between the parent's and
-#' the child's overall split frequencies would give. 1.00 is what an
+#' root-to-leaf path: the root splits on A, a child splits on B, so the
+#' tree says how B matters depends on which side of A's threshold you are.
+#' At max_depth 2 that parent-child pair is the whole of it. Cells are
+#' observed pairs over what independence between the parent's and the
+#' child's overall split frequencies would give, so 1.00 is what an
 #' additive model looks like once it is made to grow depth-2 trees.
 #'
-#' Two things have to be read alongside the numbers:
+#' Read it with three things in hand:
 #'
-#'   * The noise column is in the grid. On every fit so far the single
-#'     largest ratio anywhere is noise pairing with itself, so the ratio has
-#'     no usable null — a greedy learner always finds a second split. Where
-#'     the real pairs separate is gain share, printed below the figure: the
-#'     noise column takes a couple of percent of gain, NDVI with forest edge
-#'     and NDVI with landcover take ten or more.
-#'   * A variable splitting on itself is refinement of one curve, not an
-#'     interaction, and it is the most enriched pattern throughout. Read the
-#'     off-diagonal.
+#'   * A variable under ITSELF is a second cut on one curve, not an
+#'     interaction, and it is usually the most enriched cell on the grid.
+#'     Read the off-diagonal.
+#'   * The ratio has no null of its own — on every fit so far the largest
+#'     ratio anywhere is a noise column pairing with itself — so the pairs
+#'     that matter are the ones carrying gain, printed below the figure,
+#'     against what that block's noise column carries.
+#'   * The gains in the dump are in-sample. What says interactions matter
+#'     at all is the held-out shape comparison in plot_shapes_xgb.R; this
+#'     figure only allocates that between pairs.
 #'
-#' Nothing here says a combination holds up out of sample; the gains in the
-#' dump are in-sample. The held-out test is to refit with the trees confined
-#' to one variable and compare the folds' score — on fa 2021 that bought 2.4
-#' log units against 186 from the same trees without pairing.
+#' A season whose selected shape is "main" has single-variable trees and so
+#' no pairs; it is skipped, and saying so is part of the output.
 #'
-#' Input:  results/xgb/season_xgb_<season>.rds
-#' Output: plots/interactions_xgb_<season>.png
+#' Input:  results/xgb/compare_<season>_<shape>.rds
+#' Output: plots/interactions_xgb_<season>_<shape>.png
 #'
 #' Configuration: edit the block below before running.
 
 # Configuration ---------------------------------------------------------------
-# Pairs listed in the printed table, most enriched first
-TOP_N <- 12
+# Must match plot_shapes_xgb.R, or the figures describe a shape the
+# selection did not pick.
+THRESHOLD <- 3
+COMPLEXITY <- c("main", "rsf", "start", "full")
+# Cross-variable pairs listed per block, by share of the block's gain
+TOP_N <- 10
 WIDTH <- 12
 HEIGHT <- 6.5
 
 # Load packages ---------------------------------------------------------------
 library(tidyverse)
 
-# helper functions (xgb_pair_lift)
+# helper functions
 source("scripts/helper_functions.R")
 
-files <- list.files("results/xgb", pattern = "^season_xgb_.*[.]rds$",
+files <- list.files("results/xgb", pattern = "^compare_.*[.]rds$",
                     full.names = TRUE)
 if (!length(files)) {
-  stop("No season files in results/xgb/; run fit_season_xgb.R first")
+  stop("No shape files in results/xgb/; run run_shapes_xgb.R first")
 }
+scores <- purrr::map_dfr(files, function(f) {
+  x <- readRDS(f)
+  tibble(season = x$season, config = x$config, held_out = x$ll_cv,
+         n_deer = x$n_deer_years)
+})
+selected <- scores |>
+  group_by(season) |>
+  mutate(per_deer = (held_out - max(held_out)) / n_deer) |>
+  filter(per_deer > -THRESHOLD) |>
+  slice_min(match(config, COMPLEXITY), n = 1) |>
+  ungroup()
 
 PRETTY <- c(
   ndvi_end = "NDVI", landcover = "Landcover",
   forest_edge_end = "Forest edge", elevation_end = "Elevation",
   northness_end = "Northness", eastness_end = "Eastness",
-  oak_mast_end = "Oak mast", oak_dist_end = "Oak distance",
-  shadow_gauss = "Noise", famd1_end = "FAMD1", famd2_end = "FAMD2",
-  famd3_end = "FAMD3", famd4_end = "FAMD4", famd5_end = "FAMD5"
+  shadow_gauss = "Noise", shadow_famd = "Noise",
+  shadow_start = "Noise at start", famd1_end = "FAMD1",
+  famd2_end = "FAMD2", famd3_end = "FAMD3", famd4_end = "FAMD4",
+  famd5_end = "FAMD5", ndvi_start = "NDVI at start",
+  wiscland_start = "Cover at start",
+  forest_edge_start = "Forest edge at start"
 )
+BLOCK <- c(hab = "Habitat", famd = "FAMD", modifier = "Movement modifier")
 
 dir.create("plots", showWarnings = FALSE)
 
-plot_season <- function(path) {
-  r <- readRDS(path)
-  lift <- purrr::imap_dfr(r$structure, function(st, nm) {
-    xgb_pair_lift(st$pairs) |>
-      mutate(booster = ifelse(nm == "hab", "Habitat", "FAMD"))
-  })
+for (i in seq_len(nrow(selected))) {
+  season <- selected$season[i]
+  config <- selected$config[i]
+  if (config == "main") {
+    cat(sprintf("%s: selected shape is 'main', single-variable trees, ",
+                season))
+    cat("no pairs to show\n")
+    next
+  }
+  r <- readRDS(sprintf("results/xgb/compare_%s_%s.rds", season, config))
 
-  cat(sprintf("\n=== %s: splits per variable ===\n", r$season))
-  print(as.data.frame(
-    purrr::imap_dfr(r$structure, function(st, nm) {
+  cat(sprintf("\n########## %s / %s ##########\n", season, config))
+  for (nm in names(r$structure)) {
+    st <- r$structure[[nm]]
+    cat(sprintf("\n--- %s: splits per variable ---\n", nm))
+    print(as.data.frame(
       st$splits |>
         group_by(variable) |>
         summarise(splits = n(), as_root = sum(depth == 0, na.rm = TRUE),
                   gain = sum(gain, na.rm = TRUE), .groups = "drop") |>
-        mutate(booster = nm, gain_share = gain / sum(gain)) |>
-        select(booster, variable, splits, as_root, gain_share)
-    }) |>
-      arrange(booster, desc(splits))
-  ), row.names = FALSE, digits = 3)
+        mutate(gain_share = gain / sum(gain)) |>
+        select(-gain) |>
+        arrange(desc(gain_share))
+    ), row.names = FALSE, digits = 3)
 
-  cat(sprintf("\n=== %s: top %d pairs by enrichment ===\n", r$season,
-              TOP_N))
-  print(head(as.data.frame(lift |> arrange(desc(ratio))), TOP_N),
-        row.names = FALSE, digits = 3)
+    cat(sprintf("\n--- %s: top %d cross-variable pairs by gain ---\n", nm,
+                TOP_N))
+    print(head(as.data.frame(
+      xgb_pair_lift(st$pairs) |>
+        filter(parent != child) |>
+        arrange(desc(gain_share)) |>
+        select(parent, child, observed, ratio, gain_share)
+    ), TOP_N), row.names = FALSE, digits = 3)
+  }
 
-  df <- lift |>
+  hm <- purrr::imap_dfr(r$structure, function(st, nm) {
+    xgb_pair_lift(st$pairs) |> mutate(block = BLOCK[[nm]])
+  }) |>
     mutate(parent = dplyr::coalesce(PRETTY[parent], parent),
            child = dplyr::coalesce(PRETTY[child], child))
 
-  p <- ggplot(df, aes(x = child, y = parent, fill = log2(ratio))) +
+  p <- ggplot(hm, aes(x = child, y = parent, fill = log2(ratio))) +
     geom_tile(colour = "#fcfcfb", linewidth = 0.6) +
-    geom_text(aes(label = sprintf("%.2f", ratio)), size = 2.7,
-              colour = "#0b0b0b") +
-    facet_wrap(~booster, scales = "free") +
+    geom_text(aes(label = sprintf("%.2f\n%.0f%%", ratio,
+                                  100 * gain_share)),
+              size = 2.5, lineheight = 0.95, colour = "#0b0b0b") +
+    facet_wrap(~block, scales = "free") +
     scale_fill_gradient2(low = "#2a78d6", mid = "#f2f1ea",
                          high = "#eb6834", midpoint = 0,
                          name = "log2 obs/exp") +
     labs(
-      title = sprintf("Which splits the model put under which, pooled %s",
-                      r$season),
+      title = sprintf("Which splits the model put under which, %s (%s)",
+                      season, config),
       subtitle = paste0(
         "Root variable on the vertical, the variable its child splits on ",
-        "along the horizontal. Values are how often that\ncombination was ",
-        "chosen against what each variable's overall taste for splitting ",
-        "would give. 1.00 is what an\nadditive model looks like once it ",
-        "is made to grow depth-2 trees. A variable under itself is ",
-        "refinement of one\ncurve, not an interaction. Counts only, from ",
-        "in-sample gains - nothing here says a pair holds up out of ",
-        "sample."
+        "along the horizontal. Top number is how often\nthat combination ",
+        "was chosen against independence; below it, that pair's share of ",
+        "the block's gain.\n\nA variable under itself is a second cut on ",
+        "one curve, not an interaction. The ratio has no null of its own, ",
+        "so\nread the gain share, and read it against the noise column's."
       ),
       x = "child split", y = "root split"
     ) +
@@ -127,11 +156,8 @@ plot_season <- function(path) {
       plot.subtitle = element_text(colour = "#52514e", size = 8)
     )
 
-  out <- sprintf("plots/interactions_xgb_%s.png", r$season)
-  ggsave(out, p, width = WIDTH, height = HEIGHT, dpi = 150, bg = "#fcfcfb")
+  out <- sprintf("plots/interactions_xgb_%s_%s.png", season, config)
+  ggsave(out, p, width = WIDTH, height = HEIGHT, dpi = 150,
+         bg = "#fcfcfb")
   cat(sprintf("\n-> %s\n", out))
-}
-
-for (f in files) {
-  plot_season(f)
 }
