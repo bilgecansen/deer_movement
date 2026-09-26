@@ -271,11 +271,15 @@ xgb_season_pool <- function(season, dir = "data/xgb") {
 
 #' Booster specifications for the alternating fit
 #'
-#' Four boosters, in the order they take their turn each round:
-#'   move  movement, always available, never ranked
-#'   hr    distance to the home-range centre, on its own, never ranked
-#'   hab   the environmental candidates
-#'   famd  the ordination axes, switched off outside forest
+#' Boosters, in the order they take their turn each round:
+#'   move      movement, always available, never ranked
+#'   modifier  movement again, with the start-of-step columns, so the
+#'             movement kernel may depend on where the animal stood. Only
+#'             in the shapes that carry it, and it sits straight after
+#'             movement so it sees that residual while it is fresh
+#'   hr        distance to the home-range centre, on its own, never ranked
+#'   hab       the environmental candidates
+#'   famd      the ordination axes, switched off outside forest
 #'
 #' move and hr are the nuisance block and mirror the GAM null
 #' (movement + s(HR_center_end)). Putting HR on its own is what lets it be
@@ -283,18 +287,46 @@ xgb_season_pool <- function(season, dir = "data/xgb") {
 #' the trees and stayed under-fitted, and no amount of extra rounds fixed
 #' that without feeding the same rounds to variables that only fit noise.
 #'
-#' The ranked boosters get every column at every split and no interaction
-#' constraint, so a tree may combine variables; `max_depth` 2 keeps any
-#' root-to-leaf path pairwise. Column sampling was dropped once HR left the
-#' candidate pool: it existed to stop HR taking every tree, the ranking is
-#' unchanged from one sampled column per split up to all of them, and the
-#' held-out score moves by about a tenth of a percent across that range.
+#' `config` picks one of four shapes, which differ only in whether the
+#' modifier block is present and whether the ranked trees may combine
+#' variables:
+#'
+#'                modifier block   hab / famd trees
+#'   full            yes           may combine
+#'   rsf             no            may combine        (the default)
+#'   start           yes           one variable per tree
+#'   main            no            one variable per tree
+#'
+#' A 2x2, so each effect can be read twice: letting the ranked trees
+#' combine is (full - start) and (rsf - main), and adding the start block
+#' is (full - rsf) and (start - main). On the pooled seasons the two
+#' readings agree to within 3% and the effects add, so they are separable.
+#'
+#' "main" removes interactions WITHOUT cutting the budget: every tree is
+#' offered all columns and picks the best, then must confine its remaining
+#' splits to that one. The older single-variable scheme also set
+#' colsample_bytree = 1/p, which removes interactions and shrinks each
+#' variable's share of the trees at the same time; that would make "main"
+#' lose for the wrong reason.
+#'
+#' Where the trees may combine they get every column at every split and no
+#' interaction constraint; `max_depth` 2 keeps any root-to-leaf path
+#' pairwise. Column sampling was dropped once HR left the candidate pool:
+#' it existed to stop HR taking every tree, the ranking is unchanged from
+#' one sampled column per split up to all of them, and the held-out score
+#' moves by about a tenth of a percent across that range.
+#'
+#' The modifier block is always free to combine — a block whose whole point
+#' is the interaction between movement and start-of-step context has
+#' nothing to do under a one-variable-per-tree rule.
 #'
 #' @param move_vars Movement columns
 #' @param hr_var Home-range-centre column
 #' @param hab_vars Environmental candidate columns
 #' @param famd_vars Columns for the switched booster (NA outside their
 #'   domain); empty for none
+#' @param config Model shape: "rsf" (default), "full", "start" or "main"
+#' @param start_vars Start-of-step columns, used by "full" and "start"
 #' @param switch_col Column whose NA pattern defines the switch; defaults to
 #'   the first entry of `famd_vars`
 #' @param move_groups Interaction groups within the movement booster, by
@@ -310,6 +342,8 @@ make_xgb_specs <- function(
   hr_var,
   hab_vars,
   famd_vars = character(0),
+  config = c("rsf", "full", "start", "main"),
+  start_vars = character(0),
   switch_col = NULL,
   move_groups = list(c("sl_", "tod_day"), "cos_ta"),
   categorical = character(0),
@@ -319,6 +353,9 @@ make_xgb_specs <- function(
   reg_lambda = 1,
   nthread = 1L
 ) {
+  config <- match.arg(config)
+  has_modifier <- config %in% c("full", "start")
+  additive_ranked <- config %in% c("start", "main")
   params_for <- function(constraints = NULL) {
     xgboost::xgb.params(
       booster = "gbtree",
@@ -334,41 +371,32 @@ make_xgb_specs <- function(
   index_groups <- function(feats, groups) {
     lapply(groups, function(g) match(intersect(g, feats), feats) - 1)
   }
+  singles <- function(feats) as.list(seq_along(feats) - 1)
+  ranked_params <- function(feats) {
+    if (additive_ranked) params_for(singles(feats)) else params_for()
+  }
+  block <- function(name, feats, params, switched = FALSE,
+                    switch_col = NA_character_) {
+    list(name = name, feats = feats, switched = switched,
+         switch_col = switch_col, categorical = categorical,
+         params = params)
+  }
 
-  specs <- list(
-    list(
-      name = "move",
-      feats = move_vars,
-      switched = FALSE,
-      switch_col = NA_character_,
-      categorical = categorical,
-      params = params_for(index_groups(move_vars, move_groups))
-    ),
-    list(
-      name = "hr",
-      feats = hr_var,
-      switched = FALSE,
-      switch_col = NA_character_,
-      categorical = categorical,
-      params = params_for()
-    ),
-    list(
-      name = "hab",
-      feats = hab_vars,
-      switched = FALSE,
-      switch_col = NA_character_,
-      categorical = categorical,
-      params = params_for()
+  specs <- list(block("move", move_vars,
+                      params_for(index_groups(move_vars, move_groups))))
+  if (has_modifier && length(start_vars)) {
+    specs[[length(specs) + 1]] <- block(
+      "modifier", c(intersect(c("sl_", "cos_ta"), move_vars), start_vars),
+      params_for()
     )
-  )
+  }
+  specs[[length(specs) + 1]] <- block("hr", hr_var, params_for())
+  specs[[length(specs) + 1]] <- block("hab", hab_vars,
+                                      ranked_params(hab_vars))
   if (length(famd_vars)) {
-    specs[[length(specs) + 1]] <- list(
-      name = "famd",
-      feats = famd_vars,
-      switched = TRUE,
-      switch_col = if (is.null(switch_col)) famd_vars[1] else switch_col,
-      categorical = categorical,
-      params = params_for()
+    specs[[length(specs) + 1]] <- block(
+      "famd", famd_vars, ranked_params(famd_vars), switched = TRUE,
+      switch_col = if (is.null(switch_col)) famd_vars[1] else switch_col
     )
   }
   specs
@@ -618,6 +646,20 @@ fit_xgb_boosters <- function(d, specs, n_rounds, bag_frac = 0.632,
 #' several units *below* zero, the further below the more trees it was
 #' given, which is why that route was dropped.
 #'
+#' `across_vars` switches the shuffle for start-of-step columns. Those are
+#' constant within a stratum, so shuffling one among the rows of its own
+#' stratum changes nothing at all and it scores exactly zero — the usual
+#' null cannot see them. Shuffled between strata instead, a whole step at a
+#' time, the column stays constant within each stratum, the root split on
+#' sl_ survives untouched, and only the routing below it breaks. That makes
+#' the damage the conditional structure and nothing else, and the null
+#' becomes "the movement kernel does not depend on the animal's context".
+#' Set `also_within` to keep the exact-zero check in the output.
+#'
+#' Tree-zeroing is deliberately not offered for these columns: deleting the
+#' trees that used one would delete the step-length main effect sitting
+#' above it in the same tree.
+#'
 #' @param d Step data the model is fit on
 #' @param specs Booster specs
 #' @param n_rounds Trees per booster
@@ -625,25 +667,48 @@ fit_xgb_boosters <- function(d, specs, n_rounds, bag_frac = 0.632,
 #' @param n_folds Folds of whole steps
 #' @param n_perm Permutations averaged per variable per fold
 #' @param seed Seed for the fold draw
+#' @param across_vars Columns to shuffle between strata rather than within
+#' @param also_within Also score `across_vars` the within-stratum way, as
+#'   the exact-zero check
 #' @param verbose Print a line per fold
-#' @return data.frame(variable, booster, cv), most important first, with the
+#' @return data.frame(variable, booster, scheme, cv), most important first,
+#'   with the
 #'   held-out log-likelihood in the "ll_cv" attribute
 xgb_cv_importance <- function(d, specs, n_rounds, bag_frac = 0.632,
                               n_folds = 5, n_perm = 3, seed = 1,
-                              verbose = FALSE) {
+                              across_vars = character(0),
+                              also_within = FALSE, verbose = FALSE) {
   strata <- unique(d$stratum)
   set.seed(seed)
   fold_of_stratum <- sample(rep_len(seq_len(n_folds), length(strata)))
   fold_of_row <- fold_of_stratum[match(d$stratum, strata)]
 
-  ranked <- which(vapply(specs, function(s) s$name %in% c("hab", "famd"),
-                         logical(1)))
-  vars <- unlist(lapply(specs[ranked], `[[`, "feats"))
-  owner <- vapply(vars, function(v) {
+  ranked <- which(vapply(specs, function(s) {
+    s$name %in% c("hab", "famd", "modifier")
+  }, logical(1)))
+  scored <- unique(unlist(lapply(specs[ranked], `[[`, "feats")))
+  # The movement columns live in the modifier block too, but they are
+  # nuisance and are never ranked.
+  scored <- setdiff(scored, c("sl_", "cos_ta", "tod_day"))
+  owner <- vapply(scored, function(v) {
     which(vapply(specs, function(s) v %in% s$feats, logical(1)))[1]
   }, numeric(1))
 
-  total <- stats::setNames(numeric(length(vars)), vars)
+  jobs <- dplyr::bind_rows(
+    tibble::tibble(variable = setdiff(scored, across_vars),
+                   scheme = "within"),
+    tibble::tibble(variable = intersect(scored, across_vars),
+                   scheme = "across"),
+    if (also_within) {
+      tibble::tibble(variable = intersect(scored, across_vars),
+                     scheme = "within")
+    }
+  )
+  jobs$b <- as.integer(owner[jobs$variable])
+  jobs$booster <- vapply(specs[jobs$b], `[[`, character(1), "name")
+  stopifnot(!any(is.na(jobs$b)))
+
+  total <- numeric(nrow(jobs))
   ll_total <- 0
 
   for (f in seq_len(n_folds)) {
@@ -665,16 +730,32 @@ xgb_cv_importance <- function(d, specs, n_rounds, bag_frac = 0.632,
       cat(sprintf("  fold %d / %d  held-out logLik %.1f\n", f, n_folds, ll))
     }
 
+    # Stratum ids of the held-out fold, and each stratum's first row, for
+    # the across-strata shuffle.
+    te_strata <- unique(te$stratum)
+    first_row <- match(te_strata, te$stratum)
+    row_of_stratum <- match(te$stratum, te_strata)
+
     # Permuting a variable only touches the booster that owns it, so only
     # that booster's contribution is recomputed — and on the held-out fold
     # every tree is in play, so that is one prediction, not one per tree.
-    for (j in seq_along(vars)) {
-      b <- owner[j]
+    for (j in seq_len(nrow(jobs))) {
+      b <- jobs$b[j]
+      v <- jobs$variable[j]
       rows <- which(on_te[[b]])
       total[j] <- total[j] + mean(replicate(n_perm, {
         Xp <- X_te[[b]]
-        sh <- rows[order(te$stratum[rows], stats::runif(length(rows)))]
-        Xp[rows, vars[j]] <- Xp[sh, vars[j]]
+        if (jobs$scheme[j] == "within") {
+          sh <- rows[order(te$stratum[rows], stats::runif(length(rows)))]
+          Xp[rows, v] <- Xp[sh, v]
+        } else {
+          # One value per stratum, dealt to a different stratum, then
+          # written back across that stratum's rows.
+          by_stratum <- X_te[[b]][first_row, v]
+          Xp[, v] <- by_stratum[
+            sample.int(length(te_strata))
+          ][row_of_stratum]
+        }
         dm <- xgb_matrix(Xp, specs[[b]]$categorical)
         newc <- if (specs[[b]]$switched) {
           xgb_switched_part(bst[[b]], dm, xgb_zero_matrix(specs[[b]]),
@@ -688,14 +769,10 @@ xgb_cv_importance <- function(d, specs, n_rounds, bag_frac = 0.632,
     }
   }
 
-  out <- data.frame(
-    variable = vars,
-    booster = vapply(specs[owner], `[[`, character(1), "name"),
-    cv = as.numeric(total),
-    row.names = NULL
-  )
+  jobs$cv <- total
+  out <- jobs[order(-jobs$cv), c("variable", "booster", "scheme", "cv")]
   attr(out, "ll_cv") <- ll_total
-  out[order(-out$cv), ]
+  out
 }
 
 #' Every split, and every parent-child split pair, of one booster
