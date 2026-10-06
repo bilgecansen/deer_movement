@@ -26,7 +26,9 @@
 #' even in rsf_hr, where the habitat trees may also use it.
 #'
 #' Values are per deer-year by default, the scale that reads against the
-#' pipeline's delta_logp >= 3 gate. Neither scale makes seasons strictly
+#' pipeline's delta_logp >= 3 gate; on that scale a dashed line marks
+#' THRESHOLD, the bar a variable has to clear to be carried into the
+#' individual-deer models. Neither scale makes seasons strictly
 #' comparable — a season with fewer steps over-fits more and leans harder
 #' on every variable, which inflates its whole column. Compare ranks
 #' between seasons, not values.
@@ -115,7 +117,14 @@ plot_season <- function(season, config) {
   # The stripes are a geom, and a theme's gridlines are always drawn
   # beneath geoms, so the lines are drawn here instead, after the stripes,
   # at the same breaks the axis labels use.
-  breaks <- scales::breaks_extended(6)(range(c(0, df$value)))
+  # The threshold is per deer, so it is drawn only on that scale.
+  show_line <- PER == "deer"
+  line_at <- if (show_line) THRESHOLD else 0
+  threshold_line <- if (show_line) {
+    geom_vline(xintercept = THRESHOLD, colour = "#2a78d6", linewidth = 0.5,
+               linetype = "22")
+  }
+  breaks <- scales::breaks_extended(6)(range(c(0, line_at, df$value)))
   has_start <- any(df$kind == "start")
 
   p <- ggplot(df, aes(y = label, x = value, colour = kind)) +
@@ -124,6 +133,7 @@ plot_season <- function(season, config) {
               xmin = -Inf, xmax = Inf, fill = "#edece5") +
     geom_vline(xintercept = breaks, colour = "#d8d6cd", linewidth = 0.3) +
     geom_vline(xintercept = 0, colour = "#c3c2b7", linewidth = 0.5) +
+    threshold_line +
     geom_segment(aes(x = 0, xend = value, yend = label), linewidth = 0.9) +
     geom_point(size = 4) +
     scale_colour_manual(
@@ -136,6 +146,7 @@ plot_season <- function(season, config) {
     ) +
     scale_x_continuous(breaks = breaks, labels = scales::label_comma(),
                        expand = expansion(mult = c(0.05, 0.05))) +
+    expand_limits(x = line_at) +
     labs(
       title = sprintf("Variable importance, pooled %s (%s model)",
                       r$season, r$config),
@@ -158,7 +169,12 @@ plot_season <- function(season, config) {
           ""
         },
         "Each ranked block carries its own noise column: a variable earns ",
-        "its place by beating that, not zero."
+        "its place by beating that, not zero.",
+        if (show_line) {
+          paste0(" Dashed line: ", THRESHOLD, " per deer.")
+        } else {
+          ""
+        }
       ),
       x = xgb_scale_label(PER),
       y = NULL

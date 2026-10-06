@@ -1,30 +1,31 @@
 #' @description
-#' Which variable the selected model split on under which, and what each
-#' combination is worth on steps the model never saw — for the seasons
-#' whose selected model type has any pairs.
+#' Plot the interaction log score of each season's SELECTED model type: one
+#' figure per season, one row per pair of variables, laid out like the
+#' importance plot and read against the same threshold.
 #'
 #' A tree using two variables is not yet an interaction. The unit is a
 #' root-to-leaf path: the root splits on A, a child splits on B, so the
 #' tree says how B matters depends on which side of A's threshold you are.
 #' At max_depth 2 that parent-child pair is the whole of it.
 #'
-#' Each cell is the held-out gain of the child splits on B under a root on
-#' A: the held-out log-likelihood they add over leaving their node unsplit,
-#' summed over the five folds (every step is held out once) and divided by
-#' deer-years. The units are the importance plot's. A cell can be
-#' negative: splits that fit noise in training make held-out predictions
-#' worse. See xgb_heldout_split_gain().
+#' A pair's interaction log score is the held-out log score its child
+#' splits gain over leaving their node unsplit (xgb_heldout_split_gain()),
+#' with B under A and A under B added together — both are the same pair —
+#' summed over the five folds, so every step counts once, and divided by
+#' deer-years. The units are the importance plot's, which measures the
+#' drop when a variable is shuffled; this measures the gain a pair's splits
+#' bring.
 #'
-#' Read it with two things in hand:
+#' A child split also carries the child variable's own effect on that side
+#' of its parent, so the score is an upper bound on the interaction, not
+#' the interaction itself. A pair has to clear THRESHOLD per deer on that
+#' upper bound to be worth carrying into the individual-deer models. The
+#' model comparison asks whether interactions are worth looking at at all;
+#' this asks whether any one of them is.
 #'
-#'   * A variable under ITSELF is a second cut on one curve, not an
-#'     interaction. Read the off-diagonal.
-#'   * Gain under a parent is not all interaction: a child split also
-#'     carries the child variable's own effect within that side of the
-#'     parent. Read a pair against what the block's noise column carries.
-#'
-#' How often each pair was chosen, and its in-sample gain, are printed with
-#' the tables, not drawn.
+#' A variable under itself is a second cut on one curve, not an
+#' interaction, and is left off. Pairs with a noise column mark where
+#' "carries nothing" sits.
 #'
 #' A season whose selected model is "main" has single-variable trees and so
 #' no pairs; it is skipped, and saying so is part of the output.
@@ -39,10 +40,10 @@
 # selection did not pick.
 THRESHOLD <- 3
 COMPLEXITY <- c("main", "rsf", "rsf_hr", "start", "full")
-# Cross-variable pairs listed per block, by held-out gain
-TOP_N <- 10
-WIDTH <- 12
-HEIGHT <- 6.5
+WIDTH <- 9
+# Height grows with the number of pairs
+HEIGHT_BASE <- 2.2
+HEIGHT_PER_ROW <- 0.2
 
 # Load packages ---------------------------------------------------------------
 library(tidyverse)
@@ -83,98 +84,119 @@ BLOCK <- c(hab = "Habitat", famd = "FAMD", modifier = "Movement modifier")
 
 dir.create("plots", showWarnings = FALSE)
 
-for (i in seq_len(nrow(selected))) {
-  season <- selected$season[i]
-  config <- selected$config[i]
-  if (config == "main") {
-    cat(sprintf("%s: selected model is 'main', single-variable trees, ",
-                season))
-    cat("no pairs to show\n")
-    next
-  }
+plot_season <- function(season, config) {
   r <- readRDS(sprintf("results/xgb/compare_%s_%s.rds", season, config))
   if (is.null(r$split_gain)) {
     stop(sprintf("%s / %s has no held-out split gain; refit it with ",
                  season, config),
          "fit_model_xgb.R")
   }
-  n_deer <- r$n_deer_years
-  pairs <- r$split_gain$pairs |>
-    mutate(per_deer = heldout / n_deer)
-  roots <- r$split_gain$roots |>
-    mutate(per_deer = heldout / n_deer)
+  # B under A and A under B are one pair: name it by its two variables in
+  # a fixed order and add the two directions.
+  df <- r$split_gain$pairs |>
+    filter(parent != child) |>
+    mutate(a = pmin(parent, child), b = pmax(parent, child)) |>
+    group_by(booster, a, b) |>
+    summarise(value = sum(heldout) / r$n_deer_years, .groups = "drop") |>
+    mutate(
+      block = factor(BLOCK[booster], levels = BLOCK),
+      label = paste(dplyr::coalesce(PRETTY[a], a), "×",
+                    dplyr::coalesce(PRETTY[b], b)),
+      kind = dplyr::case_when(
+        grepl("^shadow", a) | grepl("^shadow", b) ~ "noise",
+        booster == "modifier" ~ "start",
+        TRUE ~ "pair"
+      )
+    ) |>
+    arrange(value)
+  stopifnot(!anyDuplicated(df$label))
+  df$label <- factor(df$label, levels = df$label)
 
-  cat(sprintf("\n########## %s / %s (per deer-year) ##########\n", season,
-              config))
-  for (b in unique(pairs$booster)) {
-    cat(sprintf("\n--- %s: root splits by variable ---\n", b))
-    print(as.data.frame(
-      roots |>
-        filter(booster == b) |>
-        mutate(insample_share = insample / sum(insample)) |>
-        select(variable, splits, per_deer, insample_share) |>
-        arrange(desc(per_deer))
-    ), row.names = FALSE, digits = 3)
+  cat(sprintf("\n########## %s / %s: interaction log score per deer ######",
+              season, config))
+  cat("####\n")
+  print(as.data.frame(df |> arrange(block, desc(value)) |>
+                        select(block, label, value)),
+        row.names = FALSE, digits = 3)
 
-    cat(sprintf("\n--- %s: top %d cross-variable pairs by held-out gain ---\n",
-                b, TOP_N))
-    print(head(as.data.frame(
-      pairs |>
-        filter(booster == b) |>
-        mutate(insample_share = insample / sum(insample)) |>
-        filter(parent != child) |>
-        arrange(desc(per_deer)) |>
-        select(parent, child, splits, per_deer, insample_share)
-    ), TOP_N), row.names = FALSE, digits = 3)
-  }
+  # Pale stripe behind every second row of each block, to carry the eye
+  # across, with the gridlines drawn over the stripes at the axis breaks.
+  bands <- df |>
+    group_by(block) |>
+    mutate(row = rank(value, ties.method = "first")) |>
+    filter(row %% 2 == 0) |>
+    ungroup()
+  breaks <- scales::breaks_extended(6)(range(c(0, THRESHOLD, df$value)))
 
-  hm <- pairs |>
-    mutate(block = BLOCK[booster],
-           parent = dplyr::coalesce(PRETTY[parent], parent),
-           child = dplyr::coalesce(PRETTY[child], child),
-           label = sub("^-(0[.]00)$", "\\1", sprintf("%.2f", per_deer)))
-  lim <- max(abs(hm$per_deer))
-
-  p <- ggplot(hm, aes(x = child, y = parent, fill = per_deer)) +
-    geom_tile(colour = "#fcfcfb", linewidth = 0.6) +
-    geom_text(aes(label = label), size = 3, colour = "#0b0b0b") +
-    facet_wrap(~block, scales = "free") +
-    scale_fill_gradient2(low = "#2a78d6", mid = "#f2f1ea",
-                         high = "#eb6834", midpoint = 0,
-                         limits = c(-lim, lim),
-                         name = "held-out gain\nper deer-year") +
+  p <- ggplot(df, aes(y = label, x = value, colour = kind)) +
+    geom_rect(data = bands, inherit.aes = FALSE,
+              aes(ymin = row - 0.5, ymax = row + 0.5),
+              xmin = -Inf, xmax = Inf, fill = "#edece5") +
+    geom_vline(xintercept = breaks, colour = "#d8d6cd", linewidth = 0.3) +
+    geom_vline(xintercept = 0, colour = "#c3c2b7", linewidth = 0.5) +
+    geom_vline(xintercept = THRESHOLD, colour = "#2a78d6",
+               linewidth = 0.5, linetype = "22") +
+    geom_segment(aes(x = 0, xend = value, yend = label), linewidth = 0.9) +
+    geom_point(size = 4) +
+    facet_grid(block ~ ., scales = "free_y", space = "free_y") +
+    scale_colour_manual(
+      values = c(pair = "#eb6834", start = "#2a78d6", noise = "#898781"),
+      breaks = c("pair", "start", "noise"),
+      labels = c(pair = "pair of variables",
+                 start = "movement x start of step",
+                 noise = "pair with a noise column"),
+      name = NULL
+    ) +
+    scale_x_continuous(breaks = breaks, labels = scales::label_comma(),
+                       expand = expansion(mult = c(0.05, 0.05))) +
+    expand_limits(x = THRESHOLD) +
     labs(
-      title = sprintf("Which splits the model put under which, %s (%s)",
+      title = sprintf("Interaction log score, pooled %s (%s model)",
                       season, config),
       subtitle = paste0(
-        "Root variable on the vertical, the variable its child splits on ",
-        "along the horizontal. Each cell is the held-out log score\nper ",
-        "deer-year those child splits add over leaving their node ",
-        "unsplit, summed over five folds of whole steps. Orange helps on\n",
-        "new steps, blue hurts.\n\nA variable under itself is a second ",
-        "cut on one curve, not an interaction, and a child split also ",
-        "carries the child's own effect\non that side of its parent. Read ",
-        "each pair against the noise column's."
+        r$n_deer_years, " deer-years (",
+        formatC(r$n_steps, format = "d", big.mark = ","),
+        " observed steps). Held-out log score the trees gain by splitting ",
+        "on one variable\nunder the other, both orders added, over five ",
+        "random folds of whole steps. Each split also carries its own\n",
+        "variable's effect on that side of its parent, so this is an upper ",
+        "bound on the interaction. Dashed line: ", THRESHOLD, " per deer."
       ),
-      x = "child split", y = "root split"
+      x = "Gain in total log score per deer",
+      y = NULL
     ) +
-    theme_minimal(base_size = 10) +
+    theme_minimal(base_size = 11) +
     theme(
       plot.background = element_rect(fill = "#fcfcfb", colour = NA),
       panel.background = element_rect(fill = "#fcfcfb", colour = NA),
       panel.grid = element_blank(),
-      axis.text.x = element_text(angle = 40, hjust = 1, colour = "#0b0b0b"),
-      axis.text.y = element_text(colour = "#0b0b0b"),
-      strip.text = element_text(colour = "#0b0b0b", face = "bold",
-                                hjust = 0),
+      legend.position = "top",
+      legend.justification = "left",
+      axis.text.y = element_text(colour = "#0b0b0b", size = 10),
+      axis.text.x = element_text(colour = "#898781", size = 9),
+      axis.title.x = element_text(colour = "#52514e", size = 10),
+      strip.text.y = element_text(colour = "#0b0b0b", face = "bold",
+                                  angle = 0, hjust = 0),
       plot.title = element_text(colour = "#0b0b0b", face = "bold"),
-      plot.subtitle = element_text(colour = "#52514e", size = 8)
+      plot.subtitle = element_text(colour = "#52514e", size = 8.5),
+      panel.spacing.y = grid::unit(10, "pt")
     )
 
+  height <- HEIGHT_BASE + HEIGHT_PER_ROW * nrow(df)
   out <- sprintf("plots/interactions_xgb_%s_%s", season, config)
-  ggsave(paste0(out, ".png"), p, width = WIDTH, height = HEIGHT,
-         dpi = 150, bg = "#fcfcfb")
-  ggsave(paste0(out, ".pdf"), p, width = WIDTH, height = HEIGHT,
+  ggsave(paste0(out, ".png"), p, width = WIDTH, height = height, dpi = 150,
          bg = "#fcfcfb")
-  cat(sprintf("\n-> %s.png, %s.pdf\n", out, out))
+  ggsave(paste0(out, ".pdf"), p, width = WIDTH, height = height,
+         bg = "#fcfcfb")
+  cat(sprintf("-> %s.png, %s.pdf\n", out, out))
+}
+
+for (i in seq_len(nrow(selected))) {
+  if (selected$config[i] == "main") {
+    cat(sprintf("%s: selected model is 'main', single-variable trees, ",
+                selected$season[i]))
+    cat("no pairs to show\n")
+    next
+  }
+  plot_season(selected$season[i], selected$config[i])
 }
