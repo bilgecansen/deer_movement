@@ -236,9 +236,14 @@ build_xgb_pool <- function(keys, tracks, rasters, n_pts, hab_vars,
 #'
 #' @param season Season code ("fa", "nb", "pf")
 #' @param dir Folder of per-year files from prep_pool_xgb.R
+#' @param drop_keys Deer-years to leave out, keyed <id>_<season>_<year>.
+#'   Dropped before anything is numbered, so `deer` and `stratum` stay
+#'   consecutive.
 #' @return One table for the season, with `year`, `animal` and a renumbered
-#'   `deer` (one value per deer-year)
-xgb_season_pool <- function(season, dir = "data/xgb") {
+#'   `deer` (one value per deer-year). The keys actually removed are in the
+#'   "dropped" attribute.
+xgb_season_pool <- function(season, dir = "data/xgb",
+                            drop_keys = character(0)) {
   files <- list.files(dir, sprintf("^pooled_%s_[0-9]{4}[.]rds$", season),
                       full.names = TRUE)
   if (!length(files)) {
@@ -250,6 +255,8 @@ xgb_season_pool <- function(season, dir = "data/xgb") {
     p
   })
   d <- dplyr::bind_rows(parts)
+  dropped <- intersect(unique(d$key), drop_keys)
+  d <- d[!d$key %in% dropped, ]
   d$animal <- sub("_[a-z]+_[0-9]{4}$", "", d$key)
   d$deer <- as.integer(factor(d$key, levels = unique(d$key)))
   d$stratum <- as.integer(factor(paste(d$key, d$step_id_),
@@ -266,6 +273,7 @@ xgb_season_pool <- function(season, dir = "data/xgb") {
     all(d$case_[cumsum(c(1, utils::head(sizes, -1)))] == 1),
     sum(d$case_) == length(sizes)
   )
+  attr(d, "dropped") <- dropped
   d
 }
 
@@ -275,7 +283,7 @@ xgb_season_pool <- function(season, dir = "data/xgb") {
 #'   move      movement, always available, never ranked
 #'   modifier  movement again, with the start-of-step columns, so the
 #'             movement kernel may depend on where the animal stood. Only
-#'             in the shapes that carry it, and it sits straight after
+#'             in the model types that carry it, and it sits straight after
 #'             movement so it sees that residual while it is fresh
 #'   hr        distance to the home-range centre, on its own, never ranked
 #'   hab       the environmental candidates
@@ -287,9 +295,9 @@ xgb_season_pool <- function(season, dir = "data/xgb") {
 #' the trees and stayed under-fitted, and no amount of extra rounds fixed
 #' that without feeding the same rounds to variables that only fit noise.
 #'
-#' `config` picks one of four shapes, which differ only in whether the
-#' modifier block is present and whether the ranked trees may combine
-#' variables:
+#' `config` picks one of five model types. Four of them differ only in
+#' whether the modifier block is present and whether the ranked trees may
+#' combine variables:
 #'
 #'                modifier block   hab / famd trees
 #'   full            yes           may combine
@@ -301,6 +309,12 @@ xgb_season_pool <- function(season, dir = "data/xgb") {
 #' combine is (full - start) and (rsf - main), and adding the start block
 #' is (full - rsf) and (start - main). On the pooled seasons the two
 #' readings agree to within 3% and the effects add, so they are separable.
+#'
+#' The fifth, rsf_hr, is rsf with the home-range-centre column also offered
+#' to the habitat trees, so it can interact with the habitat variables. The
+#' hr block is kept and still carries its main effect. Habitat trees can
+#' take some of that main effect too, so HR's cells in a heat map carry
+#' main effect as well as interaction.
 #'
 #' "main" removes interactions WITHOUT cutting the budget: every tree is
 #' offered all columns and picks the best, then must confine its remaining
@@ -325,7 +339,8 @@ xgb_season_pool <- function(season, dir = "data/xgb") {
 #' @param hab_vars Environmental candidate columns
 #' @param famd_vars Columns for the switched booster (NA outside their
 #'   domain); empty for none
-#' @param config Model shape: "rsf" (default), "full", "start" or "main"
+#' @param config Model type: "rsf" (default), "full", "start", "main" or
+#'   "rsf_hr"
 #' @param start_vars Start-of-step columns, used by "full" and "start"
 #' @param switch_col Column whose NA pattern defines the switch; defaults to
 #'   the first entry of `famd_vars`
@@ -342,7 +357,7 @@ make_xgb_specs <- function(
   hr_var,
   hab_vars,
   famd_vars = character(0),
-  config = c("rsf", "full", "start", "main"),
+  config = c("rsf", "full", "start", "main", "rsf_hr"),
   start_vars = character(0),
   switch_col = NULL,
   move_groups = list(c("sl_", "tod_day"), "cos_ta"),
@@ -391,8 +406,9 @@ make_xgb_specs <- function(
     )
   }
   specs[[length(specs) + 1]] <- block("hr", hr_var, params_for())
-  specs[[length(specs) + 1]] <- block("hab", hab_vars,
-                                      ranked_params(hab_vars))
+  hab_feats <- if (config == "rsf_hr") c(hab_vars, hr_var) else hab_vars
+  specs[[length(specs) + 1]] <- block("hab", hab_feats,
+                                      ranked_params(hab_feats))
   if (length(famd_vars)) {
     specs[[length(specs) + 1]] <- block(
       "famd", famd_vars, ranked_params(famd_vars), switched = TRUE,
@@ -615,6 +631,207 @@ fit_xgb_boosters <- function(d, specs, n_rounds, bag_frac = 0.632,
   )
 }
 
+#' Node arrays of every tree in a booster
+#'
+#' Read from the model's own JSON, which works for categorical splits where
+#' xgb.model.dt.tree() refuses. `weight` follows xgboost's storage: a leaf
+#' holds its value already multiplied by the learning rate, an internal node
+#' holds its unscaled weight -G / (H + lambda). Node indices are 1-based.
+#'
+#' @param bst Fitted booster
+#' @return List with one entry per tree: left, right (1-based child index,
+#'   0 for a leaf), variable (NA for a leaf), weight, hess and gain
+xgb_tree_arrays <- function(bst) {
+  js <- jsonlite::fromJSON(
+    rawToChar(xgboost::xgb.save.raw(bst, raw_format = "json")),
+    simplifyVector = FALSE
+  )
+  feats <- unlist(js$learner$feature_names)
+  lapply(js$learner$gradient_booster$model$trees, function(t) {
+    left <- unlist(t$left_children) + 1L
+    leaf <- left == 0L
+    variable <- feats[unlist(t$split_indices) + 1L]
+    variable[leaf] <- NA_character_
+    list(left = left, right = unlist(t$right_children) + 1L,
+         variable = variable, weight = unlist(t$base_weights),
+         hess = unlist(t$sum_hessian), gain = unlist(t$loss_changes))
+  })
+}
+
+#' Check that a tree's stored weights reproduce its reported gains
+#'
+#' Every split's gain is rebuilt from its children's G and H, with G
+#' recovered from the stored weights. A mismatch means the weights are not
+#' stored the way the replay assumes, and its collapsed values would be
+#' wrong.
+#'
+#' @param tr One tree from xgb_tree_arrays()
+#' @param eta,lambda Learning rate and L2 penalty the tree was grown with
+#' @return TRUE, or stops
+xgb_check_tree <- function(tr, eta, lambda) {
+  leaf <- tr$left == 0L
+  w <- ifelse(leaf, tr$weight / eta, tr$weight)
+  G <- -w * (tr$hess + lambda)
+  score <- G^2 / (tr$hess + lambda)
+  for (i in which(!leaf)) {
+    l <- tr$left[i]
+    r <- tr$right[i]
+    rebuilt <- score[l] + score[r] - score[i]
+    scale <- score[l] + score[r] + score[i]
+    if (abs(rebuilt - tr$gain[i]) > 1e-4 * scale + 1e-8) {
+      stop(sprintf("Stored gain %.6g does not rebuild (%.6g)", tr$gain[i],
+                   rebuilt))
+    }
+  }
+  TRUE
+}
+
+#' Held-out gain of every split, by replaying a fold's trees in order
+#'
+#' Gain is how much a split improves the fit on the data it was chosen on,
+#' so even a noise column always earns some. This measures the same thing
+#' on steps the model never saw. The fold's trees are replayed on the
+#' held-out steps in the order they were grown — round by round, booster by
+#' booster — so each tree meets the held-out score as it stood just before
+#' it.
+#'
+#' A split's held-out gain is the held-out log-likelihood with the split
+#' minus the same with the split collapsed: the rows below it all given the
+#' node's single value (learning rate x its stored weight), as if the tree
+#' had stopped there. For a child split the rest of the tree stays as
+#' grown. For the root, "with" is the tree cut back to its first split and
+#' "without" is no tree at all, since a single value for every row is a
+#' constant within each stratum and the softmax ignores it. Both are exact
+#' log-likelihoods, not the second-order approximation the fit itself
+#' uses, so the values are in held-out log-score units and can be
+#' negative: a split that fit noise in training can make held-out
+#' predictions worse.
+#'
+#' What it does not change: credit still goes to whichever split got there
+#' first, and a child split still carries the child variable's own effect
+#' within that side of its parent, not only the interaction.
+#'
+#' @param bst List of fitted boosters, loaded
+#' @param specs Booster specs
+#' @param te Held-out step data
+#' @param n_trees Trees per booster
+#' @param blocks Boosters whose splits are scored; the others are replayed
+#'   only to keep the score current
+#' @return List: `splits`, one row per scored split (booster, tree, depth,
+#'   variable, parent, heldout, insample), and `ll`, the replayed held-out
+#'   log-likelihood
+xgb_heldout_split_gain <- function(bst, specs, te, n_trees,
+                                   blocks = c("hab", "famd", "modifier")) {
+  sizes <- xgb_strata_sizes(te)
+  ll_of <- function(eta) xgb_cond_loglik(eta, te$case_, sizes)
+  on <- lapply(specs, xgb_switch, d = te)
+  dm <- lapply(specs, function(s) {
+    xgb_matrix(as.matrix(te[, s$feats]), s$categorical)
+  })
+  dm0 <- lapply(specs, xgb_zero_matrix)
+  scored <- vapply(specs, function(s) s$name %in% blocks, logical(1))
+  trees <- vector("list", length(specs))
+  for (b in which(scored)) {
+    trees[[b]] <- xgb_tree_arrays(bst[[b]])
+  }
+
+  # Leaves below node i, for a depth-limited tree
+  leaves_below <- function(tr, i) {
+    if (tr$left[i] == 0L) {
+      return(i)
+    }
+    c(leaves_below(tr, tr$left[i]), leaves_below(tr, tr$right[i]))
+  }
+
+  margin <- rep(0, nrow(te))
+  ll_now <- ll_of(margin)
+  rows <- list()
+
+  for (r in seq_len(max(n_trees))) {
+    for (b in seq_along(specs)) {
+      if (r > n_trees[b]) {
+        next
+      }
+      if (!scored[b]) {
+        margin <- margin + if (specs[[b]]$switched) {
+          xgb_switched_part(bst[[b]], dm[[b]], dm0[[b]], on[[b]], r, r)
+        } else {
+          xgb_raw(bst[[b]], dm[[b]], r, r)
+        }
+        ll_now <- NA_real_
+        next
+      }
+
+      tr <- trees[[b]][[r]]
+      eta_b <- specs[[b]]$params$learning_rate
+      xgb_check_tree(tr, eta_b, specs[[b]]$params$reg_lambda)
+      one <- xgboost::xgb.slice.Booster(bst[[b]], r, r)
+      leaf <- as.integer(stats::predict(one, dm[[b]], predleaf = TRUE)) + 1L
+      leaf0 <- if (specs[[b]]$switched) {
+        as.integer(stats::predict(one, dm0[[b]], predleaf = TRUE)) + 1L
+      }
+      # The tree's contribution when its leaves hold `vals`
+      contribution <- function(vals) {
+        if (specs[[b]]$switched) {
+          ifelse(on[[b]], vals[leaf] - vals[leaf0], 0)
+        } else {
+          vals[leaf]
+        }
+      }
+      collapse <- function(vals, i) {
+        vals[leaves_below(tr, i)] <- eta_b * tr$weight[i]
+        vals
+      }
+
+      vals <- tr$weight
+      full <- contribution(vals)
+      if (r == 1L) {
+        # The leaf lookup must agree with xgboost's own prediction, up to
+        # the constant every tree's margin carries.
+        own <- if (specs[[b]]$switched) {
+          xgb_switched_part(bst[[b]], dm[[b]], dm0[[b]], on[[b]], r, r)
+        } else {
+          xgb_raw(bst[[b]], dm[[b]], r, r)
+        }
+        if (diff(range(own - full)) > 1e-5) {
+          stop(sprintf("Leaf lookup disagrees with booster '%s'",
+                       specs[[b]]$name))
+        }
+      }
+
+      if (tr$left[1] != 0L) {
+        if (is.na(ll_now)) {
+          ll_now <- ll_of(margin)
+        }
+        ll_full <- ll_of(margin + full)
+        kids <- c(tr$left[1], tr$right[1])
+        stump <- vals
+        for (k in kids) {
+          stump <- collapse(stump, k)
+        }
+        rows[[length(rows) + 1]] <- data.frame(
+          booster = specs[[b]]$name, tree = r, depth = 0L,
+          variable = tr$variable[1], parent = NA_character_,
+          heldout = ll_of(margin + contribution(stump)) - ll_now,
+          insample = tr$gain[1]
+        )
+        for (k in kids[tr$left[kids] != 0L]) {
+          rows[[length(rows) + 1]] <- data.frame(
+            booster = specs[[b]]$name, tree = r, depth = 1L,
+            variable = tr$variable[k], parent = tr$variable[1],
+            heldout = ll_full - ll_of(margin + contribution(collapse(vals, k))),
+            insample = tr$gain[k]
+          )
+        }
+        ll_now <- ll_full
+      }
+      margin <- margin + full
+    }
+  }
+
+  list(splits = do.call(rbind, rows), ll = ll_of(margin))
+}
+
 #' Permutation importance from random folds of whole steps
 #'
 #' Steps are dealt at random into `n_folds` folds. Each fold is scored by a
@@ -660,6 +877,10 @@ fit_xgb_boosters <- function(d, specs, n_rounds, bag_frac = 0.632,
 #' trees that used one would delete the step-length main effect sitting
 #' above it in the same tree.
 #'
+#' With `split_gain`, each fold model is also replayed on its held-out
+#' steps to score every split (xgb_heldout_split_gain()). The replayed
+#' held-out log-likelihood must match the fold's own, or the run stops.
+#'
 #' @param d Step data the model is fit on
 #' @param specs Booster specs
 #' @param n_rounds Trees per booster
@@ -670,14 +891,17 @@ fit_xgb_boosters <- function(d, specs, n_rounds, bag_frac = 0.632,
 #' @param across_vars Columns to shuffle between strata rather than within
 #' @param also_within Also score `across_vars` the within-stratum way, as
 #'   the exact-zero check
+#' @param split_gain Also compute held-out split gain
 #' @param verbose Print a line per fold
 #' @return data.frame(variable, booster, scheme, cv), most important first,
-#'   with the
-#'   held-out log-likelihood in the "ll_cv" attribute
+#'   with the held-out log-likelihood in the "ll_cv" attribute and, with
+#'   `split_gain`, the summed held-out and in-sample gain in "split_gain":
+#'   a list of `pairs` (child splits by parent and child) and `roots`
 xgb_cv_importance <- function(d, specs, n_rounds, bag_frac = 0.632,
                               n_folds = 5, n_perm = 3, seed = 1,
                               across_vars = character(0),
-                              also_within = FALSE, verbose = FALSE) {
+                              also_within = FALSE, split_gain = FALSE,
+                              verbose = FALSE) {
   strata <- unique(d$stratum)
   set.seed(seed)
   fold_of_stratum <- sample(rep_len(seq_len(n_folds), length(strata)))
@@ -687,9 +911,13 @@ xgb_cv_importance <- function(d, specs, n_rounds, bag_frac = 0.632,
     s$name %in% c("hab", "famd", "modifier")
   }, logical(1)))
   scored <- unique(unlist(lapply(specs[ranked], `[[`, "feats")))
-  # The movement columns live in the modifier block too, but they are
-  # nuisance and are never ranked.
-  scored <- setdiff(scored, c("sl_", "cos_ta", "tod_day"))
+  # Nuisance columns are never ranked, wherever else they appear: movement
+  # sits in the modifier block too, and the home-range centre in the
+  # habitat block of rsf_hr.
+  nuisance <- unlist(lapply(specs, function(s) {
+    if (s$name %in% c("move", "hr")) s$feats
+  }))
+  scored <- setdiff(scored, nuisance)
   owner <- vapply(scored, function(v) {
     which(vapply(specs, function(s) v %in% s$feats, logical(1)))[1]
   }, numeric(1))
@@ -710,6 +938,7 @@ xgb_cv_importance <- function(d, specs, n_rounds, bag_frac = 0.632,
 
   total <- numeric(nrow(jobs))
   ll_total <- 0
+  gains <- list()
 
   for (f in seq_len(n_folds)) {
     tr <- d[fold_of_row != f, ]
@@ -728,6 +957,15 @@ xgb_cv_importance <- function(d, specs, n_rounds, bag_frac = 0.632,
     ll_total <- ll_total + ll
     if (verbose) {
       cat(sprintf("  fold %d / %d  held-out logLik %.1f\n", f, n_folds, ll))
+    }
+
+    if (split_gain) {
+      rep <- xgb_heldout_split_gain(bst, specs, te, n_trees)
+      if (abs(rep$ll - ll) > 1e-6 * abs(ll) + 1e-3) {
+        stop(sprintf("Fold %d: replayed held-out logLik %.4f, fold's %.4f",
+                     f, rep$ll, ll))
+      }
+      gains[[f]] <- rep$splits
     }
 
     # Stratum ids of the held-out fold, and each stratum's first row, for
@@ -772,6 +1010,20 @@ xgb_cv_importance <- function(d, specs, n_rounds, bag_frac = 0.632,
   jobs$cv <- total
   out <- jobs[order(-jobs$cv), c("variable", "booster", "scheme", "cv")]
   attr(out, "ll_cv") <- ll_total
+  if (split_gain) {
+    g <- do.call(rbind, gains)
+    sum_by <- function(x, ...) {
+      x |>
+        dplyr::group_by(...) |>
+        dplyr::summarise(splits = dplyr::n(), heldout = sum(heldout),
+                         insample = sum(insample), .groups = "drop")
+    }
+    attr(out, "split_gain") <- list(
+      pairs = sum_by(g[g$depth == 1L, ], booster, parent,
+                     child = variable),
+      roots = sum_by(g[g$depth == 0L, ], booster, variable)
+    )
+  }
   out
 }
 

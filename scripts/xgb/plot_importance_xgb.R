@@ -1,8 +1,8 @@
 #' @description
-#' Plot the variable importance of each season's SELECTED shape: one figure
-#' per season, one row per variable.
+#' Plot the variable importance of each season's SELECTED model type: one
+#' figure per season, one row per variable.
 #'
-#' Which shape that is comes from the same rule plot_shapes_xgb.R applies —
+#' Which type that is comes from the same rule plot_models_xgb.R applies —
 #' the simplest one within THRESHOLD log units per deer of the best — so
 #' the two scripts always describe the same model. Keep the two
 #' configuration blocks in step.
@@ -13,7 +13,7 @@
 #' FAMD one sits clearly above zero, so reading the FAMD axes against zero
 #' overstates them.
 #'
-#' Two nulls appear on one axis when the selected shape carries the
+#' Two nulls appear on one axis when the selected model carries the
 #' start-of-step block. End-point columns are shuffled within a stratum —
 #' does this predict which of these points was chosen. Start columns are
 #' shuffled between strata a whole step at a time — does the movement
@@ -22,7 +22,8 @@
 #' of a start column is exactly zero by construction and is left off.
 #'
 #' Nothing is off the scale: distance to the home-range centre is in the
-#' nuisance block, so it is not ranked and cannot dominate the axis.
+#' nuisance block, so it is not ranked and cannot dominate the axis — not
+#' even in rsf_hr, where the habitat trees may also use it.
 #'
 #' Values are per deer-year by default, the scale that reads against the
 #' pipeline's delta_logp >= 3 gate. Neither scale makes seasons strictly
@@ -30,16 +31,16 @@
 #' on every variable, which inflates its whole column. Compare ranks
 #' between seasons, not values.
 #'
-#' Input:  results/xgb/compare_<season>_<shape>.rds
-#' Output: plots/importance_xgb_<season>_<shape>.png
+#' Input:  results/xgb/compare_<season>_<type>.rds
+#' Output: plots/importance_xgb_<season>_<type>.png
 #'
 #' Configuration: edit the block below before running.
 
 # Configuration ---------------------------------------------------------------
-# Must match plot_shapes_xgb.R, or this figure describes a shape the
+# Must match plot_models_xgb.R, or this figure describes a model the
 # selection did not pick.
 THRESHOLD <- 3
-COMPLEXITY <- c("main", "rsf", "start", "full")
+COMPLEXITY <- c("main", "rsf", "rsf_hr", "start", "full")
 # "deer" reads against the gate; "steps100" puts seasons on one axis
 PER <- "deer"
 WIDTH <- 9
@@ -55,7 +56,7 @@ source("scripts/helper_functions.R")
 files <- list.files("results/xgb", pattern = "^compare_.*[.]rds$",
                     full.names = TRUE)
 if (!length(files)) {
-  stop("No shape files in results/xgb/; run run_shapes_xgb.R first")
+  stop("No model files in results/xgb/; run run_models_xgb.R first")
 }
 scores <- purrr::map_dfr(files, function(f) {
   x <- readRDS(f)
@@ -136,7 +137,7 @@ plot_season <- function(season, config) {
     scale_x_continuous(breaks = breaks, labels = scales::label_comma(),
                        expand = expansion(mult = c(0.05, 0.05))) +
     labs(
-      title = sprintf("Variable importance, pooled %s (%s shape)",
+      title = sprintf("Variable importance, pooled %s (%s model)",
                       r$season, r$config),
       subtitle = paste0(
         r$n_deer_years, " deer-years",

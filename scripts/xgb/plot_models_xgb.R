@@ -1,34 +1,35 @@
 #' @description
-#' Compare the four model shapes within each season and pick one.
+#' Compare the five model types within each season and pick one.
 #'
-#' The rule: take the SIMPLEST shape whose held-out score is within
-#' THRESHOLD log units per deer of the best shape in that season. The
+#' The rule: take the SIMPLEST model type whose held-out score is within
+#' THRESHOLD log units per deer of the best type in that season. The
 #' threshold is the pipeline's own gate 3, where a model must beat the null
 #' by 3 log units for a deer.
 #'
-#' Complexity runs main < rsf < start < full. The ranking between rsf and
-#' start is arguable — fewer trees but interactions, against more trees but
-#' additive — and it has not mattered yet, since the within-threshold set
-#' has been either all four shapes or just full and rsf.
+#' Complexity runs main < rsf < rsf_hr < start < full. rsf_hr is rsf with
+#' one more variable allowed to interact, so it sits just above rsf. Its
+#' place against start and full, which it is not nested in, is a judgment
+#' call, as is rsf against start — fewer trees but interactions, against
+#' more trees but additive.
 #'
 #' Per-deer favours seasons with longer tracks: nb and pf carry about 400
 #' steps per deer against fa's 164, so the same per-step effect reads
 #' roughly 2.5x larger there. The per-100-step column is printed alongside
 #' so that is visible rather than buried.
 #'
-#' Input:  results/xgb/compare_<season>_<shape>.rds
-#' Output: plots/compare_shapes.png, and the selection printed
+#' Input:  results/xgb/compare_<season>_<type>.rds
+#' Output: plots/compare_models.png and .pdf, and the selection printed
 #'
 #' Configuration: edit the block below before running.
 
 # Configuration ---------------------------------------------------------------
-# Log units per deer. A shape within this much of the best is a candidate;
-# the simplest candidate wins.
+# Log units per deer. A model type within this much of the best is a
+# candidate; the simplest candidate wins.
 THRESHOLD <- 3
 # Simplest first
-COMPLEXITY <- c("main", "rsf", "start", "full")
+COMPLEXITY <- c("main", "rsf", "rsf_hr", "start", "full")
 WIDTH <- 9.5
-HEIGHT <- 8
+HEIGHT <- 9.5
 
 # Load packages ---------------------------------------------------------------
 library(tidyverse)
@@ -39,7 +40,7 @@ source("scripts/helper_functions.R")
 files <- list.files("results/xgb", pattern = "^compare_.*[.]rds$",
                     full.names = TRUE)
 if (!length(files)) {
-  stop("No shape files in results/xgb/; run run_shapes_xgb.R first")
+  stop("No model files in results/xgb/; run run_models_xgb.R first")
 }
 r <- purrr::map_dfr(files, function(f) {
   x <- readRDS(f)
@@ -58,7 +59,7 @@ r <- r |>
                                                    COMPLEXITY))]) |>
   ungroup()
 
-cat("=== held-out score by shape ===\n")
+cat("=== held-out score by model type ===\n")
 print(as.data.frame(
   r |>
     mutate(config = factor(config, levels = COMPLEXITY)) |>
@@ -91,10 +92,11 @@ if (all(c("full", "rsf", "start", "main") %in% names(w))) {
 
 # Figure ----------------------------------------------------------------------
 LABEL <- c(
-  full = "Full\nstart block + RSF interactions",
-  rsf = "RSF interaction\nRSF interactions only",
-  start = "Start only\nstart block only",
-  main = "Main effects\nneither"
+  full = "Movement and RSF Interactions",
+  rsf = "RSF Interactions",
+  rsf_hr = "RSF and HR Interactions",
+  start = "Movement Interactions",
+  main = "Main effects"
 )
 df <- r |>
   mutate(config = factor(config, levels = COMPLEXITY),
@@ -117,8 +119,8 @@ p <- ggplot(df, aes(x = per_deer, y = label)) +
   geom_vline(xintercept = 0, colour = "#c3c2b7", linewidth = 0.5) +
   geom_vline(xintercept = -THRESHOLD, colour = "#2a78d6",
              linewidth = 0.5, linetype = "22") +
-  geom_segment(aes(x = 0, xend = per_deer, yend = label),
-               colour = "#eb6834", linewidth = 0.9) +
+  geom_segment(aes(x = 0, xend = per_deer, yend = label, colour = selected),
+               linewidth = 0.9) +
   geom_point(aes(colour = selected), size = 4) +
   geom_text(aes(label = sprintf("%.2f", per_deer)), hjust = 1.35,
             size = 3, colour = "#52514e") +
@@ -129,18 +131,18 @@ p <- ggplot(df, aes(x = per_deer, y = label)) +
   scale_x_continuous(expand = expansion(mult = c(0.22, 0.06))) +
   labs(
     title = sprintf(
-      "Simplest shape within %g log score per deer of the best", THRESHOLD
+      "Simplest model within %g log score per deer of the best", THRESHOLD
     ),
     subtitle = paste0(
       "Five random folds of whole steps, 500 rounds per booster. The best ",
-      "shape sits at 0; the others show what they\ngive up, in held-out ",
+      "model sits at 0; the others show what they\ngive up, in held-out ",
       "log score per deer-year. Anything right of the dashed line is ",
       "within ", THRESHOLD, " of the best,\nand the simplest of those is ",
-      "the selected shape, drawn solid.\n\n",
+      "the selected model, drawn solid.\n\n",
       "Per deer-year favours seasons with longer tracks, so the ",
       "per-100-step gaps are printed with the table."
     ),
-    x = "Held-out log score per deer, against the best shape", y = NULL
+    x = "Held-out log score per deer, against the best model", y = NULL
   ) +
   theme_minimal(base_size = 11) +
   theme(
@@ -159,6 +161,8 @@ p <- ggplot(df, aes(x = per_deer, y = label)) +
   )
 
 dir.create("plots", showWarnings = FALSE)
-ggsave("plots/compare_shapes.png", p, width = WIDTH, height = HEIGHT,
+ggsave("plots/compare_models.png", p, width = WIDTH, height = HEIGHT,
        dpi = 150, bg = "#fcfcfb")
-cat("\n-> plots/compare_shapes.png\n")
+ggsave("plots/compare_models.pdf", p, width = WIDTH, height = HEIGHT,
+       bg = "#fcfcfb")
+cat("\n-> plots/compare_models.png, plots/compare_models.pdf\n")

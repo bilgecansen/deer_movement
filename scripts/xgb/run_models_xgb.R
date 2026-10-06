@@ -1,24 +1,24 @@
 #' @description
-#' Run fit_shape_xgb.R for every shape and season, a few at a time.
+#' Run fit_model_xgb.R for every model type and season, a few at a time.
 #'
-#' Twelve jobs — four shapes x three seasons — each one whole-data fit plus
-#' N_FOLDS more for the held-out score. The jobs are independent, so they
-#' run in parallel with a share of the threads each rather than in sequence
+#' Fifteen jobs — five model types x three seasons — each one whole-data fit
+#' plus N_FOLDS more for the held-out score, with every fold replayed on its
+#' held-out steps for the split gain. The jobs are independent, so they run
+#' in parallel with a share of the threads each rather than in sequence
 #' with all of them; xgboost scales sublinearly with threads, so that is
-#' the faster way round. On the current cohort the whole set takes about
-#' two and a half hours at N_PAR 3.
+#' the faster way round.
 #'
 #' fa and nb are interleaved so at most two of the large-season jobs hold
 #' memory at once.
 #'
 #' Inputs: data/xgb/pooled_start_<season>.rds (prep_start_xgb.R)
-#' Output: results/xgb/compare_<season>_<shape>.rds, one per cell
+#' Output: results/xgb/compare_<season>_<type>.rds, one per cell
 #'
 #' Configuration: edit the block below before running.
 
 # Configuration ---------------------------------------------------------------
 SEASONS <- c("fa", "nb", "pf")
-CONFIGS <- c("full", "rsf", "start", "main")
+CONFIGS <- c("full", "rsf", "start", "main", "rsf_hr")
 # Jobs at a time, and threads each. N_PAR * N_THREAD should leave the
 # machine a core.
 N_PAR <- 3L
@@ -28,7 +28,7 @@ POLL_SECONDS <- 20
 # Load packages ---------------------------------------------------------------
 library(tidyverse)
 
-script <- "scripts/xgb/fit_shape_xgb.R"
+script <- "scripts/xgb/fit_model_xgb.R"
 lines <- readLines(script)
 line_of <- function(pattern) {
   i <- grep(pattern, lines)
@@ -46,7 +46,7 @@ jobs <- tidyr::expand_grid(config = CONFIGS, season = SEASONS) |>
   dplyr::arrange(match(config, CONFIGS), match(season, SEASONS))
 
 running <- function() {
-  length(system2("pgrep", c("-f", shQuote("fit_shape_xgb")),
+  length(system2("pgrep", c("-f", shQuote("fit_model_xgb")),
                  stdout = TRUE, stderr = FALSE))
 }
 
@@ -56,10 +56,10 @@ for (i in seq_len(nrow(jobs))) {
   }
   s <- jobs$season[i]
   cf <- jobs$config[i]
-  # fit_shape_xgb.R is configured by the block at its top, so the season,
-  # the shape and the thread count are set by rewriting those three lines
-  # into a temporary copy. The script on disk is left alone.
-  tmp <- tempfile(pattern = sprintf("fit_shape_xgb_%s_%s_", s, cf),
+  # fit_model_xgb.R is configured by the block at its top, so the season,
+  # the model type and the thread count are set by rewriting those three
+  # lines into a temporary copy. The script on disk is left alone.
+  tmp <- tempfile(pattern = sprintf("fit_model_xgb_%s_%s_", s, cf),
                   fileext = ".R")
   patched <- lines
   patched[i_season] <- sprintf('SEASON <- "%s"', s)
@@ -75,4 +75,4 @@ for (i in seq_len(nrow(jobs))) {
 while (running() > 0) {
   Sys.sleep(POLL_SECONDS)
 }
-cat(sprintf("\nall shapes done (%s)\n", format(Sys.time(), "%H:%M")))
+cat(sprintf("\nall models done (%s)\n", format(Sys.time(), "%H:%M")))

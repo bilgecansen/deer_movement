@@ -1,9 +1,9 @@
 #' @description
-#' Fit one shape of the pooled model on one season, score it on held-out
+#' Fit one type of the pooled model on one season, score it on held-out
 #' folds, and record what its trees reached for.
 #'
-#' Four shapes differ only in whether the start-of-step block is present
-#' and whether the ranked trees may combine variables:
+#' Four model types differ only in whether the start-of-step block is
+#' present and whether the ranked trees may combine variables:
 #'
 #'                modifier block   hab / famd trees
 #'   full            yes           may combine
@@ -17,11 +17,14 @@
 #' readings agree to within 3% and the effects add, which is what says they
 #' are separable.
 #'
-#' 500 rounds per BOOSTER in every shape, so `full` and `start` carry 2,500
+#' The fifth, rsf_hr, is rsf with the home-range-centre column also offered
+#' to the habitat trees, so it can interact with them. Its own block stays.
+#'
+#' 500 rounds per BOOSTER in every type, so `full` and `start` carry 2,500
 #' trees and the others 2,000. The block is the unit: at equal rounds per
-#' block, habitat is fitted the same way in all four, so a difference
+#' block, habitat is fitted the same way in all of them, so a difference
 #' between them is down to what actually differs. Equalising total trees
-#' would instead hand the four-booster shapes 625 rounds each, giving their
+#' would instead hand the four-booster types 625 rounds each, giving their
 #' habitat blocks 25% more trees than the five-booster ones, and push them
 #' past the round count that won on held-out score.
 #'
@@ -36,11 +39,17 @@
 #' a stratum-constant column within its own stratum changes nothing and
 #' scores exactly zero. That zero is kept in the output as a check.
 #'
+#' The same folds give each split's held-out gain: every fold model is
+#' replayed on its held-out steps, and a split scores the held-out
+#' log-likelihood it adds over its node left unsplit. The interaction heat
+#' maps read that, summed over the folds, rather than the in-sample gain of
+#' the whole-data fit.
+#'
 #' Inputs: data/xgb/pooled_start_<season>.rds (prep_start_xgb.R)
-#' Output: results/xgb/compare_<season>_<shape>.rds
+#' Output: results/xgb/compare_<season>_<type>.rds
 #'
 #' Configuration: edit the block below before running, or let
-#' run_shapes_xgb.R set SEASON and CONFIG.
+#' run_models_xgb.R set SEASON and CONFIG.
 
 # Configuration ---------------------------------------------------------------
 SEASON <- "fa"
@@ -73,7 +82,7 @@ if (!overwrite && file.exists(out_path)) {
 }
 
 d <- readRDS(sprintf("data/xgb/pooled_start_%s.rds", SEASON))
-# Drawn before anything shape-specific, so every shape of the model on a
+# Drawn before anything type-specific, so every type of the model on a
 # season sees the identical noise columns and the identical folds.
 set.seed(SEED)
 d$shadow_gauss <- stats::rnorm(nrow(d))
@@ -117,15 +126,18 @@ cat(sprintf("%s / %s: %s | %d deer-years, %s steps, %d trees\n",
             paste(vapply(specs, `[[`, "", "name"), collapse = " -> "),
             n_deer_years, formatC(n_steps, format = "d", big.mark = ","),
             length(specs) * N_ROUNDS))
+# The habitat block's own columns, which in rsf_hr include the HR column
+hab_feats <- specs[[which(vapply(specs, `[[`, "", "name") == "hab")]]$feats
 cat(sprintf("habitat: %s\nFAMD: %s\nstart: %s\n",
-            paste(HAB_VARS, collapse = ", "),
+            paste(hab_feats, collapse = ", "),
             paste(FAMD_VARS, collapse = ", "),
             if (uses_start) paste(START_VARS, collapse = ", ") else
-              "(not used by this shape)"))
+              "(not used by this type)"))
 
 # Fit -------------------------------------------------------------------------
-# The whole-data fit is what the interaction heat maps read; the folds
-# below give the score and the importance.
+# The whole-data fit gives the in-sample score and the split counts; the
+# folds below give the held-out score, the importance and the held-out
+# split gain.
 t0 <- Sys.time()
 set.seed(SEED)
 fit <- fit_xgb_boosters(d, specs, n_rounds = N_ROUNDS,
@@ -149,7 +161,7 @@ imp <- xgb_cv_importance(
   d, specs, n_rounds = N_ROUNDS, bag_frac = BAG_FRAC, n_folds = N_FOLDS,
   n_perm = N_PERM, seed = SEED,
   across_vars = if (uses_start) START_VARS else character(0),
-  also_within = uses_start, verbose = TRUE
+  also_within = uses_start, split_gain = TRUE, verbose = TRUE
 )
 imp$season <- SEASON
 imp$config <- CONFIG
@@ -165,7 +177,8 @@ print(as.data.frame(imp), row.names = FALSE, digits = 4)
 
 saveRDS(
   list(season = SEASON, config = CONFIG, specs = specs, importance = imp,
-       structure = struct, loglik_in = fit$loglik,
+       structure = struct, split_gain = attr(imp, "split_gain"),
+       loglik_in = fit$loglik,
        ll_cv = attr(imp, "ll_cv"), null_ll = null_ll, n_steps = n_steps,
        n_deer_years = n_deer_years, n_animals = dplyr::n_distinct(d$animal),
        n_trees = length(specs) * N_ROUNDS),

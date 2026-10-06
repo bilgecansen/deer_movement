@@ -210,3 +210,34 @@ extract_step_variables <- function(
   data
 }
 
+#' Age in months at the start of each track
+#'
+#' The source table records age once, at collaring, as ">2yrs" or "20mo".
+#' A deer collared at 20 months is aged forward from the first fix of that
+#' animal anywhere in the table. Collaring cannot come after that fix, so
+#' the estimate can only understate the true age. Deer collared at over two
+#' years are adults in every track and get NA.
+#'
+#' @param tracks The source track table (library/SW_filtered_deer.RData)
+#' @return tibble(key, age_at_collar, age_months), one row per track, keyed
+#'   <id>_<season>_<year> as in data/tracks/
+deer_track_age <- function(tracks) {
+  first_fix <- vapply(tracks$stp, function(s) as.numeric(min(s$t1_)),
+                      numeric(1))
+  out <- tibble::tibble(
+    id = tracks$id,
+    key = sprintf("%s_%s_%d", tracks$id, tracks$season,
+                  as.integer(tracks$year)),
+    age_at_collar = tracks$age.at.col1,
+    t0 = first_fix
+  )
+  stopifnot(all(out$age_at_collar %in% c(">2yrs", "20mo")))
+  out <- dplyr::mutate(dplyr::group_by(out, id), t_first = min(t0))
+  out$age_months <- ifelse(
+    out$age_at_collar == "20mo",
+    20 + (out$t0 - out$t_first) / (86400 * 30.44),
+    NA_real_
+  )
+  dplyr::ungroup(out)[c("key", "age_at_collar", "age_months")]
+}
+
