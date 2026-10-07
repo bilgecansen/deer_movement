@@ -1,16 +1,18 @@
 #' @description
-#' Compare the five model types within each season and pick one.
+#' Compare the six model types within each season and pick one.
 #'
 #' The rule: take the SIMPLEST model type whose held-out score is within
 #' THRESHOLD log units per deer of the best type in that season. The
 #' threshold is the pipeline's own gate 3, where a model must beat the null
 #' by 3 log units for a deer.
 #'
-#' Complexity runs main < rsf < rsf_hr < start < full. rsf_hr is rsf with
-#' one more variable allowed to interact, so it sits just above rsf. Its
-#' place against start and full, which it is not nested in, is a judgment
-#' call, as is rsf against start — fewer trees but interactions, against
-#' more trees but additive.
+#' Complexity runs null < main < rsf < rsf_hr < start < full. The null type
+#' is movement and the home-range centre alone, so if no other type beats
+#' it by the threshold, the season selects it: no habitat model is worth
+#' it there. rsf_hr is rsf with one more variable allowed to interact, so it
+#' sits just above rsf. Its place against start and full, which it is not
+#' nested in, is a judgment call, as is rsf against start — fewer trees but
+#' interactions, against more trees but additive.
 #'
 #' Per-deer favours seasons with longer tracks: nb and pf carry about 400
 #' steps per deer against fa's 164, so the same per-step effect reads
@@ -27,9 +29,9 @@
 # candidate; the simplest candidate wins.
 THRESHOLD <- 3
 # Simplest first
-COMPLEXITY <- c("main", "rsf", "rsf_hr", "start", "full")
+COMPLEXITY <- c("null", "main", "rsf", "rsf_hr", "start", "full")
 WIDTH <- 9.5
-HEIGHT <- 9.5
+HEIGHT <- 11
 
 # Load packages ---------------------------------------------------------------
 library(tidyverse)
@@ -96,7 +98,8 @@ LABEL <- c(
   rsf = "RSF Interactions",
   rsf_hr = "RSF and HR Interactions",
   start = "Movement Interactions",
-  main = "Main effects"
+  main = "Main effects",
+  null = "Null (movement + HR)"
 )
 df <- r |>
   mutate(config = factor(config, levels = COMPLEXITY),

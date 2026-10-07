@@ -5,7 +5,9 @@
 #' Which type that is comes from the same rule plot_models_xgb.R applies —
 #' the simplest one within THRESHOLD log units per deer of the best — so
 #' the two scripts always describe the same model. Keep the two
-#' configuration blocks in step.
+#' configuration blocks in step. A season whose selected model is the null
+#' type has nothing ranked; it is skipped, and saying so is part of the
+#' output.
 #'
 #' Each ranked block carries a noise column, and they are drawn in blue.
 #' A variable earns its place by beating its block's noise column, not by
@@ -42,7 +44,7 @@
 # Must match plot_models_xgb.R, or this figure describes a model the
 # selection did not pick.
 THRESHOLD <- 3
-COMPLEXITY <- c("main", "rsf", "rsf_hr", "start", "full")
+COMPLEXITY <- c("null", "main", "rsf", "rsf_hr", "start", "full")
 # "deer" reads against the gate; "steps100" puts seasons on one axis
 PER <- "deer"
 WIDTH <- 9
@@ -199,5 +201,10 @@ plot_season <- function(season, config) {
 }
 
 for (i in seq_len(nrow(selected))) {
+  if (selected$config[i] == "null") {
+    cat(sprintf("%s: selected model is the null, nothing ranked to show\n",
+                selected$season[i]))
+    next
+  }
   plot_season(selected$season[i], selected$config[i])
 }

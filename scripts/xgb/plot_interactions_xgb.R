@@ -28,7 +28,8 @@
 #' "carries nothing" sits.
 #'
 #' A season whose selected model is "main" has single-variable trees and so
-#' no pairs; it is skipped, and saying so is part of the output.
+#' no pairs, and one whose selected model is the null type has no ranked
+#' trees at all; either is skipped, and saying so is part of the output.
 #'
 #' Input:  results/xgb/compare_<season>_<type>.rds
 #' Output: plots/interactions_xgb_<season>_<type>.png and .pdf
@@ -39,7 +40,7 @@
 # Must match plot_models_xgb.R, or the figures describe a model the
 # selection did not pick.
 THRESHOLD <- 3
-COMPLEXITY <- c("main", "rsf", "rsf_hr", "start", "full")
+COMPLEXITY <- c("null", "main", "rsf", "rsf_hr", "start", "full")
 WIDTH <- 9
 # Height grows with the number of pairs
 HEIGHT_BASE <- 2.2
@@ -192,10 +193,9 @@ plot_season <- function(season, config) {
 }
 
 for (i in seq_len(nrow(selected))) {
-  if (selected$config[i] == "main") {
-    cat(sprintf("%s: selected model is 'main', single-variable trees, ",
-                selected$season[i]))
-    cat("no pairs to show\n")
+  if (selected$config[i] %in% c("main", "null")) {
+    cat(sprintf("%s: selected model is '%s', no pairs to show\n",
+                selected$season[i], selected$config[i]))
     next
   }
   plot_season(selected$season[i], selected$config[i])

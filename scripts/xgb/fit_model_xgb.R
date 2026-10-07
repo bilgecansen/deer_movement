@@ -20,6 +20,10 @@
 #' The fifth, rsf_hr, is rsf with the home-range-centre column also offered
 #' to the habitat trees, so it can interact with them. Its own block stays.
 #'
+#' The sixth, null, is movement and the home-range centre alone, the
+#' xgboost version of the GAM null. It ranks nothing, so its result file
+#' holds a held-out score and empty importance and split-gain tables.
+#'
 #' 500 rounds per BOOSTER in every type, so `full` and `start` carry 2,500
 #' trees and the others 2,000. The block is the unit: at equal rounds per
 #' block, habitat is fitted the same way in all of them, so a difference
@@ -126,13 +130,11 @@ cat(sprintf("%s / %s: %s | %d deer-years, %s steps, %d trees\n",
             paste(vapply(specs, `[[`, "", "name"), collapse = " -> "),
             n_deer_years, formatC(n_steps, format = "d", big.mark = ","),
             length(specs) * N_ROUNDS))
-# The habitat block's own columns, which in rsf_hr include the HR column
-hab_feats <- specs[[which(vapply(specs, `[[`, "", "name") == "hab")]]$feats
-cat(sprintf("habitat: %s\nFAMD: %s\nstart: %s\n",
-            paste(hab_feats, collapse = ", "),
-            paste(FAMD_VARS, collapse = ", "),
-            if (uses_start) paste(START_VARS, collapse = ", ") else
-              "(not used by this type)"))
+# Each block and the columns it was given, so a type that drops or adds a
+# block (null, rsf_hr) shows exactly what it fits
+cat(sprintf("  %-8s %s\n", vapply(specs, `[[`, "", "name"),
+            vapply(specs, function(s) paste(s$feats, collapse = ", "), "")),
+    sep = "")
 
 # Fit -------------------------------------------------------------------------
 # The whole-data fit gives the in-sample score and the split counts; the
@@ -163,12 +165,16 @@ imp <- xgb_cv_importance(
   across_vars = if (uses_start) START_VARS else character(0),
   also_within = uses_start, split_gain = TRUE, verbose = TRUE
 )
-imp$season <- SEASON
-imp$config <- CONFIG
-imp$n_deer <- n_deer_years
-imp$n_steps <- n_steps
+# rep() rather than a single value, so the null type's empty table takes
+# them too
+imp$season <- rep(SEASON, nrow(imp))
+imp$config <- rep(CONFIG, nrow(imp))
+imp$n_deer <- rep(n_deer_years, nrow(imp))
+imp$n_steps <- rep(n_steps, nrow(imp))
 imp$per_deer <- xgb_scale_value(imp$cv, n_deer_years, n_steps, "deer")
 
+# Every endpoint equally likely: the floor under every model type, including
+# the null type, which still fits movement and the home-range centre
 null_ll <- n_steps * log(1 / (nrow(d) / n_steps))
 cat(sprintf("\nlogLik  in-sample %.1f  held-out %.1f  null %.1f\n",
             fit$loglik, attr(imp, "ll_cv"), null_ll))

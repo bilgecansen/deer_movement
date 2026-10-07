@@ -1,7 +1,7 @@
 #' @description
 #' Run fit_model_xgb.R for every model type and season, a few at a time.
 #'
-#' Fifteen jobs — five model types x three seasons — each one whole-data fit
+#' Eighteen jobs — six model types x three seasons — each one whole-data fit
 #' plus N_FOLDS more for the held-out score, with every fold replayed on its
 #' held-out steps for the split gain. The jobs are independent, so they run
 #' in parallel with a share of the threads each rather than in sequence
@@ -11,6 +11,12 @@
 #' fa and nb are interleaved so at most two of the large-season jobs hold
 #' memory at once.
 #'
+#' SKIP_EXISTING fits only the cells with no result yet, for adding a model
+#' type. It is safe only while the season tables are unchanged: every type
+#' is compared on the same folds of the same table, and a result fit to an
+#' older table would no longer be comparable. After rebuilding a table,
+#' refit everything.
+#'
 #' Inputs: data/xgb/pooled_start_<season>.rds (prep_start_xgb.R)
 #' Output: results/xgb/compare_<season>_<type>.rds, one per cell
 #'
@@ -18,7 +24,9 @@
 
 # Configuration ---------------------------------------------------------------
 SEASONS <- c("fa", "nb", "pf")
-CONFIGS <- c("full", "rsf", "start", "main", "rsf_hr")
+CONFIGS <- c("full", "rsf", "start", "main", "rsf_hr", "null")
+# TRUE: fit only the cells with no result file yet (see above)
+SKIP_EXISTING <- FALSE
 # Jobs at a time, and threads each. N_PAR * N_THREAD should leave the
 # machine a core.
 N_PAR <- 3L
@@ -44,6 +52,12 @@ dir.create("logs/xgb", showWarnings = FALSE, recursive = TRUE)
 # Interleave the seasons so the two largest do not all land together.
 jobs <- tidyr::expand_grid(config = CONFIGS, season = SEASONS) |>
   dplyr::arrange(match(config, CONFIGS), match(season, SEASONS))
+if (SKIP_EXISTING) {
+  done <- file.exists(sprintf("results/xgb/compare_%s_%s.rds", jobs$season,
+                              jobs$config))
+  cat(sprintf("skipping %d cells that already have a result\n", sum(done)))
+  jobs <- jobs[!done, ]
+}
 
 running <- function() {
   length(system2("pgrep", c("-f", shQuote("fit_model_xgb")),

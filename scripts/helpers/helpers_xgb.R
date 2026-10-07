@@ -295,7 +295,7 @@ xgb_season_pool <- function(season, dir = "data/xgb",
 #' the trees and stayed under-fitted, and no amount of extra rounds fixed
 #' that without feeding the same rounds to variables that only fit noise.
 #'
-#' `config` picks one of five model types. Four of them differ only in
+#' `config` picks one of six model types. Four of them differ only in
 #' whether the modifier block is present and whether the ranked trees may
 #' combine variables:
 #'
@@ -315,6 +315,11 @@ xgb_season_pool <- function(season, dir = "data/xgb",
 #' hr block is kept and still carries its main effect. Habitat trees can
 #' take some of that main effect too, so HR's cells in a heat map carry
 #' main effect as well as interaction.
+#'
+#' The sixth, null, is the nuisance block alone: movement and the home-range
+#' centre, nothing ranked. It is the xgboost version of the GAM null, and
+#' the simplest type in the selection, so a season where no habitat model
+#' beats it by the threshold selects it.
 #'
 #' "main" removes interactions WITHOUT cutting the budget: every tree is
 #' offered all columns and picks the best, then must confine its remaining
@@ -339,8 +344,8 @@ xgb_season_pool <- function(season, dir = "data/xgb",
 #' @param hab_vars Environmental candidate columns
 #' @param famd_vars Columns for the switched booster (NA outside their
 #'   domain); empty for none
-#' @param config Model type: "rsf" (default), "full", "start", "main" or
-#'   "rsf_hr"
+#' @param config Model type: "rsf" (default), "full", "start", "main",
+#'   "rsf_hr" or "null"
 #' @param start_vars Start-of-step columns, used by "full" and "start"
 #' @param switch_col Column whose NA pattern defines the switch; defaults to
 #'   the first entry of `famd_vars`
@@ -357,7 +362,7 @@ make_xgb_specs <- function(
   hr_var,
   hab_vars,
   famd_vars = character(0),
-  config = c("rsf", "full", "start", "main", "rsf_hr"),
+  config = c("rsf", "full", "start", "main", "rsf_hr", "null"),
   start_vars = character(0),
   switch_col = NULL,
   move_groups = list(c("sl_", "tod_day"), "cos_ta"),
@@ -406,6 +411,9 @@ make_xgb_specs <- function(
     )
   }
   specs[[length(specs) + 1]] <- block("hr", hr_var, params_for())
+  if (config == "null") {
+    return(specs)
+  }
   hab_feats <- if (config == "rsf_hr") c(hab_vars, hr_var) else hab_vars
   specs[[length(specs) + 1]] <- block("hab", hab_feats,
                                       ranked_params(hab_feats))
@@ -922,16 +930,20 @@ xgb_cv_importance <- function(d, specs, n_rounds, bag_frac = 0.632,
     which(vapply(specs, function(s) v %in% s$feats, logical(1)))[1]
   }, numeric(1))
 
-  jobs <- dplyr::bind_rows(
-    tibble::tibble(variable = setdiff(scored, across_vars),
-                   scheme = "within"),
-    tibble::tibble(variable = intersect(scored, across_vars),
-                   scheme = "across"),
-    if (also_within) {
+  # The null model ranks nothing: no jobs, only the held-out score.
+  jobs <- tibble::tibble(variable = character(0), scheme = character(0))
+  if (length(scored)) {
+    jobs <- dplyr::bind_rows(
+      tibble::tibble(variable = setdiff(scored, across_vars),
+                     scheme = "within"),
       tibble::tibble(variable = intersect(scored, across_vars),
-                     scheme = "within")
-    }
-  )
+                     scheme = "across"),
+      if (also_within) {
+        tibble::tibble(variable = intersect(scored, across_vars),
+                       scheme = "within")
+      }
+    )
+  }
   jobs$b <- as.integer(owner[jobs$variable])
   jobs$booster <- vapply(specs[jobs$b], `[[`, character(1), "name")
   stopifnot(!any(is.na(jobs$b)))
@@ -959,7 +971,8 @@ xgb_cv_importance <- function(d, specs, n_rounds, bag_frac = 0.632,
       cat(sprintf("  fold %d / %d  held-out logLik %.1f\n", f, n_folds, ll))
     }
 
-    if (split_gain) {
+    # With no ranked block there are no splits to score.
+    if (split_gain && length(ranked)) {
       rep <- xgb_heldout_split_gain(bst, specs, te, n_trees)
       if (abs(rep$ll - ll) > 1e-6 * abs(ll) + 1e-3) {
         stop(sprintf("Fold %d: replayed held-out logLik %.4f, fold's %.4f",
@@ -1012,6 +1025,12 @@ xgb_cv_importance <- function(d, specs, n_rounds, bag_frac = 0.632,
   attr(out, "ll_cv") <- ll_total
   if (split_gain) {
     g <- do.call(rbind, gains)
+    if (is.null(g)) {
+      g <- data.frame(booster = character(0), tree = integer(0),
+                      depth = integer(0), variable = character(0),
+                      parent = character(0), heldout = numeric(0),
+                      insample = numeric(0))
+    }
     sum_by <- function(x, ...) {
       x |>
         dplyr::group_by(...) |>
