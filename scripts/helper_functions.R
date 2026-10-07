@@ -42,6 +42,7 @@ for (.helper_file in c(
   "helpers_amt.R",
   "helpers_gam.R",
   "helpers_xgb.R",
+  "helpers_xgb_sim.R",
   "helpers_simulate.R",
   "helpers_metrics.R",
   "helpers_plots.R"

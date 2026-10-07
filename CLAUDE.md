@@ -56,6 +56,11 @@ so rule 1 is not enforced automatically.
   filenames even inside those folders; the redundancy is a deliberate safeguard.
   Note `amt::fit_issf` and `amt::make_issf_model` are the package's own API and
   keep their names.
+- `scripts/xgb_sim/` — the simulation test of the xgb framework: real steps
+  and columns, with the used endpoints drawn from a known truth
+  (`sim_truth_xgb.R`), fitted by `fit_model_xgb.R` (`run_sim_xgb.R`) and
+  compared with that truth (`sim_summary_xgb.R`). Results go to `sims/`,
+  which is not tracked.
 - `scripts/retired/` — scripts kept for reference but not runnable as-is.
 - `scripts/checks/` — correctness checks. `run_checks_all.sh` runs them all and
   exits non-zero on failure. `walkthrough_gam.R` is a straight-line, loop-free
