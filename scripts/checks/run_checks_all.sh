@@ -28,6 +28,10 @@ echo "### Tier 2: amt vs GAM on real deer ###"
 Rscript scripts/checks/check_differential_gam.R 5 30 || rc=1
 
 echo
+echo "### xgb objective vs xgboost's built-in survival:cox ###"
+Rscript scripts/checks/cox_check.R || rc=1
+
+echo
 if [[ $rc -eq 0 ]]; then
   echo "ALL CHECKS PASSED"
 else

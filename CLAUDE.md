@@ -61,9 +61,12 @@ so rule 1 is not enforced automatically.
   exits non-zero on failure. `walkthrough_gam.R` is a straight-line, loop-free
   inlining of the GAM path for manual line-by-line review;
   `walkthrough_xgb.R` does the same for the xgb path and also audits the
-  stored results in `results/xgb/` against the agreed design. `check_wrangle.R`
-  re-derives every column of `data/tracks/` from the source rasters and the
-  stored coordinates; run it as `check_wrangle.R all both` for the full cohort.
+  stored results in `results/xgb/` against the agreed design. `cox_check.R`
+  shows the xgb objective is xgboost's built-in `survival:cox` made to work
+  within each step: identical trees on one step, different on two.
+  `check_wrangle.R` re-derives every column of `data/tracks/` from the source
+  rasters and the stored coordinates; run it as `check_wrangle.R all both` for
+  the full cohort.
 - `docs/gam_decision_inventory.md` — every non-obvious choice in the GAM path,
   attributed, with the alternative that was rejected.
 
