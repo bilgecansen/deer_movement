@@ -451,9 +451,10 @@ check_one_deer <- function(path, spec) {
     )
   }
 
-  days_recomp <- lubridate::yday(sv$t2_) - min(lubridate::yday(sv$t2_)) + 1
+  days_recomp <- as.numeric(lubridate::date(sv$t2_) -
+                              min(lubridate::date(sv$t2_))) + 1
   acc <- rec(
-    acc, "W2.5 days is yday(t2_) offset from the deer's first day",
+    acc, "W2.5 days counts calendar days from the deer's first day",
     sum(days_recomp != sv$days), nrow(sv)
   )
 

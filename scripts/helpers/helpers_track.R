@@ -201,7 +201,10 @@ extract_step_variables <- function(
       # Continuous time of day at the step start (decimal hour, 0-24) for the
       # GAM cyclic spline s(tod_, bs = "cc"); complements the day/night factor.
       tod_ = lubridate::hour(t1_) + lubridate::minute(t1_) / 60,
-      days = lubridate::yday(t2_) - min(lubridate::yday(t2_)) + 1
+      # Days since the deer-year's first step (day 1), counted on calendar
+      # dates in the track's time zone, so a winter track counts on past
+      # New Year
+      days = as.numeric(lubridate::date(t2_) - min(lubridate::date(t2_))) + 1
     ) |>
     amt::extract_covariates(landfire_local, where = "both") |>
     amt::extract_covariates(topo_local, where = "both")
