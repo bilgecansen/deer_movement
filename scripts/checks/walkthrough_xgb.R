@@ -284,7 +284,9 @@ HAB_VARS <- setdiff(
 )
 CATEGORICAL <- c("landcover", "wiscland_start")
 
-# DESIGN: the habitat candidates are end-point columns plus their noise column.
+# DESIGN: the habitat candidates are end-point columns plus their noise
+# column, and day of season: one value per step, so it acts only beneath a
+# split on an end-point column.
 stopifnot(setequal(
   HAB_VARS,
   c(
@@ -294,6 +296,7 @@ stopifnot(setequal(
     "northness_end",
     "eastness_end",
     "shadow_gauss",
+    "day_of_season",
     intersect("ndvi_end", names(d))
   )
 ))

@@ -79,7 +79,7 @@ PRETTY <- c(
   famd4_end = "FAMD4", famd5_end = "FAMD5", ndvi_start = "NDVI at start",
   wiscland_start = "Cover at start",
   forest_edge_start = "Forest edge at start", sl_ = "Step length",
-  cos_ta = "cos(turn angle)"
+  cos_ta = "cos(turn angle)", day_of_season = "Day of season"
 )
 BLOCK <- c(hab = "Habitat", famd = "FAMD", modifier = "Movement modifier")
 

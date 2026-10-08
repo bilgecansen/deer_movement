@@ -12,8 +12,12 @@
 #' (stp.var.nonp) rather than needing anything regenerated. That is minutes
 #' rather than the hours a full re-extraction would cost.
 #'
-#' Two things are added beyond the joined columns:
+#' Three things are added beyond the joined columns:
 #'
+#'   day_of_season the track's `days`: days since the deer-year's first
+#'                 step, day 1 being that step's date. One value per step,
+#'                 like a start column, but it goes to the habitat block
+#'                 (see fit_model_xgb.R).
 #'   shadow_start  one N(0,1) draw per STEP, repeated across its stratum.
 #'                 It has to be drawn per step, not per row: a step-level
 #'                 column is constant within a stratum, so a split on it
@@ -65,7 +69,8 @@ start_of_key <- function(k) {
   out <- tibble::tibble(
     key = k,
     step_id_ = v$step_id_,
-    wiscland_start_chr = as.character(v$wiscland_start)
+    wiscland_start_chr = as.character(v$wiscland_start),
+    day_of_season = v$days
   )
   for (nm in NUMERIC_START) {
     out[[nm]] <- v[[nm]]
@@ -117,7 +122,7 @@ for (season in SEASONS) {
   const_within <- function(x, stratum) {
     all(tapply(x, stratum, function(v) length(unique(v)) == 1))
   }
-  for (nm in c(keep, "shadow_start")) {
+  for (nm in c(keep, "day_of_season", "shadow_start")) {
     stopifnot(const_within(d[[nm]], d$stratum), !any(is.na(d[[nm]])))
   }
 

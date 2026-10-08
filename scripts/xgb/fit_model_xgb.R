@@ -37,11 +37,17 @@
 #' shadow_start is drawn per step, the others per row (see
 #' prep_start_xgb.R).
 #'
+#' day_of_season (days since the deer-year's first step) is a habitat-block
+#' column, but one value per step. It can never be a tree's first split;
+#' it acts only beneath a split on an endpoint column, as an interaction
+#' with it, so it does something only where the habitat trees may combine.
+#'
 #' Importance is the drop in held-out conditional log-likelihood when a
 #' column is shuffled. End-point columns are shuffled within a stratum;
-#' start columns between strata, a whole step at a time, because shuffling
-#' a stratum-constant column within its own stratum changes nothing and
-#' scores exactly zero. That zero is kept in the output as a check.
+#' start columns and day_of_season between strata, a whole step at a time,
+#' because shuffling a stratum-constant column within its own stratum
+#' changes nothing and scores exactly zero. For the start columns that zero
+#' is kept in the output as a check.
 #'
 #' The same folds give each split's held-out gain: every fold model is
 #' replayed on its held-out steps, and a split scores the held-out
@@ -109,6 +115,8 @@ HAB_VARS <- setdiff(
     "year", "step_id_", "case_", "stratum")
 )
 CATEGORICAL <- c("landcover", "wiscland_start")
+# Habitat-block columns with one value per step, shuffled between strata
+STEP_VARS <- intersect("day_of_season", HAB_VARS)
 
 specs <- make_xgb_specs(
   move_vars = MOVE_VARS,
@@ -162,7 +170,7 @@ struct <- stats::setNames(
 imp <- xgb_cv_importance(
   d, specs, n_rounds = N_ROUNDS, bag_frac = BAG_FRAC, n_folds = N_FOLDS,
   n_perm = N_PERM, seed = SEED,
-  across_vars = if (uses_start) START_VARS else character(0),
+  across_vars = c(if (uses_start) START_VARS, STEP_VARS),
   also_within = uses_start, split_gain = TRUE, verbose = TRUE
 )
 # rep() rather than a single value, so the null type's empty table takes

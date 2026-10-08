@@ -93,22 +93,26 @@ PRETTY <- c(
   famd5_end = "FAMD5",
   ndvi_start = "NDVI at start",
   wiscland_start = "Cover at start",
-  forest_edge_start = "Forest edge at start"
+  forest_edge_start = "Forest edge at start",
+  day_of_season = "Day of season"
 )
 
 dir.create("plots", showWarnings = FALSE)
 
 plot_season <- function(season, config) {
   r <- readRDS(sprintf("results/xgb/compare_%s_%s.rds", season, config))
-  # A start column scored the within-stratum way is exactly zero by
-  # construction, so it is dropped rather than drawn as a real zero.
+  # A column shuffled between strata (a start column, or day of season)
+  # scores exactly zero the within-stratum way, by construction, so that
+  # row is dropped rather than drawn as a real zero.
+  across <- r$importance$variable[r$importance$scheme == "across"]
   df <- r$importance |>
-    filter(!(booster == "modifier" & scheme == "within")) |>
+    filter(!(scheme == "within" & variable %in% across)) |>
     mutate(value = xgb_scale_value(cv, r$n_deer_years, r$n_steps, PER),
            label = dplyr::coalesce(PRETTY[variable], variable),
            kind = dplyr::case_when(
              grepl("^shadow", variable) ~ "noise",
-             scheme == "across" ~ "start",
+             booster == "modifier" ~ "start",
+             scheme == "across" ~ "step",
              TRUE ~ "end"
            )) |>
     arrange(value) |>
@@ -128,6 +132,7 @@ plot_season <- function(season, config) {
   }
   breaks <- scales::breaks_extended(6)(range(c(0, line_at, df$value)))
   has_start <- any(df$kind == "start")
+  has_step <- any(df$kind == "step")
 
   p <- ggplot(df, aes(y = label, x = value, colour = kind)) +
     geom_rect(data = bands, inherit.aes = FALSE,
@@ -139,9 +144,11 @@ plot_season <- function(season, config) {
     geom_segment(aes(x = 0, xend = value, yend = label), linewidth = 0.9) +
     geom_point(size = 4) +
     scale_colour_manual(
-      values = c(end = "#eb6834", start = "#2a78d6", noise = "#898781"),
-      breaks = c("end", "start", "noise"),
+      values = c(end = "#eb6834", start = "#2a78d6", step = "#1baf7a",
+                 noise = "#898781"),
+      breaks = c("end", "step", "start", "noise"),
       labels = c(end = "end point (selection)",
+                 step = "day of season (acts with habitat)",
                  start = "start (movement kernel)",
                  noise = "noise column"),
       name = NULL
@@ -167,6 +174,12 @@ plot_season <- function(season, config) {
         if (has_start) {
           paste0("End-point columns are shuffled within a stratum, start ",
                  "columns between strata.\n")
+        } else {
+          ""
+        },
+        if (has_step) {
+          paste0("Day of season, one value per step, is shuffled between ",
+                 "strata; it acts only beneath a habitat split.\n")
         } else {
           ""
         },
