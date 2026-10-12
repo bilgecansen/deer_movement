@@ -9,6 +9,23 @@
 # now sources every file in this folder. Scripts keep sourcing that one
 # aggregator, so nothing here needs to be sourced directly.
 
+#' Raster crop window around a deer's steps
+#'
+#' CROP_BUFFER_M around the start of every step in `steps`. Random-point
+#' generation and covariate extraction both crop to it, from the same steps,
+#' so the window that decides which random endpoints are kept is the window
+#' their covariates are read from. terra::crop() uses the extent.
+#'
+#' @param steps Steps with x1_ / y1_ columns (CRS 6610)
+#' @return sf polygons, one buffer per distinct start point
+step_crop_window <- function(steps) {
+  starts <- unique(data.frame(x = steps$x1_, y = steps$y1_))
+  sf::st_buffer(
+    sf::st_as_sf(starts, coords = c("x", "y"), crs = 6610),
+    CROP_BUFFER_M
+  )
+}
+
 #' Generate random steps with environmental covariates (single-deer)
 #'
 #' Operates on a single-row tibble. Generates `n_pts` water-free random
@@ -39,13 +56,7 @@ make_random_pt_extraction <- function(
   model <- match.arg(model)
   stopifnot(nrow(data) == 1)
 
-  # Crop water raster to this deer's buffer
   data_step <- data[[stp_col]][[1]]
-  crop_extent <- sf::st_buffer(
-    sf::st_as_sf(data_step, coords = c('x1_', 'y1_'), crs = 6610),
-    CROP_BUFFER_M
-  )
-  water_local <- terra::crop(water, crop_extent)
 
   # Start with buffer for water removal
   n_random <- ceiling(n_pts * 10)
@@ -66,12 +77,18 @@ make_random_pt_extraction <- function(
     )
   }
 
+  # Crop the water raster to the window extract_step_variables() reads, built
+  # from the same steps: the ones random_steps() kept, which are the ones that
+  # get random points. A random endpoint outside the window has no Water value
+  # and is dropped below, so every kept endpoint has covariates.
+  water_local <- terra::crop(water, step_crop_window(rs[rs$case_, ]))
+
   random_pts <- rs |>
     amt::extract_covariates(water_local, where = "end")
 
   # Filter and select final random points
   res <- random_pts |>
-    # Select random steps not on water
+    # Select random steps not on water (or outside the window)
     dplyr::filter(case_ == FALSE, Water == 0) |>
     # sample n_pts for each step
     dplyr::slice_sample(n = n_pts, by = step_id_) |>
@@ -136,10 +153,7 @@ extract_step_variables <- function(
 
   data_step <- data[[random_col]][[1]]
 
-  crop_extent <- sf::st_buffer(
-    sf::st_as_sf(data_step, coords = c('x1_', 'y1_'), crs = 6610),
-    CROP_BUFFER_M
-  )
+  crop_extent <- step_crop_window(data_step)
 
   env_cropped <- terra::crop(env, crop_extent)
   ndvi_local <- terra::crop(ndvi, crop_extent)

@@ -537,9 +537,11 @@ check_one_deer <- function(path, spec) {
     inside <- !is.na(direct)
     n_out_extent <- max(n_out_extent, sum(!inside))
     gap <- abs(stored[inside] - direct[inside])
+    # A stored NA where the source has a value is a mismatch too
     acc <- rec(
       acc, sprintf("W3.3 %s_end == the source raster at (x2_, y2_)", nm),
-      sum(gap > TOL_REL * pmax(abs(direct[inside]), 1)), sum(inside),
+      sum(is.na(gap) | gap > TOL_REL * pmax(abs(direct[inside]), 1)),
+      sum(inside),
       worst = safe_max(gap)
     )
   }
