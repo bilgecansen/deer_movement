@@ -32,9 +32,32 @@ FOREST_CLASSES <- c("forest", "wetland_forested")
 
 # Crop buffer (metres, CRS 6610) added around each deer's track when cropping
 # rasters for random-step generation, covariate extraction, HR raster creation,
-# simulation, and scoring. Sized to clear the longest single observed/simulated
-# step (~2.3 km max) plus room for simulated-path drift before the HR_center /
-# HR_edge terms pull the path back. Keep create_hr_rasters' buffer >= this so HR
-# rasters fully cover the runtime crop window.
+# simulation, and scoring: room for simulated-path drift before the HR_center /
+# HR_edge terms pull the path back. Random-step generation, covariate
+# extraction and HR raster creation widen it per deer, to the longest step
+# plus CROP_MARGIN_M where that is larger (see deer_crop_buffer), so every
+# random endpoint lies inside the window and inside the HR rasters.
 CROP_BUFFER_M <- 3000
+CROP_MARGIN_M <- 250
+
+# Non-parametric ("nonp") random points, the design the xgb path reads: per
+# deer-year, NONP_INNER_SHARE of each step's points are drawn uniformly in
+# distance from 0 to the deer's NONP_INNER_QUANTILE step length, the rest
+# uniformly in distance from there to its longest step (see
+# make_random_pt_extraction).
+NONP_INNER_QUANTILE <- 0.9
+NONP_INNER_SHARE <- 0.9
+
+# The canonical deer list (see canonical_deer). Years are the deer's `year`
+# field. Training and calibration use TRAIN_YEARS, testing uses TEST_YEAR.
+TRAIN_YEARS <- 2016:2020
+TEST_YEAR <- 2021
+
+# Deer collared at 20 months enter the list only from this age (months, at
+# the start of the track; see deer_track_age).
+MIN_AGE_MONTHS <- 24
+
+# Deer-seasons (<id>_<season>) left out by hand after inspecting their paths.
+# Both the training and the test years go.
+EXCLUDED_DEER_SEASONS <- c("7938_nb")
 

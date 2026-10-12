@@ -23,9 +23,10 @@
 #'     second implementation and can drift; if it does, you would be
 #'     reviewing code that is not what runs. These fail loudly the day a
 #'     helper changes.
-#'   * Against a design decision: yearlings are gone, the home-range centre
-#'     reaches the habitat trees only in rsf_hr, the threshold is the same in
-#'     every script, the stored results came from the current pools and the
+#'   * Against a design decision: the table is the canonical training set,
+#'     every score starts from log_w, the home-range centre reaches the
+#'     habitat trees only in rsf_hr, the threshold is the same in every
+#'     script, the stored results came from the current pools and the
 #'     current settings. These catch a misunderstanding rather than a typo.
 #' Do not delete either kind.
 #'
@@ -130,11 +131,25 @@ cat(sprintf(
 ))
 cat(sprintf("candidates per stratum: %d to %d\n", min(sizes), max(sizes)))
 
-# DESIGN: yearlings are gone. Deer collared at 20 months are dropped from
-# every track that starts before they turn two.
-ages <- deer_track_age(readRDS("library/SW_filtered_deer.RData"))
-young <- ages$key[!is.na(ages$age_months) & ages$age_months < 24]
-stopifnot(!any(unique(d$key) %in% young))
+# DESIGN: the table is the canonical list's training set for the season,
+# every deer-year of it and nothing from the test year. The list's age rule
+# is what keeps the yearlings out.
+canon <- canonical_deer(readRDS("library/SW_filtered_deer.RData"))
+train_keys <- with(
+  canon[canon$set == "train" & canon$season == SEASON, ],
+  sprintf("%s_%s_%d", id, season, as.integer(year))
+)
+stopifnot(setequal(unique(d$key), train_keys))
+
+# Every row also carries log_w. The random points are drawn uniformly in
+# DISTANCE from the step's start (90 out to the deer's 90th-percentile step,
+# 10 beyond it, by wrangle_deer_mvt.R), not uniformly over the ground, so
+# they crowd near the start where deer mostly step. A point near the start
+# stands for a small patch of ground and a point far out for a large one;
+# log_w is the log of that patch. The first step: its chosen point, then
+# three of its random points.
+stopifnot(all(is.finite(d$log_w)))
+print(round(as.data.frame(d[1:4, c("case_", "sl_", "log_w")]), 2))
 
 # Two kinds of column, told apart by how they vary across one step's
 # candidates:
@@ -183,6 +198,12 @@ cat(sprintf(
 # likelihood is the log probability of the candidate the deer actually
 # chose, summed over steps. Points from different steps never compete.
 #
+# Every score STARTS from the candidate's log_w and the trees add to it:
+# eta = log_w + what the boosters add. exp(log_w) is the patch of ground a
+# point stands for, so starting there weights each point by its patch, and
+# the model is the one evenly spread points would give. log_w is fixed; no
+# tree ever changes it.
+#
 # Subtracting each stratum's first score before exponentiating keeps exp()
 # in range and changes nothing: a constant cancels in the ratio.
 cond_softmax <- function(eta, sizes) {
@@ -205,31 +226,38 @@ stopifnot(
   )
 )
 
-# The null: every score 0, every candidate equally likely, so each step
-# contributes -log(number of candidates).
-null_ll <- cond_loglik(rep(0, nrow(d)), y, sizes)
-stopifnot(all.equal(null_ll, -sum(log(sizes))))
-cat(sprintf(
-  "null log-likelihood %.1f (%.3f per step)\n",
+# The null: no trees, every score its log_w alone, so every patch of land
+# within reach is equally likely. Calling every random POINT equally likely
+# instead would be too generous a floor: the points already crowd where deer
+# step. fit_model_xgb.R computes its floor the same way.
+null_ll <- cond_loglik(d$log_w, y, sizes)
+stopifnot(all.equal(
   null_ll,
-  null_ll / n_strata
+  xgb_cond_loglik(xgb_offset(d), y, xgb_strata_sizes(d))
+))
+cat(sprintf(
+  "null log-likelihood %.1f (%.3f per step); every point equally likely %.1f\n",
+  null_ll,
+  null_ll / n_strata,
+  -sum(log(sizes))
 ))
 
 # The same likelihood amt maximises. survival::clogit (what amt::fit_clogit
 # calls) evaluated at a fixed coefficient on step length, without
-# iterating, gives the same number as our loss with eta = b * sl_.
+# iterating, gives the same number as our loss with eta = log_w + b * sl_.
+# log_w enters clogit as an offset: a term with its coefficient fixed at 1.
 d_sub <- d[d$stratum %in% unique(d$stratum)[1:300], ]
 sizes_sub <- rle(d_sub$stratum)$lengths
 b <- -0.002
 cl <- suppressWarnings(survival::clogit(
-  case_ ~ sl_ + strata(stratum),
+  case_ ~ sl_ + offset(log_w) + strata(stratum),
   data = d_sub,
   init = b,
   control = survival::coxph.control(iter.max = 0)
 ))
 stopifnot(all.equal(
   cl$loglik[1],
-  cond_loglik(b * d_sub$sl_, d_sub$case_, sizes_sub)
+  cond_loglik(d_sub$log_w + b * d_sub$sl_, d_sub$case_, sizes_sub)
 ))
 cat(sprintf("clogit and our loss agree at b = %g: %.6f\n", b, cl$loglik[1]))
 
@@ -241,17 +269,17 @@ cat(sprintf("clogit and our loss agree at b = %g: %.6f\n", b, cl$loglik[1]))
 # currently gives the candidate and y is 1 for the point the deer chose, 0
 # otherwise.
 #
-# At the very start, before any tree, every score is 0 and each of a step's
-# 101 candidates has p = 1/101:
-#   the chosen point    p - y = 1/101 - 1 = -0.990   push its score up, hard
-#   each random point   p - y = 1/101 - 0 = +0.010   push it down, gently
-p0 <- 1 / sizes[strat_of_row]
+# At the very start, before any tree, every score is its log_w, so each of a
+# step's 101 candidates has p equal to its share of the step's ground. The
+# chosen point gets a push up (p - 1 is negative) and every random point a
+# push down (p - 0 is positive), larger for points standing for more ground.
+p0 <- cond_softmax(d$log_w, sizes)
 g0 <- p0 - y
 # The first step: its chosen point, then three of its random points
 print(round(g0[1:4], 4))
 
 # THE LOAD-BEARING FACT. The one push up exactly balances the hundred pushes
-# down: -0.990 + 100 x 0.010 = 0. That holds for every step at every stage of
+# down: they sum to zero. That holds for every step at every stage of
 # fitting, because a step's probabilities always add to 1 and exactly one of
 # its points was chosen. Section 7 shows what follows from it.
 stopifnot(max(abs(rowsum(g0, strat_of_row))) < 1e-12)
@@ -278,9 +306,10 @@ START_VARS <- c(
   "shadow_start"
 )
 ID_COLS <- c("key", "deer", "animal", "year", "step_id_", "case_", "stratum")
+# log_w is the fixed offset every score starts from, not a candidate
 HAB_VARS <- setdiff(
   names(d),
-  c(MOVE_VARS, HR_VAR, FAMD_VARS, START_VARS, ID_COLS)
+  c(MOVE_VARS, HR_VAR, FAMD_VARS, START_VARS, ID_COLS, "log_w")
 )
 CATEGORICAL <- c("landcover", "wiscland_start")
 
@@ -492,19 +521,22 @@ margin_of <- function(bst, data, s) {
 # left, and the prediction is tree 1 + tree 2. Here the running total spans
 # five boosters instead of one, which is also why the objective ignores
 # xgboost's own `preds`: those hold only that booster's trees.
-eta <- rep(0, nrow(d))
+#
+# In the real data the running total does not start at 0 but at log_w
+# (section 2): the first tree corrects the score log_w alone gives.
+eta <- d$log_w
 t_move <- grow_one_tree(specs$move, eta, row_in_bag)
 c_move <- margin_of(t_move$bst, d, specs$move)
 
-eta <- c_move
+eta <- d$log_w + c_move
 t_mod <- grow_one_tree(specs$modifier, eta, row_in_bag)
 c_mod <- margin_of(t_mod$bst, d, specs$modifier)
 
-eta <- c_move + c_mod
+eta <- d$log_w + c_move + c_mod
 t_hr <- grow_one_tree(specs$hr, eta, row_in_bag)
 c_hr <- margin_of(t_hr$bst, d, specs$hr)
 
-eta <- c_move + c_mod + c_hr
+eta <- d$log_w + c_move + c_mod + c_hr
 t_hab <- grow_one_tree(specs$hab, eta, row_in_bag)
 c_hab <- margin_of(t_hab$bst, d, specs$hab)
 
@@ -514,7 +546,7 @@ c_hab <- margin_of(t_hab$bst, d, specs$hab)
 # axes, so the booster carries what the axes add WITHIN forest and the
 # forest/non-forest contrast stays with landcover.
 on_famd <- !is.na(d[[specs$famd$switch_col]])
-eta <- c_move + c_mod + c_hr + c_hab
+eta <- d$log_w + c_move + c_mod + c_hr + c_hab
 t_famd <- grow_one_tree(specs$famd, eta, row_in_bag * on_famd)
 zero_row <- matrix(
   0,
@@ -532,7 +564,7 @@ c_famd <- ifelse(
     stats::predict(t_famd$bst, zero_dm, outputmargin = TRUE)[1],
   0
 )
-eta_round1 <- c_move + c_mod + c_hr + c_hab + c_famd
+eta_round1 <- d$log_w + c_move + c_mod + c_hr + c_hab + c_famd
 ll_round1 <- cond_loglik(eta_round1, y, sizes)
 
 # Two checks that the pushes behave as section 3 said, now at a real stage
@@ -702,9 +734,9 @@ stopifnot(
 
 # 7 ---- Why a start-of-step column is never a root split ---------------------
 # Section 6 scored a split by summing the pushes on each side. Apply the same
-# score to the start of fitting (the pushes of section 3, every score 0) and
-# it shows why the modifier booster's start-of-step columns can only ever
-# appear BELOW a split on step length or turning angle.
+# score to the start of fitting (the pushes of section 3, every score its
+# log_w) and it shows why the modifier booster's start-of-step columns can
+# only ever appear BELOW a split on step length or turning angle.
 
 # A start column is constant within a stratum, so any split on it sends
 # WHOLE strata to each side. Each side is then a sum of whole steps, whose
@@ -738,8 +770,10 @@ stopifnot(abs(sum(g0[short & on_start])) > 1)
 # short steps more often than steps that start elsewhere. That is the
 # interaction between movement and where the step began. Whether it does
 # depends on the column; the per-step noise column shows what none looks
-# like. A split with no signal scores slightly BELOW zero, because lambda
-# penalises the extra leaf, and xgboost never makes such a split.
+# like. A split with no signal scores BELOW zero, because lambda penalises
+# the extra leaf, and xgboost never makes such a split. Here it is well
+# below: short candidates stand for little ground, so their H is tiny and
+# lambda, not H, sets the size of each leaf's term.
 numeric_start <- setdiff(START_VARS, "wiscland_start")
 under_sl <- vapply(
   numeric_start,
@@ -806,10 +840,10 @@ c_te <- list(
 )
 stopifnot(all.equal(unname(c_te), xgb_contributions(bst, te, specs)))
 
-eta_te <- Reduce(`+`, c_te)
+eta_te <- te$log_w + Reduce(`+`, c_te)
 ll_te <- cond_loglik(eta_te, te$case_, sizes_te)
-null_te <- -sum(log(sizes_te))
-null_tr <- -sum(log(rle(tr_d$stratum)$lengths))
+null_te <- cond_loglik(te$log_w, te$case_, sizes_te)
+null_tr <- cond_loglik(tr_d$log_w, tr_d$case_, rle(tr_d$stratum)$lengths)
 cat(sprintf(
   "fold %d, %d rounds: gain over null per step %.3f held out, %.3f in sample\n",
   FOLD,
@@ -903,7 +937,7 @@ cat(sprintf(
 # steps.
 # Replay the fold model's trees IN THE ORDER THEY WERE GROWN, so each tree
 # meets the held-out score as it stood just before it. For the first
-# habitat tree that means round 1's move, modifier and hr trees.
+# habitat tree that means log_w and round 1's move, modifier and hr trees.
 #
 # The gain here is the change in the log-likelihood itself, not the formula
 # from section 6. That formula is a shortcut: it treats each candidate's
@@ -913,7 +947,8 @@ cat(sprintf(
 tree1 <- function(b, s) {
   stats::predict(b, dm_of(te, s), outputmargin = TRUE, iterationrange = c(1, 1))
 }
-before <- tree1(bst$move, specs$move) +
+before <- te$log_w +
+  tree1(bst$move, specs$move) +
   tree1(bst$modifier, specs$modifier) +
   tree1(bst$hr, specs$hr)
 

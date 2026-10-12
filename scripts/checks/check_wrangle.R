@@ -31,8 +31,8 @@
 #'            a fixed shuffled order so a partial run is not always the same
 #'            alphabetical prefix.
 #'   design — "amt" (stp.var, 25 random points, gamma/von Mises proposal),
-#'            "nonp" (stp.var.nonp, 50 points, uniform-disc proposal), or
-#'            "both". Default "amt".
+#'            "nonp" (stp.var.nonp, 100 points uniform in distance in two
+#'            segments, with log_w), or "both". Default "amt".
 
 suppressPackageStartupMessages({
   library(terra)
@@ -60,7 +60,7 @@ TOL_REL <- 1e-6
 
 DESIGN_SPEC <- list(
   amt = list(col = "stp.var", n_pts = 25L),
-  nonp = list(col = "stp.var.nonp", n_pts = 50L)
+  nonp = list(col = "stp.var.nonp", n_pts = 100L)
 )
 
 # Which covariates actually matter, per season ---------------------------------
@@ -415,6 +415,55 @@ check_one_deer <- function(path, spec) {
     )
   }
 
+  # The nonp design: two segments of uniform distance, and log_w, the ground
+  # each point stands for, rebuilt from the deer's own stored steps.
+  if (identical(spec$col, "stp.var.nonp")) {
+    edges <- c(
+      0,
+      stats::quantile(stp$sl_, NONP_INNER_QUANTILE, names = FALSE,
+                      na.rm = TRUE),
+      max(stp$sl_, na.rm = TRUE)
+    )
+    n_inner <- round(spec$n_pts * NONP_INNER_SHARE)
+    n_seg <- c(n_inner, spec$n_pts - n_inner)
+    seg_counts <- sv |>
+      dplyr::filter(!case_) |>
+      dplyr::group_by(step_id_) |>
+      dplyr::summarise(n1 = sum(sample_seg == 1L),
+                       n2 = sum(sample_seg == 2L), .groups = "drop")
+    acc <- rec(
+      acc, sprintf("W1.7 %d inner and %d outer random points per stratum",
+                   n_seg[1], n_seg[2]),
+      sum(seg_counts$n1 != n_seg[1] | seg_counts$n2 != n_seg[2]),
+      nrow(seg_counts)
+    )
+    lo <- edges[sv$sample_seg]
+    hi <- edges[sv$sample_seg + 1]
+    acc <- rec(
+      acc, "W1.8 every distance lies in its segment",
+      sum(sv$sl_ < lo - TOL_M | sv$sl_ > hi + TOL_M), nrow(sv)
+    )
+    w_recomp <- log(sv$sl_) +
+      log(diff(edges)[sv$sample_seg] / n_seg[sv$sample_seg]) +
+      log(sv$land_share)
+    acc <- rec(
+      acc, paste("W1.9 log_w = log(distance) + log(segment width /",
+                 "points) + log(land share)"),
+      sum(!is.finite(sv$log_w) | abs(w_recomp - sv$log_w) > 1e-9),
+      nrow(sv),
+      worst = safe_max(abs(w_recomp - sv$log_w)), worst_lab = "max |diff|"
+    )
+    shares <- sv |>
+      dplyr::group_by(step_id_, sample_seg) |>
+      dplyr::summarise(n = dplyr::n_distinct(land_share),
+                       lo = min(land_share), hi = max(land_share),
+                       .groups = "drop")
+    acc <- rec(
+      acc, "W1.10 one land share in (0, 1] per stratum and segment",
+      sum(shares$n != 1 | shares$lo <= 0 | shares$hi > 1), nrow(shares)
+    )
+  }
+
   # ---- W2  derived-column identities ----------------------------------------
   # Every one of these is a column the wrangle computed from another column it
   # also stored, so the two must agree exactly or one of them is stale.
@@ -667,11 +716,11 @@ check_one_deer <- function(path, spec) {
     worst = safe_max(abs(ta_fin)), worst_lab = "max |ta_|"
   )
   if (identical(spec$col, "stp.var.nonp")) {
-    # The uniform-disc proposal has a hard radius: R = the longest observed
-    # step. A control beyond it is outside the support the design claims.
+    # The nonp proposal has a hard radius: R = the longest observed step. A
+    # control beyond it is outside the support the design claims.
     R <- max(stp$sl_, na.rm = TRUE)
     acc <- rec(
-      acc, "W5.3 uniform-disc controls inside R = max observed step",
+      acc, "W5.3 nonp controls inside R = max observed step",
       sum(sv$sl_[!is_case] > R + TOL_M), sum(!is_case),
       worst = safe_max(sv$sl_[!is_case] - R),
       worst_lab = sprintf("longest control minus R (R = %.0f m)", R)

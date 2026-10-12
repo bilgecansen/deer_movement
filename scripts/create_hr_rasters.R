@@ -5,7 +5,16 @@
 #'   * HRedge_<id>_<season>_<year>.tif   — signed distance to HR edge (+inside)
 #'   * HRcenter_<id>_<season>_<year>.tif — distance to ctmm μ (HR center)
 #'
+#' Each deer's rasters cover its own window, deer_crop_buffer() around every
+#' step start, the window the wrangle draws random points in. A deer whose
+#' three rasters already exist and cover that window is skipped unless
+#' REBUILD_ALL is TRUE, so a window grown for a long step rebuilds only the
+#' deer it grew for.
+#'
 #' Usage: Rscript create_hr_rasters.R
+
+# Configuration ---------------------------------------------------------------
+REBUILD_ALL <- FALSE
 
 # Load packages ----------------------------------------------------------------
 library(ctmm)
@@ -25,10 +34,8 @@ cat("Loading data...\n")
 # Deer movement data
 sw_deer_tracks <- readRDS('library/SW_filtered_deer.RData')
 
-# Filter to the rows we want to model
-deer_mvt <- sw_deer_tracks %>%
-  dplyr::filter(keep == T & excursion == F & unstable_hr_center == F) %>%
-  dplyr::filter(year %in% 2017:2021)
+# The canonical deer list, shared with wrangle_deer_mvt.R
+deer_mvt <- canonical_deer(sw_deer_tracks)
 
 # Pre-extract per-deer inputs as a flat list — avoids serializing the full
 # nested deer_mvt object (with all nested columns) into every worker process.
@@ -39,7 +46,10 @@ step_list <- lapply(seq_len(nrow(deer_mvt)), function(i) {
     id = deer_mvt$id[i],
     season = deer_mvt$season[i],
     year = deer_mvt$year[i],
-    stp = deer_mvt$stp[[i]]
+    stp = deer_mvt$stp[[i]],
+    # The deer's own window, wide enough for its longest step, so the HR
+    # rasters cover every random endpoint the wrangle can draw
+    buffer_m = deer_crop_buffer(deer_mvt$stp[[i]]$sl_)
   )
 })
 rm(sw_deer_tracks, deer_mvt)
@@ -55,6 +65,30 @@ gc()
 
 # Create output directory
 dir.create("data/HR", recursive = TRUE, showWarnings = FALSE)
+
+# Keep the deer whose rasters already cover their window ----------------------
+# The crop snaps to the 30 m grid, so a raster may stop up to a cell short of
+# the window's edge; CROP_MARGIN_M is far wider than that.
+covers_window <- function(deer_input) {
+  key <- sprintf("%s_%s_%d", deer_input$id, deer_input$season,
+                 deer_input$year)
+  files <- sprintf("data/HR/HR%s_%s.tif", c("bin", "edge", "center"), key)
+  if (!all(file.exists(files))) {
+    return(FALSE)
+  }
+  e <- as.vector(terra::ext(terra::rast(files[1])))
+  b <- deer_input$buffer_m - 30
+  e[["xmin"]] <= min(deer_input$stp$x1_) - b &&
+    e[["xmax"]] >= max(deer_input$stp$x1_) + b &&
+    e[["ymin"]] <= min(deer_input$stp$y1_) - b &&
+    e[["ymax"]] >= max(deer_input$stp$y1_) + b
+}
+if (!REBUILD_ALL) {
+  covered <- vapply(step_list, covers_window, logical(1))
+  cat(sprintf("%d deer already covered, %d to build\n", sum(covered),
+              sum(!covered)))
+  step_list <- step_list[!covered]
+}
 
 # Process all deer in parallel -------------------------------------------------
 cat(sprintf("Processing %d deer on 5 workers...\n", length(step_list)))
@@ -152,12 +186,12 @@ furrr::future_map(
         gc()
 
         # Step 6: Create binary raster -----------------------------------------
-        # Crop extent: CROP_BUFFER_M around all step start locations (full
-        # track), so the resulting HR rasters cover both training and test
-        # buffers used downstream.
+        # Crop extent: the deer's own buffer around all step start locations
+        # (full track), so the HR rasters cover every window used
+        # downstream.
         crop_extent <- sf::st_buffer(
           sf::st_as_sf(stp_all, coords = c("x1_", "y1_"), crs = 6610),
-          CROP_BUFFER_M
+          deer_input$buffer_m
         )
 
         env_local <- terra::unwrap(env_template) %>%

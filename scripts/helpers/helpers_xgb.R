@@ -33,6 +33,13 @@
 #     NA pattern into a forest indicator and takes the forest effect away
 #     from the landcover term.
 #
+#   * Every endpoint's score starts at its log_w, the log of the ground the
+#     random point stands for (see nonp_random_points). The random points
+#     are uniform in distance, not in area, so they crowd the ground near
+#     the start; the offset weights each one by the ground it represents,
+#     which makes the fit the one evenly spread points would give. It is
+#     fixed, never fitted, and a table without log_w gets 0.
+#
 #   * Importance is the drop in held-out conditional log-likelihood over
 #     folds of whole steps. Trees may combine variables (max_depth 2, so any
 #     root-to-leaf path is pairwise), which costs the decomposition: a tree
@@ -79,6 +86,17 @@ xgb_softmax <- function(eta, sizes) {
 xgb_cond_loglik <- function(eta, case_, sizes) {
   p <- xgb_softmax(eta, sizes)
   sum(log(p[case_ == 1]))
+}
+
+#' Fixed offset every score starts from
+#'
+#' The table's log_w column, the log of the ground each random point stands
+#' for, or 0 for a table drawn uniformly over the area and carrying none.
+#'
+#' @param d Step data
+#' @return Offset per row
+xgb_offset <- function(d) {
+  if ("log_w" %in% names(d)) d$log_w else rep(0, nrow(d))
 }
 
 #' DMatrix with the categorical columns declared
@@ -146,46 +164,36 @@ xgb_scale_label <- function(per = "deer") {
   )
 }
 
-#' Build the pooled step table for one season and year
+#' Build the pooled step table from the wrangled tracks
 #'
-#' Generates `n_pts` uniform-disc random points per observed step for every
-#' deer in `keys`, extracts the covariates, and stacks the deer into one
-#' table sorted by stratum with the observed step first — the row order the
-#' objective and the permutations rely on.
+#' Reads every deer-year in `keys` from data/tracks/ — its nonp random
+#' points (stp.var.nonp), drawn and extracted by wrangle_deer_mvt.R — and
+#' stacks them into one table sorted by stratum with the observed step
+#' first, the row order the objective and the permutations rely on. The xgb
+#' path draws no random points of its own.
 #'
 #' Landcover is written as 0-based integer codes in LANDCOVER_LEVELS order,
-#' for xgboost's categorical splits. FAMD columns keep their NA off forest;
-#' a row missing any other listed variable is dropped, and with it any step
-#' left without its observed point.
+#' for xgboost's categorical splits. log_w is carried as is: the fit starts
+#' every score from it (xgb_offset()). FAMD columns keep their NA off forest.
+#' A stratum with any other listed variable missing is dropped whole, rather
+#' than losing single points, because log_w assumes each step keeps every
+#' point it was given.
 #'
 #' `deer` is an index within this call, not an animal id; the animal is the
 #' prefix of `key`. xgb_season_pool() renumbers when it stacks years.
 #'
 #' @param keys Deer keys (<id>_<season>_<year>) to include
-#' @param tracks The filtered deer table, with a `key` column
-#' @param rasters List of the loaded rasters: landcover, water, ndvi,
-#'   landfire, topo
-#' @param n_pts Random points per observed step
 #' @param hab_vars Habitat columns to keep, including "landcover"
 #' @param famd_vars FAMD columns to keep (NA off forest)
 #' @param move_vars Movement columns to keep
+#' @param dir Folder of wrangled tracks
 #' @return The pooled step table
-build_xgb_pool <- function(keys, tracks, rasters, n_pts, hab_vars,
-                           famd_vars,
-                           move_vars = c("sl_", "tod_day", "cos_ta")) {
+build_xgb_pool <- function(keys, hab_vars, famd_vars,
+                           move_vars = c("sl_", "tod_day", "cos_ta"),
+                           dir = "data/tracks") {
   pooled <- purrr::map_dfr(seq_along(keys), function(i) {
-    row <- tracks[tracks$key == keys[i], ]
-    stopifnot(nrow(row) == 1)
-    one <- make_random_pt_extraction(
-      data = row, n_pts = n_pts, water = rasters$water, model = "nonp",
-      stp_col = "stp", output_col = "rand"
-    )
-    one <- extract_step_variables(
-      data = one, env = rasters$landcover, ndvi = rasters$ndvi,
-      landfire = rasters$landfire, topo = rasters$topo,
-      random_col = "rand", output_col = "var"
-    )
-    v <- as.data.frame(one$var[[1]])
+    one <- readRDS(file.path(dir, sprintf("data_%s.rds", keys[i])))
+    v <- as.data.frame(one$stp.var.nonp[[1]])
     out <- tibble::tibble(
       key = keys[i],
       deer = i,
@@ -195,7 +203,8 @@ build_xgb_pool <- function(keys, tracks, rasters, n_pts, hab_vars,
       tod_day = as.numeric(v$tod_start_ == "day"),
       cos_ta = cos(v$ta_),
       landcover = as.integer(factor(v$wiscland_end,
-                                    levels = LANDCOVER_LEVELS)) - 1L
+                                    levels = LANDCOVER_LEVELS)) - 1L,
+      log_w = v$log_w
     )
     for (nm in setdiff(c(hab_vars, famd_vars), "landcover")) {
       out[[nm]] <- v[[nm]]
@@ -204,10 +213,13 @@ build_xgb_pool <- function(keys, tracks, rasters, n_pts, hab_vars,
   })
 
   pooled |>
-    dplyr::filter(dplyr::if_all(dplyr::all_of(c(move_vars, hab_vars)),
-                                ~ !is.na(.))) |>
     dplyr::group_by(deer, step_id_) |>
-    dplyr::filter(sum(case_) == 1, dplyr::n() >= 2) |>
+    dplyr::filter(
+      !any(dplyr::if_any(dplyr::all_of(c(move_vars, hab_vars, "log_w")),
+                         is.na)),
+      sum(case_) == 1,
+      dplyr::n() >= 2
+    ) |>
     dplyr::ungroup() |>
     dplyr::arrange(deer, step_id_, dplyr::desc(case_)) |>
     dplyr::mutate(
@@ -566,6 +578,7 @@ fit_xgb_boosters <- function(d, specs, n_rounds, bag_frac = 0.632,
   })
   dm0 <- lapply(specs, xgb_zero_matrix)
   contrib <- lapply(specs, function(s) rep(0, nrow(d)))
+  offset <- xgb_offset(d)
   bst <- vector("list", length(specs))
   n_trees <- integer(length(specs))
   t0 <- Sys.time()
@@ -579,7 +592,7 @@ fit_xgb_boosters <- function(d, specs, n_rounds, bag_frac = 0.632,
     }
     row_in_bag <- in_bag[strat_of_row]
     for (b in seq_along(specs)) {
-      eta_now <- Reduce(`+`, contrib)
+      eta_now <- offset + Reduce(`+`, contrib)
       w <- row_in_bag * if (specs[[b]]$switched) on[[b]] else 1
       # Gradient and Hessian of the conditional logit, zeroed where a
       # switched booster's variables do not exist, so those rows shape no
@@ -602,7 +615,7 @@ fit_xgb_boosters <- function(d, specs, n_rounds, bag_frac = 0.632,
       cat(sprintf(
         "  round %d / %d  %.0f s  logLik %.1f\n", i, n_rounds,
         as.numeric(difftime(Sys.time(), t0, units = "secs")),
-        xgb_cond_loglik(Reduce(`+`, contrib), y, sizes)
+        xgb_cond_loglik(offset + Reduce(`+`, contrib), y, sizes)
       ))
     }
   }
@@ -635,7 +648,7 @@ fit_xgb_boosters <- function(d, specs, n_rounds, bag_frac = 0.632,
     boosters = lapply(bst, xgboost::xgb.save.raw),
     n_trees = stats::setNames(n_trees, vapply(specs, `[[`, character(1),
                                               "name")),
-    loglik = xgb_cond_loglik(Reduce(`+`, contrib), y, sizes)
+    loglik = xgb_cond_loglik(offset + Reduce(`+`, contrib), y, sizes)
   )
 }
 
@@ -751,7 +764,7 @@ xgb_heldout_split_gain <- function(bst, specs, te, n_trees,
     c(leaves_below(tr, tr$left[i]), leaves_below(tr, tr$right[i]))
   }
 
-  margin <- rep(0, nrow(te))
+  margin <- xgb_offset(te)
   ll_now <- ll_of(margin)
   rows <- list()
 
@@ -964,7 +977,7 @@ xgb_cv_importance <- function(d, specs, n_rounds, bag_frac = 0.632,
     on_te <- lapply(specs, xgb_switch, d = te)
     X_te <- lapply(specs, function(s) as.matrix(te[, s$feats]))
     contrib <- xgb_contributions(bst, te, specs, n_trees)
-    base <- Reduce(`+`, contrib)
+    base <- xgb_offset(te) + Reduce(`+`, contrib)
     ll <- xgb_cond_loglik(base, te$case_, sizes_te)
     ll_total <- ll_total + ll
     if (verbose) {

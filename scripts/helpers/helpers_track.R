@@ -9,20 +9,34 @@
 # now sources every file in this folder. Scripts keep sourcing that one
 # aggregator, so nothing here needs to be sourced directly.
 
+#' Crop buffer for one deer-year
+#'
+#' CROP_BUFFER_M, widened to the deer-year's longest step plus CROP_MARGIN_M
+#' when that is larger, so no random endpoint (none is further from its start
+#' than the longest step) can fall outside the window.
+#'
+#' @param sl Step lengths (m) of the deer-year's observed steps
+#' @return Buffer in metres
+deer_crop_buffer <- function(sl) {
+  max(CROP_BUFFER_M, max(sl, na.rm = TRUE) + CROP_MARGIN_M)
+}
+
 #' Raster crop window around a deer's steps
 #'
-#' CROP_BUFFER_M around the start of every step in `steps`. Random-point
-#' generation and covariate extraction both crop to it, from the same steps,
-#' so the window that decides which random endpoints are kept is the window
-#' their covariates are read from. terra::crop() uses the extent.
+#' `buffer_m` around the start of every step in `steps`. Random-point
+#' generation and covariate extraction both crop to it, from the same steps
+#' and the same deer_crop_buffer(), so the window that decides which random
+#' endpoints are kept is the window their covariates are read from.
+#' terra::crop() uses the extent.
 #'
 #' @param steps Steps with x1_ / y1_ columns (CRS 6610)
+#' @param buffer_m Buffer in metres, from deer_crop_buffer()
 #' @return sf polygons, one buffer per distinct start point
-step_crop_window <- function(steps) {
+step_crop_window <- function(steps, buffer_m) {
   starts <- unique(data.frame(x = steps$x1_, y = steps$y1_))
   sf::st_buffer(
     sf::st_as_sf(starts, coords = c("x", "y"), crs = 6610),
-    CROP_BUFFER_M
+    buffer_m
   )
 }
 
@@ -40,11 +54,9 @@ step_crop_window <- function(steps) {
 #'     distributions fitted to the data (amt defaults). Movement covariates are
 #'     then corrections to these tentative distributions (the standard amt).
 #'     Also usable for GAMs with a *parametric* movement kernel.
-#'   * "nonp" — points drawn uniformly over a disc of radius R = max observed
-#'     step length (turning angle ~ Unif(-pi, pi), step length =
-#'     sqrt(Unif(0, R^2))), the availability required for *non-parametric*
-#'     movement smooths s(sl_) / s(ta_) (Klappstein et al. 2024, Section 3.1).
-#'     (Also valid for parametric kernels, just less efficient.)
+#'   * "nonp" — the design the xgb path reads; see nonp_random_points().
+#' @param stp_col Column holding the observed steps
+#' @param output_col Column to write the random steps to
 make_random_pt_extraction <- function(
   data,
   n_pts,
@@ -57,45 +69,13 @@ make_random_pt_extraction <- function(
   stopifnot(nrow(data) == 1)
 
   data_step <- data[[stp_col]][[1]]
+  buffer_m <- deer_crop_buffer(data_step$sl_)
 
-  # Start with buffer for water removal
-  n_random <- ceiling(n_pts * 10)
-
-  # Generate random steps. "amt" samples from fitted gamma / von Mises
-  # distributions (amt defaults); "nonp" samples uniformly over a disc of
-  # radius R = max observed step length (amt draws from the rand_* pools with
-  # replacement, so a fixed pool gives good coverage at any step count).
-  rs <- if (model == "amt") {
-    amt::random_steps(data_step, n_control = n_random)
+  res <- if (model == "amt") {
+    amt_random_points(data_step, n_pts, water, buffer_m)
   } else {
-    R <- max(data_step$sl_, na.rm = TRUE)
-    amt::random_steps(
-      data_step,
-      n_control = n_random,
-      rand_sl = sqrt(stats::runif(1e5, 0, R^2)),
-      rand_ta = stats::runif(1e5, -pi, pi)
-    )
+    nonp_random_points(data_step, n_pts, water, buffer_m)
   }
-
-  # Crop the water raster to the window extract_step_variables() reads, built
-  # from the same steps: the ones random_steps() kept, which are the ones that
-  # get random points. A random endpoint outside the window has no Water value
-  # and is dropped below, so every kept endpoint has covariates.
-  water_local <- terra::crop(water, step_crop_window(rs[rs$case_, ]))
-
-  random_pts <- rs |>
-    amt::extract_covariates(water_local, where = "end")
-
-  # Filter and select final random points
-  res <- random_pts |>
-    # Select random steps not on water (or outside the window)
-    dplyr::filter(case_ == FALSE, Water == 0) |>
-    # sample n_pts for each step
-    dplyr::slice_sample(n = n_pts, by = step_id_) |>
-    # Combine with observed steps
-    dplyr::bind_rows(random_pts |> dplyr::filter(case_ == TRUE)) |>
-    dplyr::ungroup() |>
-    dplyr::select(-Water)
 
   # Warning if there are steps with less than random n_pts (+ 1 is the obs step)
   final_counts <- table(res$step_id_)
@@ -113,6 +93,133 @@ make_random_pt_extraction <- function(
 
   data[[output_col]] <- list(res)
   data
+}
+
+#' Water at the end of every candidate step
+#'
+#' The water raster is cropped to the window extract_step_variables() reads,
+#' built from the same steps: the ones random_steps() kept, which are the ones
+#' that get random points. A random endpoint outside the window would have no
+#' Water value and be dropped, so every kept endpoint has covariates.
+#'
+#' @param rs Output of amt::random_steps()
+#' @param water Binary raster for water bodies
+#' @param buffer_m Crop buffer, from deer_crop_buffer()
+#' @return rs with a Water column
+water_at_end <- function(rs, water, buffer_m) {
+  window <- step_crop_window(dplyr::filter(rs, case_), buffer_m)
+  amt::extract_covariates(rs, terra::crop(water, window), where = "end")
+}
+
+#' Random points from fitted gamma / von Mises distributions ("amt" design)
+#'
+#' Ten times `n_pts` candidates per step, the ones on water dropped, then
+#' `n_pts` drawn from the rest.
+#'
+#' @param data_step Observed steps
+#' @param n_pts Random points per step
+#' @param water Binary raster for water bodies
+#' @param buffer_m Crop buffer, from deer_crop_buffer()
+#' @return Observed and random steps
+amt_random_points <- function(data_step, n_pts, water, buffer_m) {
+  pts <- water_at_end(
+    amt::random_steps(data_step, n_control = n_pts * 10),
+    water,
+    buffer_m
+  )
+  pts |>
+    dplyr::filter(case_ == FALSE, Water == 0) |>
+    dplyr::slice_sample(n = n_pts, by = step_id_) |>
+    dplyr::bind_rows(pts |> dplyr::filter(case_ == TRUE)) |>
+    dplyr::ungroup() |>
+    dplyr::select(-Water)
+}
+
+#' Random points uniform in distance, in two segments ("nonp" design)
+#'
+#' Per deer-year, take its NONP_INNER_QUANTILE step length q and its longest
+#' step R. Each step gets NONP_INNER_SHARE of its points with distance
+#' uniform on (0, q) and the rest uniform on (q, R), turning angle uniform.
+#' Uniform in distance puts as many points in each 100 m near the start as
+#' far out, where a disc uniform in area puts most of them far away, and the
+#' split keeps a long tail of steps from thinning the inner points.
+#'
+#' Each point then stands for a different amount of ground, recorded as
+#'
+#'   log_w = log(distance) + log(segment width / points in the segment)
+#'           + log(land_share)
+#'
+#' the log of the land the point stands for, up to a constant shared by the
+#' step. Within a segment a point's ground grows with its distance (a ring
+#' further out is wider); the segment term spreads the segment over the
+#' points it was given; land_share is the share of that step's candidates in
+#' the segment that fell on land, since points on water are dropped and the
+#' segment's points are then spread over its land alone. A model fitted to
+#' these points adds log_w to every endpoint's score, a fixed offset, which
+#' makes it the model it would be with points spread evenly over the land.
+#' The observed step takes the log_w of the segment its distance falls in.
+#'
+#' @param data_step Observed steps
+#' @param n_pts Random points per step
+#' @param water Binary raster for water bodies
+#' @param buffer_m Crop buffer, from deer_crop_buffer()
+#' @return Observed and random steps, with sample_seg (1 inner, 2 outer),
+#'   land_share and log_w
+nonp_random_points <- function(data_step, n_pts, water, buffer_m) {
+  sl <- data_step$sl_
+  edges <- c(
+    0,
+    stats::quantile(sl, NONP_INNER_QUANTILE, names = FALSE, na.rm = TRUE),
+    max(sl, na.rm = TRUE)
+  )
+  n_seg <- round(n_pts * NONP_INNER_SHARE)
+  n_seg <- c(n_seg, n_pts - n_seg)
+  stopifnot(all(n_seg >= 1), all(diff(edges) > 0))
+
+  segs <- lapply(1:2, function(k) {
+    n_cand <- n_seg[k] * 10
+    pts <- water_at_end(
+      amt::random_steps(
+        data_step,
+        n_control = n_cand,
+        rand_sl = stats::runif(1e5, edges[k], edges[k + 1]),
+        rand_ta = stats::runif(1e5, -pi, pi)
+      ),
+      water,
+      buffer_m
+    )
+    cand <- dplyr::filter(pts, case_ == FALSE)
+    share <- tapply(cand$Water %in% 0, cand$step_id_, mean)
+    # A segment with no land candidate for a step keeps no points there; the
+    # floor only matters if that step's observed endpoint falls in it.
+    share <- pmax(share, 0.5 / n_cand)
+    list(
+      obs = dplyr::filter(pts, case_ == TRUE),
+      kept = cand |>
+        dplyr::filter(Water == 0) |>
+        dplyr::slice_sample(n = n_seg[k], by = step_id_) |>
+        dplyr::mutate(sample_seg = k),
+      share = share
+    )
+  })
+
+  obs <- segs[[1]]$obs |>
+    dplyr::mutate(sample_seg = ifelse(sl_ <= edges[2], 1L, 2L))
+  res <- dplyr::bind_rows(segs[[1]]$kept, segs[[2]]$kept, obs) |>
+    dplyr::ungroup() |>
+    dplyr::select(-Water)
+
+  id <- as.character(res$step_id_)
+  res$land_share <- ifelse(
+    res$sample_seg == 1L,
+    segs[[1]]$share[id],
+    segs[[2]]$share[id]
+  )
+  stopifnot(all(res$sl_ > 0), !anyNA(res$land_share))
+  res$log_w <- log(res$sl_) +
+    log(diff(edges)[res$sample_seg] / n_seg[res$sample_seg]) +
+    log(res$land_share)
+  res
 }
 
 #' Extract environmental variables for each step (single-deer)
@@ -139,6 +246,8 @@ make_random_pt_extraction <- function(
 #' @param landfire LANDFIRE layers for the deer's year (from load_landfire)
 #' @param topo Elevation, northness and eastness (from load_topo)
 #' @param hr_folder Folder containing per-deer HR rasters
+#' @param stp_col Column holding the observed steps, which set the crop
+#'   buffer exactly as they did in make_random_pt_extraction()
 extract_step_variables <- function(
   data,
   env,
@@ -147,13 +256,17 @@ extract_step_variables <- function(
   topo,
   hr_folder = "data/HR",
   random_col = "random.stp",
-  output_col = "stp.var"
+  output_col = "stp.var",
+  stp_col = "stp"
 ) {
   stopifnot(nrow(data) == 1)
 
   data_step <- data[[random_col]][[1]]
 
-  crop_extent <- step_crop_window(data_step)
+  crop_extent <- step_crop_window(
+    data_step,
+    deer_crop_buffer(data[[stp_col]][[1]]$sl_)
+  )
 
   env_cropped <- terra::crop(env, crop_extent)
   ndvi_local <- terra::crop(ndvi, crop_extent)
@@ -256,5 +369,36 @@ deer_track_age <- function(tracks) {
     NA_real_
   )
   dplyr::ungroup(out)[c("key", "age_at_collar", "age_months")]
+}
+
+#' The canonical deer list for analysis
+#'
+#' Keeps the deer-season-years every analysis uses:
+#'   * females only
+#'   * deer collared at 20 months only once they are MIN_AGE_MONTHS old at
+#'     the start of the track (deer_track_age); deer collared at over two
+#'     years are always kept
+#'   * TRAIN_YEARS as training and calibration, TEST_YEAR as test
+#'   * only deer-seasons with both a training and a test track
+#'   * none of EXCLUDED_DEER_SEASONS
+#' keep, excursion, unstable_hr_center, dump and weird are not used.
+#'
+#' @param tracks The source track table (library/SW_filtered_deer.RData),
+#'   whole: ages are counted from each deer's first fix in it
+#' @return The rows of `tracks` on the list, with a `set` column, "train" or
+#'   "test"
+canonical_deer <- function(tracks) {
+  age <- deer_track_age(tracks)
+  year <- as.integer(tracks$year)
+  deer_season <- paste(tracks$id, tracks$season, sep = "_")
+  on_list <- tracks$sex == "Female" &
+    (tracks$age.at.col1 == ">2yrs" | age$age_months >= MIN_AGE_MONTHS) &
+    year %in% c(TRAIN_YEARS, TEST_YEAR) &
+    !deer_season %in% EXCLUDED_DEER_SEASONS
+  out <- tracks[on_list, ]
+  out$set <- ifelse(as.integer(out$year) %in% TRAIN_YEARS, "train", "test")
+  out_ds <- paste(out$id, out$season, sep = "_")
+  both <- intersect(out_ds[out$set == "train"], out_ds[out$set == "test"])
+  out[out_ds %in% both, ]
 }
 

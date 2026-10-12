@@ -2,9 +2,9 @@
 #' Stack each season's years into one table and attach the start-of-step
 #' covariates the model comparison needs.
 #'
-#' Deer-years recorded before the doe turned two are left out. Age is known
-#' only at collaring (see deer_track_age()), so these are the deer collared
-#' at 20 months, in tracks that start under MIN_AGE_MONTHS.
+#' The deer-years are the ones prep_pool_xgb.R pooled, the canonical list's
+#' training set, whose age rule (canonical_deer()) already leaves out the
+#' yearlings.
 #'
 #' Start covariates are properties of the step's origin, identical for all
 #' 101 candidates and independent of which random points were drawn, so
@@ -37,15 +37,12 @@
 #'
 #' Inputs:  data/xgb/pooled_<season>_<year>.rds (prep_pool_xgb.R)
 #'          data/tracks/data_<key>.rds
-#'          library/SW_filtered_deer.RData (age at collaring)
 #' Output:  data/xgb/pooled_start_<season>.rds
 #'
 #' Configuration: edit the block below before running.
 
 # Configuration ---------------------------------------------------------------
-SEASONS <- c("fa", "nb", "pf")
-# Deer-years whose track starts before this age are dropped
-MIN_AGE_MONTHS <- 24
+SEASONS <- c("br", "fa", "nb", "pf")
 # Numeric start columns to carry across; the cover type is always taken
 NUMERIC_START <- c("ndvi_start", "forest_edge_start")
 # A start column is kept for a season only if present on at least this
@@ -78,15 +75,9 @@ start_of_key <- function(k) {
   out
 }
 
-ages <- deer_track_age(readRDS("library/SW_filtered_deer.RData"))
-young <- ages$key[!is.na(ages$age_months) &
-                    ages$age_months < MIN_AGE_MONTHS]
-
 for (season in SEASONS) {
   cat(sprintf("\n########## %s ##########\n", season))
-  pooled <- xgb_season_pool(season, drop_keys = young)
-  cat(sprintf("dropped %d deer-years that start under %d months\n",
-              length(attr(pooled, "dropped")), MIN_AGE_MONTHS))
+  pooled <- xgb_season_pool(season)
   starts <- purrr::map_dfr(unique(pooled$key), start_of_key)
   d <- dplyr::left_join(pooled, starts, by = c("key", "step_id_"))
   d$wiscland_start <- as.integer(factor(d$wiscland_start_chr,

@@ -23,7 +23,7 @@
 #' Configuration: edit the block below before running.
 
 # Configuration ---------------------------------------------------------------
-SEASONS <- c("fa", "nb", "pf")
+SEASONS <- c("br", "fa", "nb", "pf")
 CONFIGS <- c("full", "rsf", "start", "main", "rsf_hr", "null")
 # TRUE: fit only the cells with no result file yet (see above)
 SKIP_EXISTING <- FALSE

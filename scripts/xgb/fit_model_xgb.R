@@ -109,10 +109,11 @@ FAMD_VARS <- c(grep("^famd[0-9]+_end$", names(d), value = TRUE),
 START_VARS <- c(intersect(c("wiscland_start", "ndvi_start",
                             "forest_edge_start"), names(d)),
                 "shadow_start")
+# log_w is the fixed offset every score starts from, not a candidate
 HAB_VARS <- setdiff(
   names(d),
   c(MOVE_VARS, HR_VAR, FAMD_VARS, START_VARS, "key", "deer", "animal",
-    "year", "step_id_", "case_", "stratum")
+    "year", "step_id_", "case_", "stratum", "log_w")
 )
 CATEGORICAL <- c("landcover", "wiscland_start")
 # Habitat-block columns with one value per step, shuffled between strata
@@ -181,9 +182,10 @@ imp$n_deer <- rep(n_deer_years, nrow(imp))
 imp$n_steps <- rep(n_steps, nrow(imp))
 imp$per_deer <- xgb_scale_value(imp$cv, n_deer_years, n_steps, "deer")
 
-# Every endpoint equally likely: the floor under every model type, including
-# the null type, which still fits movement and the home-range centre
-null_ll <- n_steps * log(1 / (nrow(d) / n_steps))
+# Every patch of land equally likely, the offset and nothing else: the floor
+# under every model type, including the null type, which still fits
+# movement and the home-range centre
+null_ll <- xgb_cond_loglik(xgb_offset(d), d$case_, xgb_strata_sizes(d))
 cat(sprintf("\nlogLik  in-sample %.1f  held-out %.1f  null %.1f\n",
             fit$loglik, attr(imp, "ll_cv"), null_ll))
 cat(sprintf("=== %s / %s importance ===\n", SEASON, CONFIG))

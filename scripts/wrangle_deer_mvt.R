@@ -1,15 +1,18 @@
 #' @description
-#' Deer movement data wrangling — full track per deer (no train/test split).
-#' Iterates sequentially over every deer matching the create_hr_rasters.R filter
-#' and writes one rds per deer to data/tracks/data_<id>_<season>_<year>.rds.
+#' Deer movement data wrangling — full track per deer.
+#' Iterates sequentially over every deer on the canonical list
+#' (canonical_deer(), the same list create_hr_rasters.R uses) and writes one
+#' rds per deer to data/tracks/data_<id>_<season>_<year>.rds. Each file
+#' carries the deer's `set`, "train" or "test".
 #'
 #' Behavior per deer:
 #'   * If the HR rasters are missing for that (id, season, year), skip with a
 #'     warning. extract_step_variables can't run without them.
 #'   * If the output rds already exists and `overwrite` is FALSE, skip.
-#'   * Otherwise run make_random_pt_extraction -> extract_step_variables and
-#'     save the result. Errors are caught per deer so a single failure does
-#'     not halt the loop.
+#'   * Otherwise run make_random_pt_extraction -> extract_step_variables for
+#'     each design and save the result. The raster window is the deer's own
+#'     (deer_crop_buffer), wide enough for its longest step. Errors are
+#'     caught per deer so a single failure does not halt the loop.
 #'
 #' Configuration: edit `overwrite` below before running.
 
@@ -37,10 +40,9 @@ topo <- load_topo()
 # Deer movement data
 sw_deer_tracks <- readRDS('library/SW_filtered_deer.RData')
 
-# Filter — must match create_hr_rasters.R so the HR rasters line up by deer key
-deer_mvt <- sw_deer_tracks %>%
-  dplyr::filter(keep == T & excursion == F & unstable_hr_center == F) %>%
-  dplyr::filter(year %in% 2017:2021)
+# The canonical deer list, shared with create_hr_rasters.R so the HR rasters
+# line up by deer key
+deer_mvt <- canonical_deer(sw_deer_tracks)
 
 cat(sprintf("Total qualifying deer: %d\n", nrow(deer_mvt)))
 
@@ -103,12 +105,13 @@ for (i in seq_len(nrow(deer_mvt))) {
         output_col = "stp.var"
       )
 
-      # Non-parametric design: uniform-disc random steps (required for
-      # non-parametric movement smooths s(sl_)/s(ta_); also usable for any GAM)
-      # -> stp.random.nonp / stp.var.nonp
+      # Non-parametric design, the one the xgb path reads: 100 random points
+      # uniform in distance, 90 out to the deer's 90th-percentile step and
+      # 10 beyond it, each carrying log_w, the ground it stands for (see
+      # nonp_random_points) -> stp.random.nonp / stp.var.nonp
       one_deer <- make_random_pt_extraction(
         data = one_deer,
-        n_pts = 50,
+        n_pts = 100,
         water = water,
         model = "nonp",
         stp_col = "stp",
