@@ -1019,12 +1019,15 @@ print(as.data.frame(utils::head(fold_pairs, 3)), row.names = FALSE, digits = 3)
 # 11 ---- From numbers to decisions, and an audit of results/xgb/ -------------
 # Three decisions read off the same scale, held-out log score per deer-year,
 # against the same threshold:
-#   model type   the simplest type within THRESHOLD of the best
+#   model type   the simplest type within THRESHOLD of the best, chosen
+#                separately among the types without deer and among their
+#                deer twins
 #   variable     its importance must clear THRESHOLD
 #   pair         its interaction log score must clear THRESHOLD (types
 #                without deer only: pair scores are read at depth 2)
 # DESIGN: the threshold and the complexity order are the same in every
-# script that applies them, and the runner fits every type they rank.
+# script that applies them, and the runner fits every type they rank, with
+# and without deer.
 plot_scripts <- c(
   "scripts/xgb/plot_models_xgb.R",
   "scripts/xgb/plot_importance_xgb.R",
@@ -1039,10 +1042,10 @@ CONFIGS <- config_value("scripts/xgb/run_models_xgb.R", "CONFIGS")
 stopifnot(
   all(thresholds == THRESHOLD),
   all(vapply(orders, identical, logical(1), COMPLEXITY)),
-  setequal(CONFIGS, COMPLEXITY)
+  setequal(CONFIGS, c(COMPLEXITY, paste0(COMPLEXITY, "_deer")))
 )
 cat(sprintf(
-  "threshold %g per deer; simplest first: %s\n",
+  "threshold %g per deer; simplest first, in each family: %s\n",
   THRESHOLD,
   paste(COMPLEXITY, collapse = " < ")
 ))
@@ -1121,22 +1124,29 @@ if (!length(files)) {
     all(walked$n_steps == n_strata)
   )
 
-  # The selection, coded the two ways the plotting scripts code it
+  # The selection, coded the two ways the plotting scripts code it: one
+  # model per season and family
+  audit$type <- sub("_deer$", "", audit$config)
   sel_a <- audit |>
-    dplyr::group_by(season) |>
+    dplyr::group_by(season, deer) |>
     dplyr::mutate(per_deer = (held_out - max(held_out)) / n_deer) |>
     dplyr::filter(per_deer > -THRESHOLD) |>
-    dplyr::slice_min(match(config, COMPLEXITY), n = 1) |>
-    dplyr::ungroup()
+    dplyr::slice_min(match(type, COMPLEXITY), n = 1) |>
+    dplyr::ungroup() |>
+    dplyr::arrange(season, deer)
   sel_b <- audit |>
-    dplyr::group_by(season) |>
+    dplyr::group_by(season, deer) |>
     dplyr::mutate(
       within = (held_out - max(held_out)) / n_deer > -THRESHOLD,
-      selected = config == COMPLEXITY[min(match(config[within], COMPLEXITY))]
+      selected = type == COMPLEXITY[min(match(type[within], COMPLEXITY))]
     ) |>
     dplyr::filter(selected) |>
-    dplyr::ungroup()
-  stopifnot(identical(sel_a$config, sel_b$config))
+    dplyr::ungroup() |>
+    dplyr::arrange(season, deer)
+  stopifnot(
+    identical(sel_a$config, sel_b$config),
+    nrow(sel_a) == 2 * length(SEASONS)
+  )
 
   # What clears the threshold in each season's selected model
   cleared <- purrr::map_dfr(seq_len(nrow(sel_a)), function(i) {

@@ -1,14 +1,15 @@
 #' @description
-#' Plot the variable importance of each season's SELECTED model type: one
-#' figure per season, one row per variable.
+#' Plot the variable importance of each season's SELECTED model types: one
+#' figure per season and family (the types without deer, and their deer
+#' twins), one row per variable.
 #'
 #' Which type that is comes from the same rule plot_models_xgb.R applies —
-#' the simplest one within THRESHOLD log units per deer of the best — so
-#' the two scripts always describe the same model. Keep the two
-#' configuration blocks in step. A season whose selected model is a null
-#' type (null or null_deer) has nothing ranked; it is skipped, and saying so
-#' is part of the output. In a deer type a variable's importance includes
-#' its deer-specific part; deer itself is not ranked.
+#' within a family, the simplest one within THRESHOLD log units per deer of
+#' the family's best — so the two scripts always describe the same models.
+#' Keep the two configuration blocks in step. A selected null type (null or
+#' null_deer) has nothing ranked; it is skipped, and saying so is part of
+#' the output. In a deer type a variable's importance includes its
+#' deer-specific part; deer itself is not ranked.
 #'
 #' Each ranked block carries a noise column, drawn in grey. A variable
 #' earns its place by beating its block's noise column, not by clearing
@@ -43,9 +44,7 @@
 # Must match plot_models_xgb.R, or this figure describes a model the
 # selection did not pick.
 THRESHOLD <- 3
-COMPLEXITY <- c("null", "null_deer", "main", "main_deer", "rsf", "rsf_deer",
-                "rsf_hr", "rsf_hr_deer", "start", "start_deer", "full",
-                "full_deer")
+COMPLEXITY <- c("null", "main", "rsf", "rsf_hr", "start", "full")
 # "deer" reads against the gate; "steps100" puts seasons on one axis
 PER <- "deer"
 WIDTH <- 9
@@ -68,11 +67,14 @@ scores <- purrr::map_dfr(files, function(f) {
   tibble(season = x$season, config = x$config, held_out = x$ll_cv,
          n_deer = x$n_deer_years)
 })
+# One selected model per season and family: the types without deer, and
+# their deer twins
 selected <- scores |>
-  group_by(season) |>
+  mutate(deer = grepl("_deer$", config), type = sub("_deer$", "", config)) |>
+  group_by(season, deer) |>
   mutate(per_deer = (held_out - max(held_out)) / n_deer) |>
   filter(per_deer > -THRESHOLD) |>
-  slice_min(match(config, COMPLEXITY), n = 1) |>
+  slice_min(match(type, COMPLEXITY), n = 1) |>
   ungroup()
 
 PRETTY <- c(
@@ -215,7 +217,7 @@ plot_season <- function(season, config) {
 }
 
 for (i in seq_len(nrow(selected))) {
-  if (selected$config[i] %in% c("null", "null_deer")) {
+  if (selected$type[i] == "null") {
     cat(sprintf("%s: selected model is '%s', nothing ranked to show\n",
                 selected$season[i], selected$config[i]))
     next

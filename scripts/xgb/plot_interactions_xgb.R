@@ -1,7 +1,8 @@
 #' @description
-#' Plot the interaction log score of each season's SELECTED model type: one
-#' figure per season, one row per pair of variables, laid out like the
-#' importance plot and read against the same threshold.
+#' Plot the interaction log score of each season's SELECTED model type
+#' without deer: one figure per season, one row per pair of variables, laid
+#' out like the importance plot and read against the same threshold. The
+#' selection is plot_models_xgb.R's, made within each family.
 #'
 #' A tree using two variables is not yet an interaction. The unit is a
 #' root-to-leaf path: the root splits on A, a child splits on B, so the
@@ -27,10 +28,10 @@
 #' interaction, and is left off. Pairs with a noise column mark where
 #' "carries nothing" sits.
 #'
-#' A season whose selected model is "main" has single-variable trees and so
-#' no pairs, one whose selected model is the null type has no ranked trees
-#' at all, and a deer type's pair scores are not computed; each is skipped,
-#' and saying so is part of the output.
+#' A selected "main" type has single-variable trees and so no pairs, a
+#' selected null type has no ranked trees at all, and a deer type's pair
+#' scores are not computed; each is skipped, and saying so is part of the
+#' output.
 #'
 #' Input:  results/xgb/compare_<season>_<type>.rds
 #' Output: plots/interactions_xgb_<season>_<type>.png and .pdf
@@ -41,9 +42,7 @@
 # Must match plot_models_xgb.R, or the figures describe a model the
 # selection did not pick.
 THRESHOLD <- 3
-COMPLEXITY <- c("null", "null_deer", "main", "main_deer", "rsf", "rsf_deer",
-                "rsf_hr", "rsf_hr_deer", "start", "start_deer", "full",
-                "full_deer")
+COMPLEXITY <- c("null", "main", "rsf", "rsf_hr", "start", "full")
 WIDTH <- 9
 # Height grows with the number of pairs
 HEIGHT_BASE <- 2.2
@@ -65,11 +64,14 @@ scores <- purrr::map_dfr(files, function(f) {
   tibble(season = x$season, config = x$config, held_out = x$ll_cv,
          n_deer = x$n_deer_years)
 })
+# One selected model per season and family: the types without deer, and
+# their deer twins
 selected <- scores |>
-  group_by(season) |>
+  mutate(deer = grepl("_deer$", config), type = sub("_deer$", "", config)) |>
+  group_by(season, deer) |>
   mutate(per_deer = (held_out - max(held_out)) / n_deer) |>
   filter(per_deer > -THRESHOLD) |>
-  slice_min(match(config, COMPLEXITY), n = 1) |>
+  slice_min(match(type, COMPLEXITY), n = 1) |>
   ungroup()
 
 PRETTY <- c(
@@ -196,8 +198,7 @@ plot_season <- function(season, config) {
 }
 
 for (i in seq_len(nrow(selected))) {
-  if (selected$config[i] %in% c("main", "null") ||
-        grepl("_deer$", selected$config[i])) {
+  if (selected$type[i] %in% c("main", "null") || selected$deer[i]) {
     cat(sprintf("%s: selected model is '%s', no pairs to show\n",
                 selected$season[i], selected$config[i]))
     next
