@@ -40,14 +40,6 @@ FOREST_CLASSES <- c("forest", "wetland_forested")
 CROP_BUFFER_M <- 3000
 CROP_MARGIN_M <- 250
 
-# Non-parametric ("nonp") random points, the design the xgb path reads: per
-# deer-year, NONP_INNER_SHARE of each step's points are drawn uniformly in
-# distance from 0 to the deer's NONP_INNER_QUANTILE step length, the rest
-# uniformly in distance from there to its longest step (see
-# make_random_pt_extraction).
-NONP_INNER_QUANTILE <- 0.9
-NONP_INNER_SHARE <- 0.9
-
 # The canonical deer list (see canonical_deer). Years are the deer's `year`
 # field. Training and calibration use TRAIN_YEARS, testing uses TEST_YEAR.
 TRAIN_YEARS <- 2016:2020

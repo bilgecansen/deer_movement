@@ -135,91 +135,48 @@ amt_random_points <- function(data_step, n_pts, water, buffer_m) {
     dplyr::select(-Water)
 }
 
-#' Random points uniform in distance, in two segments ("nonp" design)
+#' Random points uniform in distance ("nonp" design)
 #'
-#' Per deer-year, take its NONP_INNER_QUANTILE step length q and its longest
-#' step R. Each step gets NONP_INNER_SHARE of its points with distance
-#' uniform on (0, q) and the rest uniform on (q, R), turning angle uniform.
+#' Per deer-year, take its longest step R among the steps with a turning
+#' angle, the ones that get random points (the first step after a gap in the
+#' fixes has none, and enters no model). Every step gets its points with
+#' distance uniform on (0, R) and turning angle uniform: ten times `n_pts`
+#' candidates, the ones on water dropped, then `n_pts` drawn from the rest.
 #' Uniform in distance puts as many points in each 100 m near the start as
-#' far out, where a disc uniform in area puts most of them far away, and the
-#' split keeps a long tail of steps from thinning the inner points.
+#' far out, where a disc uniform in area puts most of them far away.
 #'
-#' Each point then stands for a different amount of ground, recorded as
-#'
-#'   log_w = log(distance) + log(segment width / points in the segment)
-#'           + log(land_share)
-#'
-#' the log of the land the point stands for, up to a constant shared by the
-#' step. Within a segment a point's ground grows with its distance (a ring
-#' further out is wider); the segment term spreads the segment over the
-#' points it was given; land_share is the share of that step's candidates in
-#' the segment that fell on land, since points on water are dropped and the
-#' segment's points are then spread over its land alone. A model fitted to
-#' these points adds log_w to every endpoint's score, a fixed offset, which
-#' makes it the model it would be with points spread evenly over the land.
-#' The observed step takes the log_w of the segment its distance falls in.
+#' Every point counts the same: each of a step's candidates starts with the
+#' same chance in the model. The sampling crowds points near the start, by
+#' a rule that follows distance alone and is the same for every deer, so
+#' the movement terms take it up along with the deer's own preference for
+#' short steps. The deer's own R, and the share of a step's surroundings
+#' that is water, change the density of points by a constant over the whole
+#' step, which cancels among that step's candidates.
 #'
 #' @param data_step Observed steps
 #' @param n_pts Random points per step
 #' @param water Binary raster for water bodies
 #' @param buffer_m Crop buffer, from deer_crop_buffer()
-#' @return Observed and random steps, with sample_seg (1 inner, 2 outer),
-#'   land_share and log_w
+#' @return Observed and random steps
 nonp_random_points <- function(data_step, n_pts, water, buffer_m) {
-  sl <- data_step$sl_
-  edges <- c(
-    0,
-    stats::quantile(sl, NONP_INNER_QUANTILE, names = FALSE, na.rm = TRUE),
-    max(sl, na.rm = TRUE)
+  longest <- max(data_step$sl_[!is.na(data_step$ta_)], na.rm = TRUE)
+  stopifnot(longest > 0)
+  pts <- water_at_end(
+    amt::random_steps(
+      data_step,
+      n_control = n_pts * 10,
+      rand_sl = stats::runif(1e5, 0, longest),
+      rand_ta = stats::runif(1e5, -pi, pi)
+    ),
+    water,
+    buffer_m
   )
-  n_seg <- round(n_pts * NONP_INNER_SHARE)
-  n_seg <- c(n_seg, n_pts - n_seg)
-  stopifnot(all(n_seg >= 1), all(diff(edges) > 0))
-
-  segs <- lapply(1:2, function(k) {
-    n_cand <- n_seg[k] * 10
-    pts <- water_at_end(
-      amt::random_steps(
-        data_step,
-        n_control = n_cand,
-        rand_sl = stats::runif(1e5, edges[k], edges[k + 1]),
-        rand_ta = stats::runif(1e5, -pi, pi)
-      ),
-      water,
-      buffer_m
-    )
-    cand <- dplyr::filter(pts, case_ == FALSE)
-    share <- tapply(cand$Water %in% 0, cand$step_id_, mean)
-    # A segment with no land candidate for a step keeps no points there; the
-    # floor only matters if that step's observed endpoint falls in it.
-    share <- pmax(share, 0.5 / n_cand)
-    list(
-      obs = dplyr::filter(pts, case_ == TRUE),
-      kept = cand |>
-        dplyr::filter(Water == 0) |>
-        dplyr::slice_sample(n = n_seg[k], by = step_id_) |>
-        dplyr::mutate(sample_seg = k),
-      share = share
-    )
-  })
-
-  obs <- segs[[1]]$obs |>
-    dplyr::mutate(sample_seg = ifelse(sl_ <= edges[2], 1L, 2L))
-  res <- dplyr::bind_rows(segs[[1]]$kept, segs[[2]]$kept, obs) |>
+  pts |>
+    dplyr::filter(case_ == FALSE, Water == 0) |>
+    dplyr::slice_sample(n = n_pts, by = step_id_) |>
+    dplyr::bind_rows(pts |> dplyr::filter(case_ == TRUE)) |>
     dplyr::ungroup() |>
     dplyr::select(-Water)
-
-  id <- as.character(res$step_id_)
-  res$land_share <- ifelse(
-    res$sample_seg == 1L,
-    segs[[1]]$share[id],
-    segs[[2]]$share[id]
-  )
-  stopifnot(all(res$sl_ > 0), !anyNA(res$land_share))
-  res$log_w <- log(res$sl_) +
-    log(diff(edges)[res$sample_seg] / n_seg[res$sample_seg]) +
-    log(res$land_share)
-  res
 }
 
 #' Extract environmental variables for each step (single-deer)

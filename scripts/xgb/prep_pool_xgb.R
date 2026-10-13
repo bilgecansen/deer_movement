@@ -4,19 +4,19 @@
 #' set (canonical_deer(), set == "train") in it. The test year stays out.
 #'
 #' The random points are the wrangle's nonp design, read from data/tracks/
-#' (stp.var.nonp): 100 per step, uniform in distance, each with log_w, the
-#' ground it stands for, which the fit uses as a fixed offset. The xgb path
-#' draws no points of its own.
+#' (stp.var.nonp): 100 per step, uniform in distance out to the deer's
+#' longest step with a turning angle, every one counting the same. The xgb
+#' path draws no points of its own.
 #'
 #' A habitat column present on fewer than MIN_PRESENT of a season's rows is
 #' left out for that season, for every year alike, so the years still stack.
 #' ndvi_end in nb is the case in point: the winter season runs into a year
 #' whose NDVI stack it does not load.
 #'
-#' Columns written: the movement block (sl_, tod_day, cos_ta), log_w, the
-#' habitat variables in HAB_VARS, landcover as integer codes for xgboost's
-#' categorical splits, and the FAMD axes. FAMD stays NA off forest — the fit
-#' handles it with a switch (see helpers_xgb.R); nothing is filled in.
+#' Columns written: the movement block (sl_, tod_day, cos_ta), the habitat
+#' variables in HAB_VARS, landcover as integer codes for xgboost's
+#' categorical splits, and the FAMD axes. FAMD stays NA off forest; nothing
+#' is filled in, and no model type uses it.
 #'
 #' Output: data/xgb/pooled_<season>_<year>.rds, a list of
 #'   * pooled — the step table, sorted by stratum with the observed step first

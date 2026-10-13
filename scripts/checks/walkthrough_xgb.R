@@ -24,10 +24,11 @@
 #'     reviewing code that is not what runs. These fail loudly the day a
 #'     helper changes.
 #'   * Against a design decision: the table is the canonical training set,
-#'     every score starts from log_w, the home-range centre reaches the
-#'     habitat trees only in rsf_hr, the threshold is the same in every
-#'     script, the stored results came from the current pools and the
-#'     current settings. These catch a misunderstanding rather than a typo.
+#'     every candidate starts with the same chance, the home-range centre
+#'     reaches the habitat trees only in rsf_hr, a deer twin carries the
+#'     animal id in every block, the threshold is the same in every script,
+#'     the stored results came from the current pools and the current
+#'     settings. These catch a misunderstanding rather than a typo.
 #' Do not delete either kind.
 #'
 #' Sections:
@@ -62,16 +63,20 @@ source("scripts/helper_functions.R")
 # The settings that define the analysis are READ from the production scripts
 # rather than retyped, so this file cannot quietly walk through a different
 # model from the one that was fit.
+# A value may run over several lines; parse() takes the one whole
+# assignment that starts at the setting's line.
 config_value <- function(script, name) {
-  pattern <- sprintf("^%s <- ", name)
-  line <- grep(pattern, readLines(script), value = TRUE)
-  stopifnot(length(line) == 1)
-  eval(parse(text = sub(pattern, "", line)))
+  lines <- readLines(script)
+  start <- grep(sprintf("^%s <- ", name), lines)
+  stopifnot(length(start) == 1)
+  assignment <- parse(text = lines[start:length(lines)], n = 1)[[1]]
+  eval(assignment[[3]])
 }
 FIT_SCRIPT <- "scripts/xgb/fit_model_xgb.R"
 N_ROUNDS <- config_value(FIT_SCRIPT, "N_ROUNDS")
 LEARNING_RATE <- config_value(FIT_SCRIPT, "LEARNING_RATE")
 MAX_DEPTH <- config_value(FIT_SCRIPT, "MAX_DEPTH")
+MAX_DEPTH_DEER <- config_value(FIT_SCRIPT, "MAX_DEPTH_DEER")
 BAG_FRAC <- config_value(FIT_SCRIPT, "BAG_FRAC")
 N_FOLDS <- config_value(FIT_SCRIPT, "N_FOLDS")
 SEED <- config_value(FIT_SCRIPT, "SEED")
@@ -80,7 +85,7 @@ LAMBDA <- formals(make_xgb_specs)$reg_lambda
 
 # Choices for the walkthrough itself
 SEASON <- "pf" # the smallest season, so every section runs in seconds
-CONFIG <- "full" # the one model type with all five boosters
+CONFIG <- "full" # the one model type with all four boosters
 FOLD <- 1L # the held-out fold walked through
 WALK_ROUNDS <- 50L # rounds for the fold model in section 8
 N_THREAD <- 4L
@@ -102,12 +107,10 @@ cat(sprintf(" lambda %g, bag %g, %d folds\n", LAMBDA, BAG_FRAC, N_FOLDS))
 # instead (case_ = 0). Every year of the season is stacked into one table.
 d <- readRDS(sprintf("data/xgb/pooled_start_%s.rds", SEASON))
 
-# The noise columns, drawn exactly as fit_model_xgb.R draws them: one value
-# per row, so they vary within a stratum like any end-point column.
+# The habitat noise column, drawn exactly as fit_model_xgb.R draws it: one
+# value per row, so it varies within a stratum like any end-point column.
 set.seed(SEED)
 d$shadow_gauss <- stats::rnorm(nrow(d))
-set.seed(SEED + 1L)
-d$shadow_famd <- stats::rnorm(nrow(d))
 
 # Strata are contiguous and the observed step comes first. Everything below
 # relies on that layout.
@@ -141,15 +144,23 @@ train_keys <- with(
 )
 stopifnot(setequal(unique(d$key), train_keys))
 
-# Every row also carries log_w. The random points are drawn uniformly in
-# DISTANCE from the step's start (90 out to the deer's 90th-percentile step,
-# 10 beyond it, by wrangle_deer_mvt.R), not uniformly over the ground, so
-# they crowd near the start where deer mostly step. A point near the start
-# stands for a small patch of ground and a point far out for a large one;
-# log_w is the log of that patch. The first step: its chosen point, then
-# three of its random points.
-stopifnot(all(is.finite(d$log_w)))
-print(round(as.data.frame(d[1:4, c("case_", "sl_", "log_w")]), 2))
+# The random points are drawn uniformly in DISTANCE from the step's start,
+# out to the deer's own longest step with a turning angle
+# (wrangle_deer_mvt.R), not uniformly over the ground, so they crowd near
+# the start where deer mostly step: about half of them lie within half the
+# longest step.
+# DESIGN: every point counts the same; no column weights them.
+stopifnot(!"log_w" %in% names(d))
+reach <- d |>
+  dplyr::group_by(key) |>
+  dplyr::summarise(
+    below_half = mean(sl_[case_ == 0] < max(sl_[case_ == 1]) / 2)
+  )
+cat(sprintf(
+  "random points within half the longest step: %.2f to %.2f by deer-year\n",
+  min(reach$below_half),
+  max(reach$below_half)
+))
 
 # Two kinds of column, told apart by how they vary across one step's
 # candidates:
@@ -169,26 +180,9 @@ stopifnot(
   constant_within(d$shadow_start),
   !constant_within(d$shadow_gauss)
 )
-
-# The FAMD axes describe forest stands, so they have values only on cells
-# the stand data cover (almost all of them forest) and are NA everywhere
-# else. The FAMD booster is switched on for rows that have values and off
-# for rows that are NA (section 5). To tell the two apart it looks at a
-# single column, famd1_end. That shortcut is right only if all five axes are
-# NA on exactly the same rows, so check it: a row with famd1_end present but
-# another axis missing would be switched on with a hole in its data.
-famd_cols <- grep("^famd[0-9]+_end$", names(d), value = TRUE)
-stopifnot(all(vapply(
-  famd_cols,
-  function(v) {
-    identical(is.na(d[[v]]), is.na(d[[famd_cols[1]]]))
-  },
-  logical(1)
-)))
-cat(sprintf(
-  "FAMD present on %.1f%% of rows\n",
-  100 * mean(!is.na(d[[famd_cols[1]]]))
-))
+# The animal a step belongs to is a third kind: one value per step, like a
+# start column. The deer twins (section 4) use it.
+stopifnot(constant_within(d$animal))
 
 
 # 2 ---- The loss: conditional logit (xgb_softmax, xgb_cond_loglik) -----------
@@ -198,11 +192,11 @@ cat(sprintf(
 # likelihood is the log probability of the candidate the deer actually
 # chose, summed over steps. Points from different steps never compete.
 #
-# Every score STARTS from the candidate's log_w and the trees add to it:
-# eta = log_w + what the boosters add. exp(log_w) is the patch of ground a
-# point stands for, so starting there weights each point by its patch, and
-# the model is the one evenly spread points would give. log_w is fixed; no
-# tree ever changes it.
+# Every score STARTS at 0 and the trees add to it, so before any tree each
+# of a step's candidates has the same chance. The random points crowd near
+# the start (section 1), by a rule that follows distance alone; the
+# movement booster takes that up along with the deer's own preference for
+# short steps.
 #
 # Subtracting each stratum's first score before exponentiating keeps exp()
 # in range and changes nothing: a constant cancels in the ratio.
@@ -226,38 +220,31 @@ stopifnot(
   )
 )
 
-# The null: no trees, every score its log_w alone, so every patch of land
-# within reach is equally likely. Calling every random POINT equally likely
-# instead would be too generous a floor: the points already crowd where deer
-# step. fit_model_xgb.R computes its floor the same way.
-null_ll <- cond_loglik(d$log_w, y, sizes)
-stopifnot(all.equal(
-  null_ll,
-  xgb_cond_loglik(xgb_offset(d), y, xgb_strata_sizes(d))
-))
+# The null: no trees, every score 0, so every candidate of a step is
+# equally likely. fit_model_xgb.R computes its floor the same way.
+null_ll <- cond_loglik(rep(0, nrow(d)), y, sizes)
+stopifnot(all.equal(null_ll, -sum(log(sizes))))
 cat(sprintf(
-  "null log-likelihood %.1f (%.3f per step); every point equally likely %.1f\n",
+  "null log-likelihood %.1f (%.3f per step)\n",
   null_ll,
-  null_ll / n_strata,
-  -sum(log(sizes))
+  null_ll / n_strata
 ))
 
 # The same likelihood amt maximises. survival::clogit (what amt::fit_clogit
 # calls) evaluated at a fixed coefficient on step length, without
-# iterating, gives the same number as our loss with eta = log_w + b * sl_.
-# log_w enters clogit as an offset: a term with its coefficient fixed at 1.
+# iterating, gives the same number as our loss with eta = b * sl_.
 d_sub <- d[d$stratum %in% unique(d$stratum)[1:300], ]
 sizes_sub <- rle(d_sub$stratum)$lengths
 b <- -0.002
 cl <- suppressWarnings(survival::clogit(
-  case_ ~ sl_ + offset(log_w) + strata(stratum),
+  case_ ~ sl_ + strata(stratum),
   data = d_sub,
   init = b,
   control = survival::coxph.control(iter.max = 0)
 ))
 stopifnot(all.equal(
   cl$loglik[1],
-  cond_loglik(d_sub$log_w + b * d_sub$sl_, d_sub$case_, sizes_sub)
+  cond_loglik(b * d_sub$sl_, d_sub$case_, sizes_sub)
 ))
 cat(sprintf("clogit and our loss agree at b = %g: %.6f\n", b, cl$loglik[1]))
 
@@ -269,11 +256,12 @@ cat(sprintf("clogit and our loss agree at b = %g: %.6f\n", b, cl$loglik[1]))
 # currently gives the candidate and y is 1 for the point the deer chose, 0
 # otherwise.
 #
-# At the very start, before any tree, every score is its log_w, so each of a
-# step's 101 candidates has p equal to its share of the step's ground. The
-# chosen point gets a push up (p - 1 is negative) and every random point a
-# push down (p - 0 is positive), larger for points standing for more ground.
-p0 <- cond_softmax(d$log_w, sizes)
+# At the very start, before any tree, every score is 0, so each of a step's
+# 101 candidates has p = 1/101. The chosen point gets a push up
+# (p - 1 = -100/101) and every random point the same small push down
+# (p - 0 = 1/101).
+p0 <- cond_softmax(rep(0, nrow(d)), sizes)
+stopifnot(all.equal(unname(p0), 1 / sizes[strat_of_row]))
 g0 <- p0 - y
 # The first step: its chosen point, then three of its random points
 print(round(g0[1:4], 4))
@@ -295,27 +283,29 @@ h0 <- p0 * (1 - p0)
 #   modifier  movement again, with start-of-step columns       ranked
 #   hr        distance to the home-range centre                nuisance
 #   hab       the environmental candidates at the endpoint     ranked
-#   famd      the forest ordination axes, switched off outside forest
 # move + hr mirror the GAM null, so whatever the ranked blocks add is what a
 # variable adds on top of movement and the home-range centre.
 MOVE_VARS <- c("sl_", "tod_day", "cos_ta")
 HR_VAR <- "HR_center_end"
-FAMD_VARS <- c(famd_cols, "shadow_famd")
 START_VARS <- c(
   intersect(c("wiscland_start", "ndvi_start", "forest_edge_start"), names(d)),
   "shadow_start"
 )
 ID_COLS <- c("key", "deer", "animal", "year", "step_id_", "case_", "stratum")
-# log_w is the fixed offset every score starts from, not a candidate
+# The FAMD axes are in the table, but no block uses them
+FAMD_COLS <- grep("^famd[0-9]+_end$", names(d), value = TRUE)
+# The deer twins' animal id, built from `animal` in fit_model_xgb.R
+DEER_VAR <- "deer_id"
+# day_of_season is in the table but not used
 HAB_VARS <- setdiff(
   names(d),
-  c(MOVE_VARS, HR_VAR, FAMD_VARS, START_VARS, ID_COLS, "log_w")
+  c(MOVE_VARS, HR_VAR, FAMD_COLS, START_VARS, ID_COLS, "day_of_season",
+    DEER_VAR)
 )
-CATEGORICAL <- c("landcover", "wiscland_start")
+CATEGORICAL <- config_value(FIT_SCRIPT, "CATEGORICAL")
 
-# DESIGN: the habitat candidates are end-point columns plus their noise
-# column, and day of season: one value per step, so it acts only beneath a
-# split on an end-point column.
+# DESIGN: the habitat candidates are the end-point columns plus their noise
+# column, and nothing else.
 stopifnot(setequal(
   HAB_VARS,
   c(
@@ -325,7 +315,6 @@ stopifnot(setequal(
     "northness_end",
     "eastness_end",
     "shadow_gauss",
-    "day_of_season",
     intersect("ndvi_end", names(d))
   )
 ))
@@ -366,45 +355,45 @@ specs <- list(
   block("move", MOVE_VARS, params_for(list(c(0, 1), 2))),
   block("modifier", c("sl_", "cos_ta", START_VARS), params_for()),
   block("hr", HR_VAR, params_for()),
-  block("hab", HAB_VARS, params_for()),
-  block(
-    "famd",
-    FAMD_VARS,
-    params_for(),
-    switched = TRUE,
-    switch_col = FAMD_VARS[1]
-  )
+  block("hab", HAB_VARS, params_for())
 )
 specs_of <- function(cfg) {
   make_xgb_specs(
     MOVE_VARS,
     HR_VAR,
     HAB_VARS,
-    FAMD_VARS,
     config = cfg,
     start_vars = START_VARS,
     categorical = CATEGORICAL,
     learning_rate = LEARNING_RATE,
     max_depth = MAX_DEPTH,
-    nthread = N_THREAD
+    nthread = N_THREAD,
+    deer_var = DEER_VAR,
+    deer_depth = MAX_DEPTH_DEER
   )
 }
 stopifnot(CONFIG == "full", all.equal(specs, specs_of(CONFIG)))
 names(specs) <- vapply(specs, `[[`, "", "name")
 
-# DESIGN: the six model types differ only in what the table below says.
+# DESIGN: the twelve model types differ only in what the table below says.
 # blocks_of() describes a list of booster specs in the terms the design was
 # agreed in. Section 11 uses it again on the stored results. A type with no
-# habitat block (null) has none of the habitat properties.
+# habitat block (null) has none of the habitat properties. A deer twin has
+# the animal id in every block and every tree MAX_DEPTH_DEER deep; anything
+# in between (deer in some blocks, or mixed depths) reads as NA and fails.
 blocks_of <- function(s) {
   nm <- vapply(s, `[[`, "", "name")
   hab <- if ("hab" %in% nm) s[[which(nm == "hab")]] else NULL
+  deer_in <- vapply(s, function(b) DEER_VAR %in% b$feats, logical(1))
+  depths <- unique(vapply(s, function(b) b$params$max_depth, numeric(1)))
   tibble::tibble(
     habitat = !is.null(hab),
     modifier = "modifier" %in% nm,
     hr_in_hab = !is.null(hab) && HR_VAR %in% hab$feats,
     one_variable_trees = !is.null(hab) &&
-      !is.null(hab$params$interaction_constraints)
+      !is.null(hab$params$interaction_constraints),
+    deer = if (all(deer_in)) TRUE else if (!any(deer_in)) FALSE else NA,
+    depth = if (length(depths) == 1) depths else NA_real_
   )
 }
 describe <- function(cfg) {
@@ -416,19 +405,58 @@ design <- dplyr::bind_rows(
   describe("rsf"),
   describe("rsf_hr"),
   describe("start"),
-  describe("full")
+  describe("full"),
+  describe("null_deer"),
+  describe("main_deer"),
+  describe("rsf_deer"),
+  describe("rsf_hr_deer"),
+  describe("start_deer"),
+  describe("full_deer")
 )
 print(as.data.frame(design), row.names = FALSE)
+six <- tibble::tibble(
+  type = c("null", "main", "rsf", "rsf_hr", "start", "full"),
+  habitat = c(FALSE, TRUE, TRUE, TRUE, TRUE, TRUE),
+  modifier = c(FALSE, FALSE, FALSE, FALSE, TRUE, TRUE),
+  hr_in_hab = c(FALSE, FALSE, FALSE, TRUE, FALSE, FALSE),
+  one_variable_trees = c(FALSE, TRUE, FALSE, FALSE, TRUE, FALSE)
+)
 stopifnot(identical(
   design,
-  tibble::tibble(
-    type = c("null", "main", "rsf", "rsf_hr", "start", "full"),
-    habitat = c(FALSE, TRUE, TRUE, TRUE, TRUE, TRUE),
-    modifier = c(FALSE, FALSE, FALSE, FALSE, TRUE, TRUE),
-    hr_in_hab = c(FALSE, FALSE, FALSE, TRUE, FALSE, FALSE),
-    one_variable_trees = c(FALSE, TRUE, FALSE, FALSE, TRUE, FALSE)
+  dplyr::bind_rows(
+    dplyr::mutate(six, deer = FALSE, depth = as.numeric(MAX_DEPTH)),
+    dplyr::mutate(
+      six,
+      type = paste0(type, "_deer"),
+      deer = TRUE,
+      depth = as.numeric(MAX_DEPTH_DEER)
+    )
   )
 ))
+
+# DESIGN: where a deer twin keeps one variable per tree (main_deer,
+# start_deer), each habitat variable may share a tree with deer and with
+# nothing else, so deer can give each animal its own version of that
+# variable's effect but two habitat variables never meet. In the movement
+# block deer joins both groups: step length with time of day, and the
+# turning angle.
+main_deer <- specs_of("main_deer")
+hab_deer <- main_deer[[which(vapply(main_deer, `[[`, "", "name") == "hab")]]
+hab_groups <- lapply(
+  hab_deer$params$interaction_constraints,
+  function(g) hab_deer$feats[g + 1]
+)
+move_groups_deer <- lapply(
+  main_deer[[1]]$params$interaction_constraints,
+  function(g) main_deer[[1]]$feats[g + 1]
+)
+stopifnot(
+  identical(hab_groups, lapply(HAB_VARS, c, DEER_VAR)),
+  identical(
+    move_groups_deer,
+    list(c("sl_", "tod_day", DEER_VAR), c("cos_ta", DEER_VAR))
+  )
+)
 
 # 5 ---- One round of alternating boosting (fit_xgb_boosters, one round) ------
 # Each round grows ONE tree per booster, in turn. Before each tree the
@@ -457,12 +485,11 @@ dm_of <- function(data, s, label = NULL, group = NULL) {
 # only some of the columns, and a candidate's probability depends on the
 # score from ALL of them added together. So the pushes are worked out here,
 # from that combined score (eta_now), and handed to xgboost through `obj`;
-# xgboost's own version, `preds`, is never used. That is what makes five
+# xgboost's own version, `preds`, is never used. That is what makes four
 # separate boosters one model.
 #
-# w is each row's weight: 0 for steps outside this round's bag, and for the
-# FAMD booster also 0 outside forest. A row with weight 0 pushes nothing, so
-# it has no say in where the tree splits.
+# w is each row's weight: 0 for steps outside this round's bag. A row with
+# weight 0 pushes nothing, so it has no say in where the tree splits.
 grow_one_tree <- function(s, eta_now, w) {
   p <- cond_softmax(eta_now, sizes)
   # xgboost always calls obj(preds, dtrain); both are deliberately unused.
@@ -519,52 +546,28 @@ margin_of <- function(bst, data, s) {
 #
 # This is how a single booster already works: tree 2 is fit to what tree 1
 # left, and the prediction is tree 1 + tree 2. Here the running total spans
-# five boosters instead of one, which is also why the objective ignores
+# four boosters instead of one, which is also why the objective ignores
 # xgboost's own `preds`: those hold only that booster's trees.
 #
-# In the real data the running total does not start at 0 but at log_w
-# (section 2): the first tree corrects the score log_w alone gives.
-eta <- d$log_w
+# In the real data the running total starts at 0 too (section 2): the first
+# tree corrects every candidate having the same chance.
+eta <- rep(0, nrow(d))
 t_move <- grow_one_tree(specs$move, eta, row_in_bag)
 c_move <- margin_of(t_move$bst, d, specs$move)
 
-eta <- d$log_w + c_move
+eta <- c_move
 t_mod <- grow_one_tree(specs$modifier, eta, row_in_bag)
 c_mod <- margin_of(t_mod$bst, d, specs$modifier)
 
-eta <- d$log_w + c_move + c_mod
+eta <- c_move + c_mod
 t_hr <- grow_one_tree(specs$hr, eta, row_in_bag)
 c_hr <- margin_of(t_hr$bst, d, specs$hr)
 
-eta <- d$log_w + c_move + c_mod + c_hr
+eta <- c_move + c_mod + c_hr
 t_hab <- grow_one_tree(specs$hab, eta, row_in_bag)
 c_hab <- margin_of(t_hab$bst, d, specs$hab)
 
-# The FAMD booster is SWITCHED. Outside forest its rows get weight 0, so they
-# shape no split, and its contribution there is forced to 0. Inside forest
-# the contribution is anchored by subtracting the prediction at all-zero
-# axes, so the booster carries what the axes add WITHIN forest and the
-# forest/non-forest contrast stays with landcover.
-on_famd <- !is.na(d[[specs$famd$switch_col]])
-eta <- d$log_w + c_move + c_mod + c_hr + c_hab
-t_famd <- grow_one_tree(specs$famd, eta, row_in_bag * on_famd)
-zero_row <- matrix(
-  0,
-  1,
-  length(specs$famd$feats),
-  dimnames = list(NULL, specs$famd$feats)
-)
-zero_dm <- xgboost::xgb.DMatrix(
-  zero_row,
-  feature_types = rep("q", length(specs$famd$feats))
-)
-c_famd <- ifelse(
-  on_famd,
-  margin_of(t_famd$bst, d, specs$famd) -
-    stats::predict(t_famd$bst, zero_dm, outputmargin = TRUE)[1],
-  0
-)
-eta_round1 <- d$log_w + c_move + c_mod + c_hr + c_hab + c_famd
+eta_round1 <- c_move + c_mod + c_hr + c_hab
 ll_round1 <- cond_loglik(eta_round1, y, sizes)
 
 # Two checks that the pushes behave as section 3 said, now at a real stage
@@ -588,7 +591,7 @@ prod_c <- xgb_contributions(
   specs
 )
 stopifnot(
-  all.equal(list(c_move, c_mod, c_hr, c_hab, c_famd), prod_c),
+  all.equal(list(c_move, c_mod, c_hr, c_hab), prod_c),
   all.equal(ll_round1, fit1$loglik)
 )
 cat(sprintf(
@@ -734,9 +737,9 @@ stopifnot(
 
 # 7 ---- Why a start-of-step column is never a root split ---------------------
 # Section 6 scored a split by summing the pushes on each side. Apply the same
-# score to the start of fitting (the pushes of section 3, every score its
-# log_w) and it shows why the modifier booster's start-of-step columns can
-# only ever appear BELOW a split on step length or turning angle.
+# score to the start of fitting (the pushes of section 3, every score 0)
+# and it shows why the modifier booster's start-of-step columns can only
+# ever appear BELOW a split on step length or turning angle.
 
 # A start column is constant within a stratum, so any split on it sends
 # WHOLE strata to each side. Each side is then a sum of whole steps, whose
@@ -744,6 +747,13 @@ stopifnot(
 on_start <- d[[START_COL]] < stats::median(d[[START_COL]])
 gain_start_root <- split_gain(on_start, g0, h0)
 stopifnot(abs(sum(g0[on_start])) < 1e-8, abs(gain_start_root) < 1e-10)
+
+# The deer twins' animal id is the same kind of column, one value per step,
+# so it never splits first either. It splits only beneath a column that
+# varies within the step, giving each animal its own version of that
+# column's effect.
+on_deer <- d$animal == d$animal[1]
+stopifnot(abs(split_gain(on_deer, g0, h0)) < 1e-10)
 
 # A column that varies within a stratum can separate a stratum's chosen
 # point from its alternatives, so it earns gain.
@@ -770,10 +780,9 @@ stopifnot(abs(sum(g0[short & on_start])) > 1)
 # short steps more often than steps that start elsewhere. That is the
 # interaction between movement and where the step began. Whether it does
 # depends on the column; the per-step noise column shows what none looks
-# like. A split with no signal scores BELOW zero, because lambda penalises
-# the extra leaf, and xgboost never makes such a split. Here it is well
-# below: short candidates stand for little ground, so their H is tiny and
-# lambda, not H, sets the size of each leaf's term.
+# like. A split with no signal scores about zero: a little below, because
+# lambda penalises the extra leaf, or a little above, by chance; xgboost
+# never makes a split that scores below zero.
 numeric_start <- setdiff(START_VARS, "wiscland_start")
 under_sl <- vapply(
   numeric_start,
@@ -825,25 +834,18 @@ names(bst) <- names(specs)
 all_trees <- function(b, s) {
   stats::predict(b, dm_of(te, s), outputmargin = TRUE)
 }
-on_te <- !is.na(te[[specs$famd$switch_col]])
 c_te <- list(
   move = all_trees(bst$move, specs$move),
   modifier = all_trees(bst$modifier, specs$modifier),
   hr = all_trees(bst$hr, specs$hr),
-  hab = all_trees(bst$hab, specs$hab),
-  famd = ifelse(
-    on_te,
-    all_trees(bst$famd, specs$famd) -
-      stats::predict(bst$famd, zero_dm, outputmargin = TRUE)[1],
-    0
-  )
+  hab = all_trees(bst$hab, specs$hab)
 )
 stopifnot(all.equal(unname(c_te), xgb_contributions(bst, te, specs)))
 
-eta_te <- te$log_w + Reduce(`+`, c_te)
+eta_te <- Reduce(`+`, c_te)
 ll_te <- cond_loglik(eta_te, te$case_, sizes_te)
-null_te <- cond_loglik(te$log_w, te$case_, sizes_te)
-null_tr <- cond_loglik(tr_d$log_w, tr_d$case_, rle(tr_d$stratum)$lengths)
+null_te <- cond_loglik(rep(0, nrow(te)), te$case_, sizes_te)
+null_tr <- -sum(log(rle(tr_d$stratum)$lengths))
 cat(sprintf(
   "fold %d, %d rounds: gain over null per step %.3f held out, %.3f in sample\n",
   FOLD,
@@ -937,7 +939,7 @@ cat(sprintf(
 # steps.
 # Replay the fold model's trees IN THE ORDER THEY WERE GROWN, so each tree
 # meets the held-out score as it stood just before it. For the first
-# habitat tree that means log_w and round 1's move, modifier and hr trees.
+# habitat tree that means round 1's move, modifier and hr trees.
 #
 # The gain here is the change in the log-likelihood itself, not the formula
 # from section 6. That formula is a shortcut: it treats each candidate's
@@ -947,8 +949,7 @@ cat(sprintf(
 tree1 <- function(b, s) {
   stats::predict(b, dm_of(te, s), outputmargin = TRUE, iterationrange = c(1, 1))
 }
-before <- te$log_w +
-  tree1(bst$move, specs$move) +
+before <- tree1(bst$move, specs$move) +
   tree1(bst$modifier, specs$modifier) +
   tree1(bst$hr, specs$hr)
 
@@ -1020,7 +1021,8 @@ print(as.data.frame(utils::head(fold_pairs, 3)), row.names = FALSE, digits = 3)
 # against the same threshold:
 #   model type   the simplest type within THRESHOLD of the best
 #   variable     its importance must clear THRESHOLD
-#   pair         its interaction log score must clear THRESHOLD
+#   pair         its interaction log score must clear THRESHOLD (types
+#                without deer only: pair scores are read at depth 2)
 # DESIGN: the threshold and the complexity order are the same in every
 # script that applies them, and the runner fits every type they rank.
 plot_scripts <- c(
@@ -1064,11 +1066,16 @@ if (!length(files)) {
         n_deer = r$n_deer_years,
         n_steps = r$n_steps,
         rounds = r$n_trees / length(r$specs),
-        # Every block shares these settings, and every type has a movement
-        # block, so read them from that.
+        # Every block shares the learning rate, and every type has a
+        # movement block, so read it from that. Depth is in blocks_of().
         learning_rate = r$specs[[1]]$params$learning_rate,
-        max_depth = r$specs[[1]]$params$max_depth,
-        has_split_gain = !is.null(r$split_gain)
+        has_split_gain = !is.null(r$split_gain),
+        # A deer twin saves which animal each id stands for
+        deer_levels_ok = if (grepl("_deer$", r$config)) {
+          length(r$deer_levels) == r$n_animals
+        } else {
+          is.null(r$deer_levels)
+        }
       ),
       blocks_of(r$specs)
     )
@@ -1093,12 +1100,14 @@ if (!length(files)) {
     all(joined$modifier == joined$modifier_fit),
     all(joined$hr_in_hab == joined$hr_in_hab_fit),
     all(joined$one_variable_trees == joined$one_variable_trees_fit),
-    # with the production settings
+    all(joined$deer == joined$deer_fit),
+    all(joined$deer_levels_ok),
+    # with the production settings, the depth among them
     all(audit$rounds == N_ROUNDS),
     all(audit$learning_rate == LEARNING_RATE),
-    all(audit$max_depth == MAX_DEPTH),
-    # by the code that scores splits on held-out steps
-    all(audit$has_split_gain)
+    all(joined$depth == joined$depth_fit),
+    # by the code that scores splits on held-out steps, where it applies
+    all(joined$has_split_gain == !joined$deer)
   )
   # Every type of a season was fit to the same table, and for the walked
   # season that table is the current one, yearlings dropped.
@@ -1139,19 +1148,26 @@ if (!length(files)) {
       dplyr::filter(!(booster == "modifier" & scheme == "within")) |>
       dplyr::mutate(per_deer = cv / r$n_deer_years) |>
       dplyr::filter(per_deer >= THRESHOLD, !grepl("^shadow", variable))
-    pairs <- r$split_gain$pairs |>
-      dplyr::filter(parent != child) |>
-      dplyr::mutate(a = pmin(parent, child), b = pmax(parent, child)) |>
-      dplyr::group_by(a, b) |>
-      dplyr::summarise(
-        per_deer = sum(heldout) / r$n_deer_years,
-        .groups = "drop"
-      )
+    # A deer type stores no pair scores
+    pairs <- if (!is.null(r$split_gain)) {
+      r$split_gain$pairs |>
+        dplyr::filter(parent != child) |>
+        dplyr::mutate(a = pmin(parent, child), b = pmax(parent, child)) |>
+        dplyr::group_by(a, b) |>
+        dplyr::summarise(
+          per_deer = sum(heldout) / r$n_deer_years,
+          .groups = "drop"
+        )
+    } else {
+      tibble::tibble(per_deer = numeric(0))
+    }
     tibble::tibble(
       season = r$season,
       model = r$config,
       variables = paste(vars$variable, collapse = ", "),
-      best_pair = if (nrow(pairs)) {
+      best_pair = if (is.null(r$split_gain)) {
+        "(not scored)"
+      } else if (nrow(pairs)) {
         sprintf("%.2f", max(pairs$per_deer))
       } else {
         "(no pairs)"

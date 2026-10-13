@@ -33,12 +33,12 @@
 #     NA pattern into a forest indicator and takes the forest effect away
 #     from the landcover term.
 #
-#   * Every endpoint's score starts at its log_w, the log of the ground the
-#     random point stands for (see nonp_random_points). The random points
-#     are uniform in distance, not in area, so they crowd the ground near
-#     the start; the offset weights each one by the ground it represents,
-#     which makes the fit the one evenly spread points would give. It is
-#     fixed, never fitted, and a table without log_w gets 0.
+#   * Every endpoint's score starts at 0, so each of a step's candidates
+#     starts with the same chance. The random points are uniform in
+#     distance, not in area (see nonp_random_points), so they crowd the
+#     ground near the start. That crowding follows distance alone, the same
+#     way for every deer, so the movement booster takes it up along with
+#     the deer's own preference for short steps.
 #
 #   * Importance is the drop in held-out conditional log-likelihood over
 #     folds of whole steps. Trees may combine variables (max_depth 2, so any
@@ -86,17 +86,6 @@ xgb_softmax <- function(eta, sizes) {
 xgb_cond_loglik <- function(eta, case_, sizes) {
   p <- xgb_softmax(eta, sizes)
   sum(log(p[case_ == 1]))
-}
-
-#' Fixed offset every score starts from
-#'
-#' The table's log_w column, the log of the ground each random point stands
-#' for, or 0 for a table drawn uniformly over the area and carrying none.
-#'
-#' @param d Step data
-#' @return Offset per row
-xgb_offset <- function(d) {
-  if ("log_w" %in% names(d)) d$log_w else rep(0, nrow(d))
 }
 
 #' DMatrix with the categorical columns declared
@@ -173,11 +162,10 @@ xgb_scale_label <- function(per = "deer") {
 #' path draws no random points of its own.
 #'
 #' Landcover is written as 0-based integer codes in LANDCOVER_LEVELS order,
-#' for xgboost's categorical splits. log_w is carried as is: the fit starts
-#' every score from it (xgb_offset()). FAMD columns keep their NA off forest.
+#' for xgboost's categorical splits. FAMD columns keep their NA off forest.
 #' A stratum with any other listed variable missing is dropped whole, rather
-#' than losing single points, because log_w assumes each step keeps every
-#' point it was given.
+#' than losing single points, which would take ground out of a step's
+#' choices according to where the values are missing.
 #'
 #' `deer` is an index within this call, not an animal id; the animal is the
 #' prefix of `key`. xgb_season_pool() renumbers when it stacks years.
@@ -203,8 +191,7 @@ build_xgb_pool <- function(keys, hab_vars, famd_vars,
       tod_day = as.numeric(v$tod_start_ == "day"),
       cos_ta = cos(v$ta_),
       landcover = as.integer(factor(v$wiscland_end,
-                                    levels = LANDCOVER_LEVELS)) - 1L,
-      log_w = v$log_w
+                                    levels = LANDCOVER_LEVELS)) - 1L
     )
     for (nm in setdiff(c(hab_vars, famd_vars), "landcover")) {
       out[[nm]] <- v[[nm]]
@@ -215,8 +202,7 @@ build_xgb_pool <- function(keys, hab_vars, famd_vars,
   pooled |>
     dplyr::group_by(deer, step_id_) |>
     dplyr::filter(
-      !any(dplyr::if_any(dplyr::all_of(c(move_vars, hab_vars, "log_w")),
-                         is.na)),
+      !any(dplyr::if_any(dplyr::all_of(c(move_vars, hab_vars)), is.na)),
       sum(case_) == 1,
       dplyr::n() >= 2
     ) |>
@@ -351,13 +337,23 @@ xgb_season_pool <- function(season, dir = "data/xgb",
 #' is the interaction between movement and start-of-step context has
 #' nothing to do under a one-variable-per-tree rule.
 #'
+#' Every type has a deer twin, named with a "_deer" suffix: the same blocks
+#' with the deer id (`deer_var`, a category) added to move, modifier, hr and
+#' hab, and every tree `deer_depth` deep. Deer has one value per step, so it
+#' never splits first; it splits beneath a column that varies within the
+#' step, giving each deer its own version of that column's effect. In move
+#' it joins both interaction groups; where one variable per tree is the
+#' rule (main, start) each habitat variable may pair with deer and nothing
+#' else; elsewhere the trees are free. The FAMD block, when present, takes
+#' no deer.
+#'
 #' @param move_vars Movement columns
 #' @param hr_var Home-range-centre column
 #' @param hab_vars Environmental candidate columns
 #' @param famd_vars Columns for the switched booster (NA outside their
 #'   domain); empty for none
 #' @param config Model type: "rsf" (default), "full", "start", "main",
-#'   "rsf_hr" or "null"
+#'   "rsf_hr" or "null", or any of them with "_deer" appended
 #' @param start_vars Start-of-step columns, used by "full" and "start"
 #' @param switch_col Column whose NA pattern defines the switch; defaults to
 #'   the first entry of `famd_vars`
@@ -368,6 +364,8 @@ xgb_season_pool <- function(season, dir = "data/xgb",
 #' @param learning_rate,max_depth,min_child_weight,reg_lambda Boosting
 #'   settings shared by all boosters
 #' @param nthread Threads per booster
+#' @param deer_var Deer id column, for the "_deer" types
+#' @param deer_depth Tree depth in every block of a "_deer" type
 #' @return List of booster specs for fit_xgb_boosters()
 make_xgb_specs <- function(
   move_vars,
@@ -383,9 +381,17 @@ make_xgb_specs <- function(
   max_depth = 2L,
   min_child_weight = 1,
   reg_lambda = 1,
-  nthread = 1L
+  nthread = 1L,
+  deer_var = "deer_id",
+  deer_depth = 3L
 ) {
-  config <- match.arg(config)
+  deer <- length(config) == 1 && grepl("_deer$", config)
+  config <- match.arg(sub("_deer$", "", config),
+                      c("rsf", "full", "start", "main", "rsf_hr", "null"))
+  if (deer) {
+    max_depth <- deer_depth
+  }
+  with_deer <- function(feats) if (deer) c(feats, deer_var) else feats
   has_modifier <- config %in% c("full", "start")
   additive_ranked <- config %in% c("start", "main")
   params_for <- function(constraints = NULL) {
@@ -405,7 +411,15 @@ make_xgb_specs <- function(
   }
   singles <- function(feats) as.list(seq_along(feats) - 1)
   ranked_params <- function(feats) {
-    if (additive_ranked) params_for(singles(feats)) else params_for()
+    if (!additive_ranked) {
+      return(params_for())
+    }
+    if (!deer) {
+      return(params_for(singles(feats)))
+    }
+    # One variable per tree, with deer: each variable pairs with deer only
+    vars <- setdiff(feats, deer_var)
+    params_for(index_groups(feats, lapply(vars, c, deer_var)))
   }
   block <- function(name, feats, params, switched = FALSE,
                     switch_col = NA_character_) {
@@ -414,19 +428,25 @@ make_xgb_specs <- function(
          params = params)
   }
 
-  specs <- list(block("move", move_vars,
-                      params_for(index_groups(move_vars, move_groups))))
+  move_feats <- with_deer(move_vars)
+  specs <- list(block(
+    "move", move_feats,
+    params_for(index_groups(move_feats, lapply(move_groups, with_deer)))
+  ))
   if (has_modifier && length(start_vars)) {
     specs[[length(specs) + 1]] <- block(
-      "modifier", c(intersect(c("sl_", "cos_ta"), move_vars), start_vars),
+      "modifier",
+      with_deer(c(intersect(c("sl_", "cos_ta"), move_vars), start_vars)),
       params_for()
     )
   }
-  specs[[length(specs) + 1]] <- block("hr", hr_var, params_for())
+  specs[[length(specs) + 1]] <- block("hr", with_deer(hr_var), params_for())
   if (config == "null") {
     return(specs)
   }
-  hab_feats <- if (config == "rsf_hr") c(hab_vars, hr_var) else hab_vars
+  hab_feats <- with_deer(
+    if (config == "rsf_hr") c(hab_vars, hr_var) else hab_vars
+  )
   specs[[length(specs) + 1]] <- block("hab", hab_feats,
                                       ranked_params(hab_feats))
   if (length(famd_vars)) {
@@ -578,7 +598,6 @@ fit_xgb_boosters <- function(d, specs, n_rounds, bag_frac = 0.632,
   })
   dm0 <- lapply(specs, xgb_zero_matrix)
   contrib <- lapply(specs, function(s) rep(0, nrow(d)))
-  offset <- xgb_offset(d)
   bst <- vector("list", length(specs))
   n_trees <- integer(length(specs))
   t0 <- Sys.time()
@@ -592,7 +611,7 @@ fit_xgb_boosters <- function(d, specs, n_rounds, bag_frac = 0.632,
     }
     row_in_bag <- in_bag[strat_of_row]
     for (b in seq_along(specs)) {
-      eta_now <- offset + Reduce(`+`, contrib)
+      eta_now <- Reduce(`+`, contrib)
       w <- row_in_bag * if (specs[[b]]$switched) on[[b]] else 1
       # Gradient and Hessian of the conditional logit, zeroed where a
       # switched booster's variables do not exist, so those rows shape no
@@ -615,7 +634,7 @@ fit_xgb_boosters <- function(d, specs, n_rounds, bag_frac = 0.632,
       cat(sprintf(
         "  round %d / %d  %.0f s  logLik %.1f\n", i, n_rounds,
         as.numeric(difftime(Sys.time(), t0, units = "secs")),
-        xgb_cond_loglik(offset + Reduce(`+`, contrib), y, sizes)
+        xgb_cond_loglik(Reduce(`+`, contrib), y, sizes)
       ))
     }
   }
@@ -634,8 +653,8 @@ fit_xgb_boosters <- function(d, specs, n_rounds, bag_frac = 0.632,
     if (diff(range(gap)) > 1e-4) {
       stop(sprintf(
         paste("Booster '%s': the running per-tree total drifted from a",
-              "full prediction."),
-        specs[[b]]$name
+              "full prediction (gap %.2g, largest score %.3g)."),
+        specs[[b]]$name, diff(range(gap)), max(abs(full))
       ))
     }
     if (specs[[b]]$switched && any(contrib[[b]][!on[[b]]] != 0)) {
@@ -648,7 +667,7 @@ fit_xgb_boosters <- function(d, specs, n_rounds, bag_frac = 0.632,
     boosters = lapply(bst, xgboost::xgb.save.raw),
     n_trees = stats::setNames(n_trees, vapply(specs, `[[`, character(1),
                                               "name")),
-    loglik = xgb_cond_loglik(offset + Reduce(`+`, contrib), y, sizes)
+    loglik = xgb_cond_loglik(Reduce(`+`, contrib), y, sizes)
   )
 }
 
@@ -764,7 +783,7 @@ xgb_heldout_split_gain <- function(bst, specs, te, n_trees,
     c(leaves_below(tr, tr$left[i]), leaves_below(tr, tr$right[i]))
   }
 
-  margin <- xgb_offset(te)
+  margin <- rep(0, nrow(te))
   ll_now <- ll_of(margin)
   rows <- list()
 
@@ -977,7 +996,7 @@ xgb_cv_importance <- function(d, specs, n_rounds, bag_frac = 0.632,
     on_te <- lapply(specs, xgb_switch, d = te)
     X_te <- lapply(specs, function(s) as.matrix(te[, s$feats]))
     contrib <- xgb_contributions(bst, te, specs, n_trees)
-    base <- xgb_offset(te) + Reduce(`+`, contrib)
+    base <- Reduce(`+`, contrib)
     ll <- xgb_cond_loglik(base, te$case_, sizes_te)
     ll_total <- ll_total + ll
     if (verbose) {

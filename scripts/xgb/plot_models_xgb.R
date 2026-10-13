@@ -1,23 +1,26 @@
 #' @description
-#' Compare the six model types within each season and pick one.
+#' Compare the twelve model types within each season and pick one: the six
+#' types and their deer twins (the animal id in every block, see
+#' make_xgb_specs()).
 #'
 #' The rule: take the SIMPLEST model type whose held-out score is within
 #' THRESHOLD log units per deer of the best type in that season. The
 #' threshold is the pipeline's own gate 3, where a model must beat the null
 #' by 3 log units for a deer.
 #'
-#' Complexity runs null < main < rsf < rsf_hr < start < full. The null type
-#' is movement and the home-range centre alone, so if no other type beats
-#' it by the threshold, the season selects it: no habitat model is worth
-#' it there. rsf_hr is rsf with one more variable allowed to interact, so it
-#' sits just above rsf. Its place against start and full, which it is not
-#' nested in, is a judgment call, as is rsf against start — fewer trees but
-#' interactions, against more trees but additive.
+#' Complexity runs null < main < rsf < rsf_hr < start < full, each type
+#' followed by its deer twin. The null type is movement and the home-range
+#' centre alone, so if no other type beats it by the threshold, the season
+#' selects it: no habitat model is worth it there. rsf_hr is rsf with one
+#' more variable allowed to interact, so it sits just above rsf. Its place
+#' against start and full, which it is not nested in, is a judgment call,
+#' as is rsf against start — fewer trees but interactions, against more
+#' trees but additive.
 #'
-#' Per-deer favours seasons with longer tracks: nb and pf carry about 400
-#' steps per deer against fa's 164, so the same per-step effect reads
-#' roughly 2.5x larger there. The per-100-step column is printed alongside
-#' so that is visible rather than buried.
+#' Per-deer favours seasons with longer tracks: nb carries about 390 steps
+#' per deer-year against 140-200 in the other seasons, so the same per-step
+#' effect reads roughly twice as large there. The per-100-step column is
+#' printed alongside so that is visible rather than buried.
 #'
 #' Input:  results/xgb/compare_<season>_<type>.rds
 #' Output: plots/compare_models.png and .pdf, and the selection printed
@@ -28,10 +31,12 @@
 # Log units per deer. A model type within this much of the best is a
 # candidate; the simplest candidate wins.
 THRESHOLD <- 3
-# Simplest first
-COMPLEXITY <- c("null", "main", "rsf", "rsf_hr", "start", "full")
-WIDTH <- 9.5
-HEIGHT <- 11
+# Simplest first, each type followed by its deer twin
+COMPLEXITY <- c("null", "null_deer", "main", "main_deer", "rsf", "rsf_deer",
+                "rsf_hr", "rsf_hr_deer", "start", "start_deer", "full",
+                "full_deer")
+WIDTH <- 15
+HEIGHT <- 12
 
 # Load packages ---------------------------------------------------------------
 library(tidyverse)
@@ -101,11 +106,13 @@ LABEL <- c(
   main = "Main effects",
   null = "Null (movement + HR)"
 )
+LABEL <- c(LABEL, stats::setNames(paste(LABEL, "+ deer"),
+                                  paste0(names(LABEL), "_deer")))
 df <- r |>
   mutate(config = factor(config, levels = COMPLEXITY),
          label = factor(LABEL[as.character(config)],
                         levels = LABEL[COMPLEXITY]),
-         season = factor(season, levels = c("fa", "nb", "pf")))
+         season = factor(season, levels = c("br", "fa", "nb", "pf")))
 
 per_season <- df |>
   distinct(season, n_deer, n_steps) |>
@@ -129,7 +136,7 @@ p <- ggplot(df, aes(x = per_deer, y = label)) +
             size = 3, colour = "#52514e") +
   scale_colour_manual(values = c(`FALSE` = "#d9c4bb", `TRUE` = "#eb6834"),
                       guide = "none") +
-  facet_wrap(~season, ncol = 1, scales = "free_x",
+  facet_wrap(~season, ncol = 2, scales = "free_x",
              labeller = labeller(season = strip)) +
   scale_x_continuous(expand = expansion(mult = c(0.22, 0.06))) +
   labs(
@@ -141,7 +148,8 @@ p <- ggplot(df, aes(x = per_deer, y = label)) +
       "model sits at 0; the others show what they\ngive up, in held-out ",
       "log score per deer-year. Anything right of the dashed line is ",
       "within ", THRESHOLD, " of the best,\nand the simplest of those is ",
-      "the selected model, drawn solid.\n\n",
+      "the selected model, drawn solid. A deer twin adds the animal id to ",
+      "every block, with trees 3 deep.\n\n",
       "Per deer-year favours seasons with longer tracks, so the ",
       "per-100-step gaps are printed with the table."
     ),

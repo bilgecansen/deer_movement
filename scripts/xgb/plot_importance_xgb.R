@@ -5,15 +5,14 @@
 #' Which type that is comes from the same rule plot_models_xgb.R applies —
 #' the simplest one within THRESHOLD log units per deer of the best — so
 #' the two scripts always describe the same model. Keep the two
-#' configuration blocks in step. A season whose selected model is the null
-#' type has nothing ranked; it is skipped, and saying so is part of the
-#' output.
+#' configuration blocks in step. A season whose selected model is a null
+#' type (null or null_deer) has nothing ranked; it is skipped, and saying so
+#' is part of the output. In a deer type a variable's importance includes
+#' its deer-specific part; deer itself is not ranked.
 #'
-#' Each ranked block carries a noise column, and they are drawn in blue.
-#' A variable earns its place by beating its block's noise column, not by
-#' clearing zero: the habitat one has come out slightly negative while the
-#' FAMD one sits clearly above zero, so reading the FAMD axes against zero
-#' overstates them.
+#' Each ranked block carries a noise column, drawn in grey. A variable
+#' earns its place by beating its block's noise column, not by clearing
+#' zero.
 #'
 #' Two nulls appear on one axis when the selected model carries the
 #' start-of-step block. End-point columns are shuffled within a stratum —
@@ -44,7 +43,9 @@
 # Must match plot_models_xgb.R, or this figure describes a model the
 # selection did not pick.
 THRESHOLD <- 3
-COMPLEXITY <- c("null", "main", "rsf", "rsf_hr", "start", "full")
+COMPLEXITY <- c("null", "null_deer", "main", "main_deer", "rsf", "rsf_deer",
+                "rsf_hr", "rsf_hr_deer", "start", "start_deer", "full",
+                "full_deer")
 # "deer" reads against the gate; "steps100" puts seasons on one axis
 PER <- "deer"
 WIDTH <- 9
@@ -214,9 +215,9 @@ plot_season <- function(season, config) {
 }
 
 for (i in seq_len(nrow(selected))) {
-  if (selected$config[i] == "null") {
-    cat(sprintf("%s: selected model is the null, nothing ranked to show\n",
-                selected$season[i]))
+  if (selected$config[i] %in% c("null", "null_deer")) {
+    cat(sprintf("%s: selected model is '%s', nothing ranked to show\n",
+                selected$season[i], selected$config[i]))
     next
   }
   plot_season(selected$season[i], selected$config[i])

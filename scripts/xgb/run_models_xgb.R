@@ -1,15 +1,16 @@
 #' @description
 #' Run fit_model_xgb.R for every model type and season, a few at a time.
 #'
-#' Eighteen jobs — six model types x three seasons — each one whole-data fit
-#' plus N_FOLDS more for the held-out score, with every fold replayed on its
-#' held-out steps for the split gain. The jobs are independent, so they run
-#' in parallel with a share of the threads each rather than in sequence
-#' with all of them; xgboost scales sublinearly with threads, so that is
-#' the faster way round.
+#' Forty-eight jobs — twelve model types (six and their deer twins) x four
+#' seasons — each one whole-data fit plus N_FOLDS more for the held-out
+#' score, with every fold of a type without deer replayed on its held-out
+#' steps for the split gain. The jobs are independent, so they run in
+#' parallel with a share of the threads each rather than in sequence with
+#' all of them; xgboost scales sublinearly with threads, so that is the
+#' faster way round.
 #'
-#' fa and nb are interleaved so at most two of the large-season jobs hold
-#' memory at once.
+#' The seasons are interleaved so the nb jobs, the largest, are spread out
+#' rather than holding memory at once.
 #'
 #' SKIP_EXISTING fits only the cells with no result yet, for adding a model
 #' type. It is safe only while the season tables are unchanged: every type
@@ -24,7 +25,9 @@
 
 # Configuration ---------------------------------------------------------------
 SEASONS <- c("br", "fa", "nb", "pf")
-CONFIGS <- c("full", "rsf", "start", "main", "rsf_hr", "null")
+CONFIGS <- c("full", "rsf", "start", "main", "rsf_hr", "null", "full_deer",
+             "rsf_deer", "start_deer", "main_deer", "rsf_hr_deer",
+             "null_deer")
 # TRUE: fit only the cells with no result file yet (see above)
 SKIP_EXISTING <- FALSE
 # Jobs at a time, and threads each. N_PAR * N_THREAD should leave the

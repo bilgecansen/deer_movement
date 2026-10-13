@@ -106,9 +106,9 @@ for (i in seq_len(nrow(deer_mvt))) {
       )
 
       # Non-parametric design, the one the xgb path reads: 100 random points
-      # uniform in distance, 90 out to the deer's 90th-percentile step and
-      # 10 beyond it, each carrying log_w, the ground it stands for (see
-      # nonp_random_points) -> stp.random.nonp / stp.var.nonp
+      # uniform in distance out to the deer's longest step with a turning
+      # angle, every one counting the same (see nonp_random_points) ->
+      # stp.random.nonp / stp.var.nonp
       one_deer <- make_random_pt_extraction(
         data = one_deer,
         n_pts = 100,
