@@ -13,7 +13,7 @@
 #' ndvi_end in nb is the case in point: the winter season runs into a year
 #' whose NDVI stack it does not load.
 #'
-#' Columns written: the movement block (sl_, tod_day, cos_ta), the habitat
+#' Columns written: the movement block (sl_, tod_hour, cos_ta), the habitat
 #' variables in HAB_VARS, landcover as integer codes for xgboost's
 #' categorical splits, and the FAMD axes. FAMD stays NA off forest; nothing
 #' is filled in, and no model type uses it.

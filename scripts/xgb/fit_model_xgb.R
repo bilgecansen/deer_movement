@@ -17,10 +17,11 @@
 #' readings agree to within 3% and the effects add, which is what says they
 #' are separable.
 #'
-#' The fifth, rsf_hr, is rsf with the home-range-centre column also offered
-#' to the habitat trees, so it can interact with them. Its own block stays.
+#' Two more, rsf_hr and full_hr, are rsf and full with the home-range-centre
+#' column also offered to the habitat trees, so it can interact with them.
+#' Its own block stays.
 #'
-#' The sixth, null, is movement and the home-range centre alone, the
+#' The last, null, is movement and the home-range centre alone, the
 #' xgboost version of the GAM null. It ranks nothing, so its result file
 #' holds a held-out score and empty importance and split-gain tables.
 #'
@@ -32,14 +33,14 @@
 #' type's split gain is not computed: the pair scores are read only at
 #' depth 2. The id-to-animal mapping is saved as `deer_levels`.
 #'
-#' 500 rounds per BOOSTER in every type, so `full` and `start` carry 2,000
-#' trees, `rsf`, `rsf_hr` and `main` 1,500, and `null` 1,000. The block is
-#' the unit: at equal rounds per block, habitat is fitted the same way in all
-#' of them, so a difference between them is down to what actually differs.
-#' Equalising total trees would instead hand the three-booster types 667
-#' rounds each, giving their habitat blocks a third more trees than the
-#' four-booster ones, and push them past the round count that won on
-#' held-out score.
+#' 500 rounds per BOOSTER in every type, so `full`, `full_hr` and `start`
+#' carry 2,000 trees, `rsf`, `rsf_hr` and `main` 1,500, and `null` 1,000.
+#' The block is the unit: at equal rounds per block, habitat is fitted the
+#' same way in all of them, so a difference between them is down to what
+#' actually differs. Equalising total trees would instead hand the
+#' three-booster types 667 rounds each, giving their habitat blocks a third
+#' more trees than the four-booster ones, and push them past the round
+#' count that won on held-out score.
 #'
 #' The FAMD axes in the pooled table are not used: no model type has a FAMD
 #' block, and they are kept out of the habitat block too.
@@ -119,7 +120,7 @@ if (with_deer) {
 # Which columns go where ------------------------------------------------------
 # nb carries no ndvi_end or ndvi_start; both are derived from the columns
 # present, so nothing here needs to know that.
-MOVE_VARS <- c("sl_", "tod_day", "cos_ta")
+MOVE_VARS <- c("sl_", "tod_hour", "cos_ta")
 HR_VAR <- "HR_center_end"
 # The FAMD axes, which no block uses
 FAMD_COLS <- grep("^famd[0-9]+_end$", names(d), value = TRUE)
@@ -149,7 +150,7 @@ specs <- make_xgb_specs(
   deer_var = "deer_id",
   deer_depth = MAX_DEPTH_DEER
 )
-uses_start <- sub("_deer$", "", CONFIG) %in% c("full", "start")
+uses_start <- sub("_deer$", "", CONFIG) %in% c("full", "start", "full_hr")
 n_steps <- sum(d$case_ == 1)
 n_deer_years <- dplyr::n_distinct(d$key)
 cat(sprintf("%s / %s: %s | %d deer-years, %s steps, %d trees\n",
@@ -158,7 +159,7 @@ cat(sprintf("%s / %s: %s | %d deer-years, %s steps, %d trees\n",
             n_deer_years, formatC(n_steps, format = "d", big.mark = ","),
             length(specs) * N_ROUNDS))
 # Each block and the columns it was given, so a type that drops or adds a
-# block (null, rsf_hr) shows exactly what it fits
+# block (null, rsf_hr, full_hr) shows exactly what it fits
 cat(sprintf("  %-8s %s\n", vapply(specs, `[[`, "", "name"),
             vapply(specs, function(s) paste(s$feats, collapse = ", "), "")),
     sep = "")

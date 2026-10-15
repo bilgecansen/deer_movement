@@ -177,7 +177,7 @@ xgb_scale_label <- function(per = "deer") {
 #' @param dir Folder of wrangled tracks
 #' @return The pooled step table
 build_xgb_pool <- function(keys, hab_vars, famd_vars,
-                           move_vars = c("sl_", "tod_day", "cos_ta"),
+                           move_vars = c("sl_", "tod_hour", "cos_ta"),
                            dir = "data/tracks") {
   pooled <- purrr::map_dfr(seq_along(keys), function(i) {
     one <- readRDS(file.path(dir, sprintf("data_%s.rds", keys[i])))
@@ -188,7 +188,8 @@ build_xgb_pool <- function(keys, hab_vars, famd_vars,
       step_id_ = v$step_id_,
       case_ = as.integer(v$case_),
       sl_ = v$sl_,
-      tod_day = as.numeric(v$tod_start_ == "day"),
+      # Clock hour of the step's start (local time), the GAMs' tod_
+      tod_hour = v$tod_,
       cos_ta = cos(v$ta_),
       landcover = as.integer(factor(v$wiscland_end,
                                     levels = LANDCOVER_LEVELS)) - 1L
@@ -293,7 +294,7 @@ xgb_season_pool <- function(season, dir = "data/xgb",
 #' the trees and stayed under-fitted, and no amount of extra rounds fixed
 #' that without feeding the same rounds to variables that only fit noise.
 #'
-#' `config` picks one of six model types. Four of them differ only in
+#' `config` picks one of seven model types. Four of them differ only in
 #' whether the modifier block is present and whether the ranked trees may
 #' combine variables:
 #'
@@ -308,13 +309,13 @@ xgb_season_pool <- function(season, dir = "data/xgb",
 #' is (full - rsf) and (start - main). On the pooled seasons the two
 #' readings agree to within 3% and the effects add, so they are separable.
 #'
-#' The fifth, rsf_hr, is rsf with the home-range-centre column also offered
-#' to the habitat trees, so it can interact with the habitat variables. The
-#' hr block is kept and still carries its main effect. Habitat trees can
-#' take some of that main effect too, so HR's cells in a heat map carry
-#' main effect as well as interaction.
+#' Two more, rsf_hr and full_hr, are rsf and full with the home-range-centre
+#' column also offered to the habitat trees, so it can interact with the
+#' habitat variables. The hr block is kept and still carries its main
+#' effect. Habitat trees can take some of that main effect too, so HR's
+#' cells in a heat map carry main effect as well as interaction.
 #'
-#' The sixth, null, is the nuisance block alone: movement and the home-range
+#' The last, null, is the nuisance block alone: movement and the home-range
 #' centre, nothing ranked. It is the xgboost version of the GAM null, and
 #' the simplest type in the selection, so a season where no habitat model
 #' beats it by the threshold selects it.
@@ -353,7 +354,7 @@ xgb_season_pool <- function(season, dir = "data/xgb",
 #' @param famd_vars Columns for the switched booster (NA outside their
 #'   domain); empty for none
 #' @param config Model type: "rsf" (default), "full", "start", "main",
-#'   "rsf_hr" or "null", or any of them with "_deer" appended
+#'   "rsf_hr", "full_hr" or "null", or any of them with "_deer" appended
 #' @param start_vars Start-of-step columns, used by "full" and "start"
 #' @param switch_col Column whose NA pattern defines the switch; defaults to
 #'   the first entry of `famd_vars`
@@ -372,10 +373,10 @@ make_xgb_specs <- function(
   hr_var,
   hab_vars,
   famd_vars = character(0),
-  config = c("rsf", "full", "start", "main", "rsf_hr", "null"),
+  config = c("rsf", "full", "start", "main", "rsf_hr", "full_hr", "null"),
   start_vars = character(0),
   switch_col = NULL,
-  move_groups = list(c("sl_", "tod_day"), "cos_ta"),
+  move_groups = list(c("sl_", "tod_hour"), "cos_ta"),
   categorical = character(0),
   learning_rate = 0.05,
   max_depth = 2L,
@@ -387,12 +388,13 @@ make_xgb_specs <- function(
 ) {
   deer <- length(config) == 1 && grepl("_deer$", config)
   config <- match.arg(sub("_deer$", "", config),
-                      c("rsf", "full", "start", "main", "rsf_hr", "null"))
+                      c("rsf", "full", "start", "main", "rsf_hr", "full_hr",
+                        "null"))
   if (deer) {
     max_depth <- deer_depth
   }
   with_deer <- function(feats) if (deer) c(feats, deer_var) else feats
-  has_modifier <- config %in% c("full", "start")
+  has_modifier <- config %in% c("full", "start", "full_hr")
   additive_ranked <- config %in% c("start", "main")
   params_for <- function(constraints = NULL) {
     xgboost::xgb.params(
@@ -445,7 +447,7 @@ make_xgb_specs <- function(
     return(specs)
   }
   hab_feats <- with_deer(
-    if (config == "rsf_hr") c(hab_vars, hr_var) else hab_vars
+    if (config %in% c("rsf_hr", "full_hr")) c(hab_vars, hr_var) else hab_vars
   )
   specs[[length(specs) + 1]] <- block("hab", hab_feats,
                                       ranked_params(hab_feats))
@@ -953,7 +955,7 @@ xgb_cv_importance <- function(d, specs, n_rounds, bag_frac = 0.632,
   scored <- unique(unlist(lapply(specs[ranked], `[[`, "feats")))
   # Nuisance columns are never ranked, wherever else they appear: movement
   # sits in the modifier block too, and the home-range centre in the
-  # habitat block of rsf_hr.
+  # habitat block of rsf_hr and full_hr.
   nuisance <- unlist(lapply(specs, function(s) {
     if (s$name %in% c("move", "hr")) s$feats
   }))

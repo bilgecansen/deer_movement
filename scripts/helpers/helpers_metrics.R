@@ -14,6 +14,25 @@
 #' @param sim Simulated paths dataframe with x_, y_, t_, nsim columns
 #' @return Mean energy score across all matched time steps
 calc_energy_score <- function(obs, sim) {
+  es <- energy_score_steps(obs, sim)
+  if (nrow(es) == 0) {
+    warning("No matching time steps between observed and simulated paths")
+    return(NA_real_)
+  }
+  mean(es$es, na.rm = TRUE)
+}
+
+#' Energy score of the observed position at each matched time step
+#'
+#' The per-step values that calc_energy_score() averages. An observed step
+#' is matched to the simulated positions whose time rounds to the same hour
+#' as its start.
+#'
+#' @param obs Observed path dataframe with x1_, y1_, t1_ columns
+#' @param sim Simulated paths dataframe with x_, y_, t_, nsim columns
+#' @return tibble(t, es), one row per matched observed step; no rows when no
+#'   time matches
+energy_score_steps <- function(obs, sim) {
   # Round times to nearest hour for matching
   obs_times <- lubridate::round_date(obs$t1_, unit = "hour")
   sim_times <- lubridate::round_date(sim$t_, unit = "hour")
@@ -22,22 +41,20 @@ calc_energy_score <- function(obs, sim) {
   shared_times <- intersect(obs_times, sim_times)
 
   if (length(shared_times) == 0) {
-    warning("No matching time steps between observed and simulated paths")
-    return(NA_real_)
+    return(tibble::tibble(t = obs$t1_[0], es = numeric(0)))
   }
 
   # Filter to shared times
   obs_matched <- obs[obs_times %in% shared_times, ]
   sim_matched <- sim[sim_times %in% shared_times, ]
+  sim_hours <- sim_times[sim_times %in% shared_times]
 
   es_per_step <- purrr::map_dbl(1:nrow(obs_matched), function(t) {
     obs_xy <- c(obs_matched$x1_[t], obs_matched$y1_[t])
     obs_time <- lubridate::round_date(obs_matched$t1_[t], unit = "hour")
 
     # Get all sim locations at this time step
-    sim_at_t <- sim_matched[
-      lubridate::round_date(sim_matched$t_, unit = "hour") == obs_time,
-    ]
+    sim_at_t <- sim_matched[sim_hours == obs_time, ]
 
     if (nrow(sim_at_t) == 0) {
       return(NA_real_)
@@ -48,7 +65,7 @@ calc_energy_score <- function(obs, sim) {
     scoringRules::es_sample(obs_xy, dat = sim_matrix)
   })
 
-  mean(es_per_step, na.rm = TRUE)
+  tibble::tibble(t = obs_matched$t1_, es = es_per_step)
 }
 
 #' Score agreement between two ctmm models via integrated absolute difference

@@ -1,6 +1,6 @@
 #' @description
 #' Compare the model types within each season and pick one, separately for
-#' the six types without deer and for their deer twins (the animal id in
+#' the seven types without deer and for their deer twins (the animal id in
 #' every block, see make_xgb_specs()). Each family gets its own figure and
 #' its own selected model.
 #'
@@ -9,14 +9,15 @@
 #' that season. The threshold is the pipeline's own gate 3, where a model
 #' must beat the null by 3 log units for a deer.
 #'
-#' Complexity runs null < main < rsf < rsf_hr < start < full in both
-#' families. The null type is movement and the home-range centre alone, so
-#' if no other type beats it by the threshold, the season selects it: no
-#' habitat model is worth it there. rsf_hr is rsf with one more variable
-#' allowed to interact, so it sits just above rsf. Its place against start
-#' and full, which it is not nested in, is a judgment call, as is rsf
-#' against start — fewer trees but interactions, against more trees but
-#' additive.
+#' Complexity runs null < main < rsf < rsf_hr < start < full < full_hr in
+#' both families. The null type is movement and the home-range centre
+#' alone, so if no other type beats it by the threshold, the season selects
+#' it: no habitat model is worth it there. rsf_hr is rsf with one more
+#' variable allowed to interact, so it sits just above rsf, and full_hr
+#' stands to full as rsf_hr to rsf, so it comes last. rsf_hr's place
+#' against start and full, which it is not nested in, is a judgment call,
+#' as is rsf against start — fewer trees but interactions, against more
+#' trees but additive.
 #'
 #' Per-deer favours seasons with longer tracks: nb carries about 390 steps
 #' per deer-year against 140-200 in the other seasons, so the same per-step
@@ -34,9 +35,9 @@
 # a candidate; the simplest candidate wins.
 THRESHOLD <- 3
 # Simplest first, the same order in both families
-COMPLEXITY <- c("null", "main", "rsf", "rsf_hr", "start", "full")
+COMPLEXITY <- c("null", "main", "rsf", "rsf_hr", "start", "full", "full_hr")
 WIDTH <- 15
-HEIGHT <- 8
+HEIGHT <- 9
 
 # Load packages ---------------------------------------------------------------
 library(tidyverse)
@@ -109,6 +110,7 @@ if (all(c("full", "rsf", "start", "main") %in% names(w))) {
 
 # Figures ---------------------------------------------------------------------
 LABEL <- c(
+  full_hr = "Movement, HR and RSF Interactions",
   full = "Movement and RSF Interactions",
   rsf = "RSF Interactions",
   rsf_hr = "RSF and HR Interactions",

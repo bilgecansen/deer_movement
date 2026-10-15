@@ -25,10 +25,10 @@
 #'     helper changes.
 #'   * Against a design decision: the table is the canonical training set,
 #'     every candidate starts with the same chance, the home-range centre
-#'     reaches the habitat trees only in rsf_hr, a deer twin carries the
-#'     animal id in every block, the threshold is the same in every script,
-#'     the stored results came from the current pools and the current
-#'     settings. These catch a misunderstanding rather than a typo.
+#'     reaches the habitat trees only in rsf_hr and full_hr, a deer twin
+#'     carries the animal id in every block, the threshold is the same in
+#'     every script, the stored results came from the current pools and the
+#'     current settings. These catch a misunderstanding rather than a typo.
 #' Do not delete either kind.
 #'
 #' Sections:
@@ -285,7 +285,7 @@ h0 <- p0 * (1 - p0)
 #   hab       the environmental candidates at the endpoint     ranked
 # move + hr mirror the GAM null, so whatever the ranked blocks add is what a
 # variable adds on top of movement and the home-range centre.
-MOVE_VARS <- c("sl_", "tod_day", "cos_ta")
+MOVE_VARS <- c("sl_", "tod_hour", "cos_ta")
 HR_VAR <- "HR_center_end"
 START_VARS <- c(
   intersect(c("wiscland_start", "ndvi_start", "forest_edge_start"), names(d)),
@@ -375,7 +375,8 @@ specs_of <- function(cfg) {
 stopifnot(CONFIG == "full", all.equal(specs, specs_of(CONFIG)))
 names(specs) <- vapply(specs, `[[`, "", "name")
 
-# DESIGN: the twelve model types differ only in what the table below says.
+# DESIGN: the fourteen model types differ only in what the table below
+# says.
 # blocks_of() describes a list of booster specs in the terms the design was
 # agreed in. Section 11 uses it again on the stored results. A type with no
 # habitat block (null) has none of the habitat properties. A deer twin has
@@ -406,27 +407,29 @@ design <- dplyr::bind_rows(
   describe("rsf_hr"),
   describe("start"),
   describe("full"),
+  describe("full_hr"),
   describe("null_deer"),
   describe("main_deer"),
   describe("rsf_deer"),
   describe("rsf_hr_deer"),
   describe("start_deer"),
-  describe("full_deer")
+  describe("full_deer"),
+  describe("full_hr_deer")
 )
 print(as.data.frame(design), row.names = FALSE)
-six <- tibble::tibble(
-  type = c("null", "main", "rsf", "rsf_hr", "start", "full"),
-  habitat = c(FALSE, TRUE, TRUE, TRUE, TRUE, TRUE),
-  modifier = c(FALSE, FALSE, FALSE, FALSE, TRUE, TRUE),
-  hr_in_hab = c(FALSE, FALSE, FALSE, TRUE, FALSE, FALSE),
-  one_variable_trees = c(FALSE, TRUE, FALSE, FALSE, TRUE, FALSE)
+seven <- tibble::tibble(
+  type = c("null", "main", "rsf", "rsf_hr", "start", "full", "full_hr"),
+  habitat = c(FALSE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE),
+  modifier = c(FALSE, FALSE, FALSE, FALSE, TRUE, TRUE, TRUE),
+  hr_in_hab = c(FALSE, FALSE, FALSE, TRUE, FALSE, FALSE, TRUE),
+  one_variable_trees = c(FALSE, TRUE, FALSE, FALSE, TRUE, FALSE, FALSE)
 )
 stopifnot(identical(
   design,
   dplyr::bind_rows(
-    dplyr::mutate(six, deer = FALSE, depth = as.numeric(MAX_DEPTH)),
+    dplyr::mutate(seven, deer = FALSE, depth = as.numeric(MAX_DEPTH)),
     dplyr::mutate(
-      six,
+      seven,
       type = paste0(type, "_deer"),
       deer = TRUE,
       depth = as.numeric(MAX_DEPTH_DEER)
@@ -454,7 +457,7 @@ stopifnot(
   identical(hab_groups, lapply(HAB_VARS, c, DEER_VAR)),
   identical(
     move_groups_deer,
-    list(c("sl_", "tod_day", DEER_VAR), c("cos_ta", DEER_VAR))
+    list(c("sl_", "tod_hour", DEER_VAR), c("cos_ta", DEER_VAR))
   )
 )
 

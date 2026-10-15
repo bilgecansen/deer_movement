@@ -25,7 +25,7 @@
 #'
 #' Nothing is off the scale: distance to the home-range centre is in the
 #' nuisance block, so it is not ranked and cannot dominate the axis — not
-#' even in rsf_hr, where the habitat trees may also use it.
+#' even in rsf_hr and full_hr, where the habitat trees may also use it.
 #'
 #' Values are per deer-year by default, the scale that reads against the
 #' pipeline's delta_logp >= 3 gate; on that scale a dashed line marks
@@ -44,7 +44,7 @@
 # Must match plot_models_xgb.R, or this figure describes a model the
 # selection did not pick.
 THRESHOLD <- 3
-COMPLEXITY <- c("null", "main", "rsf", "rsf_hr", "start", "full")
+COMPLEXITY <- c("null", "main", "rsf", "rsf_hr", "start", "full", "full_hr")
 # "deer" reads against the gate; "steps100" puts seasons on one axis
 PER <- "deer"
 WIDTH <- 9

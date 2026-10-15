@@ -1,8 +1,8 @@
 #' @description
 #' Run fit_model_xgb.R for every model type and season, a few at a time.
 #'
-#' Forty-eight jobs — twelve model types (six and their deer twins) x four
-#' seasons — each one whole-data fit plus N_FOLDS more for the held-out
+#' Fifty-six jobs — fourteen model types (seven and their deer twins) x
+#' four seasons — each one whole-data fit plus N_FOLDS more for the held-out
 #' score, with every fold of a type without deer replayed on its held-out
 #' steps for the split gain. The jobs are independent, so they run in
 #' parallel with a share of the threads each rather than in sequence with
@@ -25,9 +25,9 @@
 
 # Configuration ---------------------------------------------------------------
 SEASONS <- c("br", "fa", "nb", "pf")
-CONFIGS <- c("full", "rsf", "start", "main", "rsf_hr", "null", "full_deer",
-             "rsf_deer", "start_deer", "main_deer", "rsf_hr_deer",
-             "null_deer")
+CONFIGS <- c("full", "rsf", "start", "main", "rsf_hr", "full_hr", "null",
+             "full_deer", "rsf_deer", "start_deer", "main_deer",
+             "rsf_hr_deer", "full_hr_deer", "null_deer")
 # TRUE: fit only the cells with no result file yet (see above)
 SKIP_EXISTING <- FALSE
 # Jobs at a time, and threads each. N_PAR * N_THREAD should leave the

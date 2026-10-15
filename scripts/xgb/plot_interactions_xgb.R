@@ -42,7 +42,7 @@
 # Must match plot_models_xgb.R, or the figures describe a model the
 # selection did not pick.
 THRESHOLD <- 3
-COMPLEXITY <- c("null", "main", "rsf", "rsf_hr", "start", "full")
+COMPLEXITY <- c("null", "main", "rsf", "rsf_hr", "start", "full", "full_hr")
 WIDTH <- 9
 # Height grows with the number of pairs
 HEIGHT_BASE <- 2.2
