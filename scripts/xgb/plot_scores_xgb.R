@@ -1,44 +1,45 @@
 #' @description
-#' Violin plots of the path-simulation scores: one panel per score, one
-#' violin per season, one point per deer-year. A deer-year's value is that
-#' of whichever of its season's deer models scored better on that score
-#' (higher is better for all three), so each score can come from a
-#' different model.
+#' Violin plots of the two path filters' scores, HR overlap and svf
+#' agreement: one panel per score, one violin per season, one point per
+#' deer-year. A deer-year's value is that of whichever of its season's deer
+#' models scored better on that score (higher is better for both), so each
+#' score can come from a different model.
 #'
-#' The energy score enters as p_excd, as in the amt and GAM filters: the
-#' share of the deer-year's real step lengths longer than the energy score,
-#' rather than in metres, which would mostly reflect how far each deer
-#' moves.
-#'
-#' Input:  filters/xgb/scores_<set>/scores_xgb_<key>.rds (score_sims_xgb.R);
-#'         read per deer-year, so a run still in progress can be plotted
-#' Output: plots/scores_xgb_<set>.png and .pdf, and a summary printed
+#' Input:  filters/xgb/scores_<tag>/scores_xgb_<key>.rds (score_sims_xgb.R),
+#'         <tag> = xgb_scores_tag(SET, REACH); read per deer-year, so a run
+#'         still in progress can be plotted
+#' Output: plots/scores_xgb_<tag>.png and .pdf, and a summary printed
 #'
 #' Configuration: edit the block below before running.
 
 # Configuration ---------------------------------------------------------------
 # The deer-years to plot: "test" or "train"
-SET <- "test"
+SET <- "train"
+# The reach rule the paths were simulated with: "longest" or "gamma99"
+REACH <- "gamma99"
 # Dashed reference line in each panel
-REFERENCE <- c(hr_overlap = 0.8, svf_agree = 0.8, p_excd = 0.45)
-WIDTH <- 12
+REFERENCE <- c(hr_overlap = 0.8, svf_agree = 0.8)
+WIDTH <- 9
 HEIGHT <- 5.5
 
 # Load packages ---------------------------------------------------------------
 library(tidyverse)
 
-files <- list.files(sprintf("filters/xgb/scores_%s", SET),
+# helper functions
+source("scripts/helper_functions.R")
+
+tag <- xgb_scores_tag(SET, REACH)
+files <- list.files(sprintf("filters/xgb/scores_%s", tag),
                     pattern = "^scores_xgb_.*[.]rds$", full.names = TRUE)
 if (!length(files)) {
-  stop(sprintf("No scores for set '%s'; run score_sims_xgb.R first", SET))
+  stop(sprintf("No scores for '%s'; run score_sims_xgb.R first", tag))
 }
 scores <- purrr::map_dfr(files, readRDS) |> filter(deer)
 
 SEASON <- c(br = "breeding", fa = "fawning", nb = "non-breeding",
             pf = "post-fawning")
 METRIC <- c(hr_overlap = "HR overlap (1 is best)",
-            svf_agree = "svf agreement (1 is best)",
-            p_excd = "P(real step > energy score) (1 is best)")
+            svf_agree = "svf agreement (1 is best)")
 LOWER_BETTER <- character(0)
 
 # The better of the deer models, per deer-year and score
@@ -53,7 +54,7 @@ better <- long |>
   ungroup() |>
   mutate(winner = if_else(simplest, "simplest", "best"))
 
-cat(sprintf("=== %s: %d deer-years scored ===\n", SET,
+cat(sprintf("=== %s: %d deer-years scored ===\n", tag,
             dplyr::n_distinct(scores$key)))
 cat(sprintf("model runs with a failed ctmm fit: %d of %d\n",
             sum(!is.na(scores$ud_error)), nrow(scores)))
@@ -98,8 +99,7 @@ p <- ggplot(plot_data, aes(season, value)) +
       "models with deer (simplest, best) scored better on that score. ",
       "Black bar: median. Dashed line: reference value.\n10 simulated ",
       "paths per model, compared with the ",
-      "real path at the real fix times. Energy score: the share of the ",
-      "deer-year's real steps longer than it (p_excd, as for amt and GAM)."
+      "real path at the real fix times."
     ),
     x = NULL, y = NULL
   ) +
@@ -117,7 +117,7 @@ p <- ggplot(plot_data, aes(season, value)) +
   )
 
 dir.create("plots", showWarnings = FALSE)
-out <- sprintf("plots/scores_xgb_%s", SET)
+out <- sprintf("plots/scores_xgb_%s", tag)
 ggsave(paste0(out, ".png"), p, width = WIDTH, height = HEIGHT, dpi = 150,
        bg = "#fcfcfb")
 ggsave(paste0(out, ".pdf"), p, width = WIDTH, height = HEIGHT,

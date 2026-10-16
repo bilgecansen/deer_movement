@@ -68,6 +68,29 @@ energy_score_steps <- function(obs, sim) {
   tibble::tibble(t = obs_matched$t1_, es = es_per_step)
 }
 
+#' Share of observed steps longer than the energy score at their start
+#'
+#' Each observed step is paired with the energy score of its start
+#' position against the simulated positions at that time
+#' (energy_score_steps()). The share of steps whose length exceeds that
+#' score is the share of steps in which the simulated positions are, on
+#' this score, closer to the real deer than the distance it then moved.
+#' Each step faces its own score, so a few fixes where the simulations are
+#' far off count only against their own steps.
+#'
+#' @param obs Observed steps with x1_, y1_, t1_ and sl_
+#' @param sim Simulated paths dataframe with x_, y_, t_, nsim columns
+#' @return Share in [0, 1]; NA when no step has a score
+calc_p_step <- function(obs, sim) {
+  es <- energy_score_steps(obs, sim)
+  sl <- obs$sl_[match(es$t, obs$t1_)]
+  ok <- !is.na(sl) & !is.na(es$es)
+  if (!any(ok)) {
+    return(NA_real_)
+  }
+  mean(sl[ok] > es$es[ok])
+}
+
 #' Score agreement between two ctmm models via integrated absolute difference
 #' of their model-implied semi-variance functions.
 #'
@@ -126,6 +149,96 @@ svf_score <- function(ms_data, ms_model, ref) {
   }
 
   1 - iad / norm
+}
+
+#' ctmm telemetry from projected coordinates
+#'
+#' Built the way overlap_ud() builds its tracks: EPSG 6610 coordinates go to
+#' longitude/latitude and back into ctmm's own projection.
+#'
+#' @param x,y Coordinates in EPSG 6610 (metres)
+#' @param t Times (POSIXct)
+#' @param projection Optional ctmm projection to put the track in, so that
+#'   several tracks share one coordinate frame
+#' @return A ctmm telemetry object
+telemetry_6610 <- function(x, y, t, projection = NULL) {
+  tel <- tibble::tibble(x = x, y = y, timestamp = t) |>
+    sf::st_as_sf(coords = c("x", "y"), crs = 6610) |>
+    sf::st_transform(4326) |>
+    dplyr::mutate(
+      longitude = sf::st_coordinates(geometry)[, 1],
+      latitude = sf::st_coordinates(geometry)[, 2]
+    ) |>
+    sf::st_drop_geometry() |>
+    as.data.frame() |>
+    ctmm::as.telemetry()
+  if (!is.null(projection)) {
+    ctmm::projection(tel) <- projection
+  }
+  tel
+}
+
+#' Agreement between the observed and the simulated paths' variograms
+#'
+#' Compares the variograms themselves rather than ctmm models fitted to the
+#' paths. The observed path's empirical variogram is set against the mean of
+#' the simulated paths' empirical variograms (ctmm's mean() for
+#' variograms, which averages them lag by lag, weighted by DOF). Both use
+#' ctmm's exact algorithm (fast = FALSE): the default fast one can sit
+#' well below the plain average over pairs of fixes.
+#'
+#' The simulated paths must already be cut to the observed fix times, so
+#' every variogram is built from the same times and shares one lag grid.
+#' ctmm leaves out lag bins that are nearly empty, and which ones can differ
+#' between tracks whose times differ by a minute, so bins are matched by
+#' lag. Bins with no pairs of fixes (DOF < 1) in either curve are dropped.
+#'
+#' Score = 1 - integral |g_obs - g_sim| / max(integral g_obs,
+#' integral g_sim), integrated over log lag, as in svf_score(), and only up
+#' to half the observed path's span: a single path's variogram rests on few
+#' independent pairs beyond that.
+#'
+#' @param obs Observed steps with x1_, y1_, t1_, x2_, y2_, t2_, burst_
+#' @param sim Simulated paths (nsim, x_, y_, t_), cut to the observed fix
+#'   times
+#' @param dt Lag bin width in seconds
+#' @return Numeric scalar in [0, 1]; 1 = identical curves
+variogram_agreement <- function(obs, sim, dt = 4 * 3600) {
+  last <- !duplicated(obs$burst_, fromLast = TRUE)
+  fixes <- dplyr::bind_rows(
+    tibble::tibble(x = obs$x1_, y = obs$y1_, t = obs$t1_),
+    tibble::tibble(x = obs$x2_[last], y = obs$y2_[last], t = obs$t2_[last])
+  ) |>
+    dplyr::arrange(t) |>
+    dplyr::distinct(t, .keep_all = TRUE)
+  z1 <- telemetry_6610(fixes$x, fixes$y, fixes$t)
+  v_obs <- ctmm::variogram(z1, dt = dt, fast = FALSE, trace = FALSE)
+  v_sims <- lapply(sort(unique(sim$nsim)), function(k) {
+    p <- sim[sim$nsim == k, ]
+    z <- telemetry_6610(p$x_, p$y_, p$t_, ctmm::projection(z1))
+    ctmm::variogram(z, dt = dt, fast = FALSE, trace = FALSE)
+  })
+  v_sim <- mean(v_sims)
+
+  obs_bins <- tibble::tibble(bin = round(v_obs$lag / dt), lag = v_obs$lag,
+                             g_obs = v_obs$SVF, dof_obs = v_obs$DOF)
+  sim_bins <- tibble::tibble(bin = round(v_sim$lag / dt), g_sim = v_sim$SVF,
+                             dof_sim = v_sim$DOF)
+  half_span <- diff(range(z1$t)) / 2
+  v <- dplyr::inner_join(obs_bins, sim_bins, by = "bin") |>
+    dplyr::filter(lag > 0, lag <= half_span, dof_obs >= 1, dof_sim >= 1)
+  if (nrow(v) < 2) {
+    return(NA_real_)
+  }
+
+  # Trapezoidal integration on the (uneven) log-lag grid
+  trap <- function(x, y) sum(diff(x) * (y[-1] + y[-length(y)]) / 2)
+  x <- log(v$lag)
+  norm <- max(trap(x, v$g_obs), trap(x, v$g_sim))
+  if (norm == 0 || !is.finite(norm)) {
+    return(NA_real_)
+  }
+  1 - trap(x, abs(v$g_obs - v$g_sim)) / norm
 }
 
 #' Estimate UD overlap and SVF agreement between observed and simulated paths.

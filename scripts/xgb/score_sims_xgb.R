@@ -10,30 +10,43 @@
 #'
 #' The scores are the shared ones in helpers_metrics.R:
 #'   * overlap_ud(): the Bhattacharyya overlap of the real deer's AKDE with
-#'     the mean AKDE of the simulated paths (hr_overlap), and the agreement
-#'     of their ctmm semi-variance functions (svf_agree); 1 is best for both
+#'     the mean AKDE of the simulated paths (hr_overlap); 1 is best. It also
+#'     returns the agreement of the ctmm models fitted to the real and the
+#'     simulated paths, kept as svf_agree_ctmm for comparison only: the mean
+#'     of the simulated paths' fits often does not describe those paths
+#'   * variogram_agreement(): the agreement of the real path's exact
+#'     variogram with the mean of the simulated paths' exact variograms, on
+#'     log lag, up to half the real path's span (svf_agree); 1 is best
 #'   * calc_energy_score(): at each real fix, the energy score of the real
 #'     position against the simulated positions at that time, averaged over
 #'     the fixes; in metres, lower is better
-#'   * p_excd, as the amt and GAM filters compute it: the share of the
-#'     deer-year's real step lengths that are longer than that energy
-#'     score; higher is better, and at least 0.5 when the energy score is
-#'     below the median step length
+#'   * calc_p_step(): the share of the real steps longer than the energy
+#'     score at the fix they start from (p_step); higher is better
+#' The path filters use HR overlap and svf agreement only. The energy score
+#' and p_step are kept in the table for reference: on paths that run free
+#' from the first fix, they mostly reflect the home range after a day or
+#' two.
 #'
 #' Deer-years are scored in parallel, one at a time per worker, the longest
 #' first, and each is saved as it finishes, so an interrupted run resumes
 #' where it stopped. A deer-year that fails is reported and left unscored.
 #'
-#' Inputs:  sims/xgb_paths/ (test) or sims/xgb_paths_train/ (training),
-#'          sims_xgb_<key>.rds from sim_paths_xgb.R; data/tracks/data_<key>.rds
-#' Output:  filters/xgb/scores_<set>/scores_xgb_<key>.rds, one per deer-year,
-#'          and filters/xgb/scores_xgb_<set>.rds, all of them in one table
+#' Inputs:  xgb_sims_dir(SET, REACH): sims/xgb_paths/ (test) or
+#'          sims/xgb_paths_train/ (training), with a "_gamma99" suffix for
+#'          that reach; sims_xgb_<key>.rds from sim_paths_xgb.R;
+#'          data/tracks/data_<key>.rds
+#' Output:  filters/xgb/scores_<tag>/scores_xgb_<key>.rds, one per
+#'          deer-year, and filters/xgb/scores_xgb_<tag>.rds, all of them in
+#'          one table; <tag> is xgb_scores_tag(SET, REACH), e.g. "train" or
+#'          "train_gamma99"
 #'
 #' Configuration: edit the block below before running.
 
 # Configuration ---------------------------------------------------------------
 # The deer-years to score: "test" or "train"
-SET <- "test"
+SET <- "train"
+# The reach rule the paths were simulated with: "longest" or "gamma99"
+REACH <- "gamma99"
 # TRUE: score only the deer types
 DEER_ONLY <- TRUE
 # Deer-years to score: NULL for every simulated one not yet scored
@@ -49,8 +62,9 @@ suppressPackageStartupMessages({
 # helper functions
 source("scripts/helper_functions.R")
 
-sims_dir <- if (SET == "test") "sims/xgb_paths" else "sims/xgb_paths_train"
-out_dir <- sprintf("filters/xgb/scores_%s", SET)
+sims_dir <- xgb_sims_dir(SET, REACH)
+tag <- xgb_scores_tag(SET, REACH)
+out_dir <- sprintf("filters/xgb/scores_%s", tag)
 dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
 if (is.null(KEYS)) {
   files <- list.files(sims_dir, pattern = "^sims_xgb_.*[.]rds$",
@@ -93,15 +107,27 @@ score_one <- function(key) {
              error = conditionMessage(e))
       }
     )
+    svf <- tryCatch(
+      suppressMessages(suppressWarnings(variogram_agreement(obs, sim))),
+      error = function(e) structure(NA_real_, error = conditionMessage(e))
+    )
     pick <- sims$picks[sims$picks$config == cf, ]
     es <- calc_energy_score(obs = obs_es, sim = sim)
+    p_step <- calc_p_step(obs_es, sim)
     tibble::tibble(
-      set = SET, key = key, season = sims$season, config = cf,
+      set = SET, reach_rule = REACH, reach = sims$reach,
+      key = key, season = sims$season, config = cf,
       deer = pick$deer, best = pick$best, simplest = pick$simplest,
-      hr_overlap = ud$bat_uds, svf_agree = ud$svf_agree,
+      hr_overlap = ud$bat_uds, svf_agree = as.numeric(svf),
+      svf_agree_ctmm = ud$svf_agree,
       energy_score = es,
-      p_excd = mean(obs$sl_ > es, na.rm = TRUE),
+      p_step = p_step,
       ud_error = if (is.null(ud$error)) NA_character_ else ud$error,
+      svf_error = if (is.null(attr(svf, "error"))) {
+        NA_character_
+      } else {
+        attr(svf, "error")
+      },
       n_fixes = length(fix_hours),
       seconds = as.numeric(difftime(Sys.time(), t0, units = "secs"))
     )
@@ -133,7 +159,7 @@ scores <- purrr::map_dfr(
   list.files(out_dir, pattern = "^scores_xgb_.*[.]rds$", full.names = TRUE),
   readRDS
 )
-out_path <- sprintf("filters/xgb/scores_xgb_%s.rds", SET)
+out_path <- sprintf("filters/xgb/scores_xgb_%s.rds", tag)
 saveRDS(scores, out_path)
 cat(sprintf("-> %s: %d deer-years, %d rows (%s)\n", out_path,
             dplyr::n_distinct(scores$key), nrow(scores),

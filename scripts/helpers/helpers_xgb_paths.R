@@ -476,3 +476,43 @@ xgb_path_reach <- function(id, season) {
   stopifnot(nrow(train) > 0)
   max(vapply(train$stp, function(s) max(s$sl_[!is.na(s$ta_)]), numeric(1)))
 }
+
+#' Folder of the simulated paths for a set and reach rule
+#'
+#' @param set "test" or "train"
+#' @param reach "longest" or "gamma99" (see sim_paths_xgb.R)
+#' @return Folder path
+xgb_sims_dir <- function(set, reach = "longest") {
+  stopifnot(set %in% c("test", "train"),
+            reach %in% c("longest", "gamma99"))
+  base <- if (set == "test") "sims/xgb_paths" else "sims/xgb_paths_train"
+  if (reach == "longest") base else paste0(base, "_", reach)
+}
+
+#' Tag of the scores for a set and reach rule: the set, plus the rule
+#' unless it is "longest"
+#'
+#' @inheritParams xgb_sims_dir
+#' @return e.g. "train" or "train_gamma99"
+xgb_scores_tag <- function(set, reach = "longest") {
+  stopifnot(set %in% c("test", "train"),
+            reach %in% c("longest", "gamma99"))
+  if (reach == "longest") set else paste0(set, "_", reach)
+}
+
+#' amt's reach for a deer-year: a quantile of its tentative step length
+#'
+#' The gamma that amt::random_steps() fitted to the deer-year's step lengths
+#' when the wrangle drew the amt random points, stored on the track as
+#' attr(stp.var, "sl_"). Its 0.99 quantile, rounded up to the metre, is the
+#' max.dist the amt and GAM kernels stop at. Used here only to set how far a
+#' step can reach; the xgb kernel itself has no step-length distribution.
+#'
+#' @param track One deer-year from data/tracks/
+#' @param p Quantile of the tentative gamma
+#' @return Reach in metres
+xgb_path_reach_gamma <- function(track, p = 0.99) {
+  d <- attr(track$stp.var[[1]], "sl_")
+  stopifnot(identical(d$name, "gamma"))
+  ceiling(stats::qgamma(p, shape = d$params$shape, scale = d$params$scale))
+}

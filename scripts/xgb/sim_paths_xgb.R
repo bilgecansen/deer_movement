@@ -11,9 +11,14 @@
 #' never put back on the real deer. Where the collar's schedule shifts, the
 #' step across the gap before the shifted fix is stretched to end at it
 #' (xgb_path_clock()), so every real fix has a simulated position at its
-#' time. A step reaches at most as far as the
-#' animal's longest step with a turning angle in its training years of the
-#' season (xgb_path_reach()). The kernel is xgb_simulate_paths()'s.
+#' time. How far a step can reach is set by REACH:
+#'   "longest"  the animal's longest step with a turning angle in its
+#'              training years of the season (xgb_path_reach()), the
+#'              furthest any random point reached for it in the fit
+#'   "gamma99"  amt's rule: the 0.99 quantile of the deer-year's tentative
+#'              gamma (xgb_path_reach_gamma()), but never beyond "longest",
+#'              where the model saw no random points
+#' The kernel is xgb_simulate_paths()'s.
 #'
 #' Before any path is drawn, xgb_path_check() confirms the kernel reads the
 #' deer's own observed and random steps as the models were fitted on them.
@@ -26,7 +31,8 @@
 #' Output:  sims/xgb_paths/sims_xgb_<key>.rds for a test year, and
 #'          sims/xgb_paths_train/sims_xgb_<key>.rds for a training year —
 #'          the paths of each model, with the share of each kernel off the
-#'          window and the run time
+#'          window and the run time. With REACH "gamma99" the folders are
+#'          sims/xgb_paths_gamma99/ and sims/xgb_paths_train_gamma99/.
 #'
 #' Configuration: edit the block below before running, or let
 #' run_sims_xgb.R set KEY and N_THREAD.
@@ -37,6 +43,8 @@ N_PATHS <- 10L
 # TRUE: simulate only the deer types
 DEER_ONLY <- TRUE
 STEP_HOURS <- 4
+# How far a step can reach: "longest" or "gamma99" (see above)
+REACH <- "gamma99"
 SEED <- 1L
 N_THREAD <- 1L
 
@@ -78,10 +86,16 @@ fixes <- sort(unique(c(stp$t1_, stp$t2_[last_of_burst])))
 times <- xgb_path_clock(fixes, STEP_HOURS)
 first <- times[1]
 n_steps <- length(times) - 1
-reach <- xgb_path_reach(id, season)
-cat(sprintf("%s: %d steps from %s, reach %.0f m, models %s\n", KEY, n_steps,
-            format(first, "%Y-%m-%d %H:%M"), reach,
-            paste(picks$config, collapse = ", ")))
+stopifnot(REACH %in% c("longest", "gamma99"))
+reach_longest <- xgb_path_reach(id, season)
+reach <- if (REACH == "longest") {
+  reach_longest
+} else {
+  min(xgb_path_reach_gamma(track), reach_longest)
+}
+cat(sprintf("%s: %d steps from %s, reach %.0f m (%s; longest %.0f m), %s\n",
+            KEY, n_steps, format(first, "%Y-%m-%d %H:%M"), reach, REACH,
+            reach_longest, paste(picks$config, collapse = ", ")))
 
 land <- xgb_path_landscape(track, load_landcover(track$year, season),
                            load_ndvi(track$year), load_topo())
@@ -118,10 +132,11 @@ for (nm in names(models)) {
   ))
 }
 
-out_dir <- if (track$set == "test") "sims/xgb_paths" else "sims/xgb_paths_train"
+out_dir <- xgb_sims_dir(track$set, REACH)
 dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
 out_path <- file.path(out_dir, sprintf("sims_xgb_%s.rds", KEY))
 saveRDS(list(key = KEY, season = season, picks = picks, reach = reach,
+             reach_rule = REACH, reach_longest = reach_longest,
              times = times, paths = paths, seconds = seconds,
              score_gap = gaps),
         out_path)

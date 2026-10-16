@@ -13,18 +13,22 @@
 #' as leaves the machine a core.
 #'
 #' SKIP_EXISTING runs only the deer-years with no output yet, to resume an
-#' interrupted run.
+#' interrupted run. REACH is passed to sim_paths_xgb.R and picks how far a
+#' step can reach, and with it the output folder (xgb_sims_dir()).
 #'
 #' Inputs:  as sim_paths_xgb.R
 #' Output:  sims/xgb_paths/sims_xgb_<key>.rds, one per test deer-year, or
 #'          sims/xgb_paths_train/sims_xgb_<key>.rds, one per training
-#'          deer-year, and logs/xgb/sims_<key>.log
+#'          deer-year (with a "_gamma99" suffix on the folder for that
+#'          reach), and logs/xgb/sims_<key>.log (sims_<key>_gamma99.log)
 #'
 #' Configuration: edit the block below before running.
 
 # Configuration ---------------------------------------------------------------
 # The deer-years to simulate: "test" or "train"
-SET <- "test"
+SET <- "train"
+# How far a step can reach: "longest" or "gamma99" (see sim_paths_xgb.R)
+REACH <- "gamma99"
 SKIP_EXISTING <- TRUE
 N_PAR <- parallel::detectCores() - 1L
 N_THREAD <- 1L
@@ -49,11 +53,17 @@ jobs <- deer |>
            as.numeric(difftime(max(s$t2_), min(s$t1_), units = "hours"))
          })) |>
   select(key, id, season, hours) |>
-  left_join(longest, by = c("id", "season")) |>
-  # Steps times the cells within reach, the kernel's work
-  arrange(desc(hours * reach^2))
+  left_join(longest, by = c("id", "season"))
 stopifnot(!anyNA(jobs$reach))
-out_dir <- if (SET == "test") "sims/xgb_paths" else "sims/xgb_paths_train"
+if (REACH == "gamma99") {
+  gamma99 <- purrr::map_dbl(jobs$key, function(k) {
+    xgb_path_reach_gamma(readRDS(sprintf("data/tracks/data_%s.rds", k)))
+  })
+  jobs$reach <- pmin(gamma99, jobs$reach)
+}
+# Steps times the cells within reach, the kernel's work
+jobs <- arrange(jobs, desc(hours * reach^2))
+out_dir <- xgb_sims_dir(SET, REACH)
 if (SKIP_EXISTING) {
   done <- file.exists(file.path(out_dir, sprintf("sims_xgb_%s.rds", jobs$key)))
   cat(sprintf("skipping %d deer-years that already have paths\n", sum(done)))
@@ -69,6 +79,7 @@ line_of <- function(pattern) {
 }
 i_key <- line_of("^KEY <- ")
 i_thread <- line_of("^N_THREAD <- ")
+i_reach <- line_of("^REACH <- ")
 
 dir.create("logs/xgb", showWarnings = FALSE, recursive = TRUE)
 
@@ -82,14 +93,19 @@ for (i in seq_len(nrow(jobs))) {
     Sys.sleep(POLL_SECONDS)
   }
   k <- jobs$key[i]
-  # The deer-year and thread count are set by rewriting those two lines
-  # into a temporary copy; the script on disk is left alone.
+  # The deer-year, thread count and reach rule are set by rewriting those
+  # lines into a temporary copy; the script on disk is left alone.
   tmp <- tempfile(pattern = sprintf("sim_paths_xgb_%s_", k), fileext = ".R")
   patched <- lines
   patched[i_key] <- sprintf('KEY <- "%s"', k)
   patched[i_thread] <- sprintf("N_THREAD <- %dL", N_THREAD)
+  patched[i_reach] <- sprintf('REACH <- "%s"', REACH)
   writeLines(patched, tmp)
-  log <- sprintf("logs/xgb/sims_%s.log", k)
+  log <- if (REACH == "longest") {
+    sprintf("logs/xgb/sims_%s.log", k)
+  } else {
+    sprintf("logs/xgb/sims_%s_%s.log", k, REACH)
+  }
   cat(sprintf("start %s  (%d of %d, %s)\n", k, i, nrow(jobs),
               format(Sys.time(), "%H:%M")))
   system2("Rscript", tmp, stdout = log, stderr = log, wait = FALSE)
