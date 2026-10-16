@@ -8,14 +8,16 @@
 #'   * simplest  the simplest type within THRESHOLD log units per deer of
 #'               the best, the type plot_models_xgb.R selects
 #' Simulating both shows what the simpler model gives up in prediction. A
-#' type that is both is fitted once.
+#' type that is both is fitted once. Each season's NULL_TYPES are fitted
+#' too: the deer null is the reference of the log-score filter
+#' (logscore_xgb.R).
 #'
 #' The fits are mostly single-threaded R, so they run one thread each, as
 #' many at a time as leaves the machine a core.
 #'
 #' Inputs: results/xgb/compare_<season>_<type>.rds (fit_model_xgb.R)
-#' Output: results/xgb/final_<season>_<type>.rds, one per pick, and
-#'         results/xgb/final_selection.rds, the picks and their roles
+#' Output: results/xgb/final_<season>_<type>.rds, one per pick and null,
+#'         and results/xgb/final_selection.rds, the picks and their roles
 #'
 #' Configuration: edit the block below before running.
 
@@ -23,6 +25,8 @@
 # Log units per deer, and the order of simplicity, as in plot_models_xgb.R
 THRESHOLD <- 3
 COMPLEXITY <- c("null", "main", "rsf", "rsf_hr", "start", "full", "full_hr")
+# Fitted in every season besides the picks
+NULL_TYPES <- "null_deer"
 N_PAR <- parallel::detectCores() - 1L
 N_THREAD <- 1L
 POLL_SECONDS <- 20
@@ -62,6 +66,14 @@ print(as.data.frame(select(picks, season, config, per_deer, best, simplest)),
 dir.create("results/xgb", showWarnings = FALSE, recursive = TRUE)
 saveRDS(select(picks, season, config, deer, type, per_deer, best, simplest),
         "results/xgb/final_selection.rds")
+nulls <- scores |>
+  filter(config %in% NULL_TYPES) |>
+  select(season, config, n_steps)
+stopifnot(nrow(nulls) ==
+            length(NULL_TYPES) * dplyr::n_distinct(scores$season))
+jobs <- bind_rows(select(picks, season, config, n_steps), nulls) |>
+  distinct(season, config, .keep_all = TRUE) |>
+  arrange(desc(n_steps))
 
 script <- "scripts/xgb/fit_final_xgb.R"
 lines <- readLines(script)
@@ -81,12 +93,12 @@ running <- function() {
                  stdout = TRUE, stderr = FALSE))
 }
 
-for (i in seq_len(nrow(picks))) {
+for (i in seq_len(nrow(jobs))) {
   while (running() >= N_PAR) {
     Sys.sleep(POLL_SECONDS)
   }
-  s <- picks$season[i]
-  cf <- picks$config[i]
+  s <- jobs$season[i]
+  cf <- jobs$config[i]
   # The season, model type and thread count are set by rewriting those
   # three lines into a temporary copy; the script on disk is left alone.
   tmp <- tempfile(pattern = sprintf("fit_final_xgb_%s_%s_", s, cf),

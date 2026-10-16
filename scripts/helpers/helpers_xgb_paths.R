@@ -307,6 +307,22 @@ xgb_path_check <- function(track, land, models, statics, deer_ids) {
   invisible(gaps)
 }
 
+#' Offsets to every cell a step can reach
+#'
+#' Every cell whose centre can lie within `reach` of a point anywhere in the
+#' deer's own cell, less that cell itself; the exact distance is taken per
+#' step.
+#'
+#' @param reach Longest step allowed (m)
+#' @param res Cell size (m)
+#' @return Data frame of column (dc) and row (dr) offsets
+xgb_path_offsets <- function(reach, res) {
+  k <- ceiling(reach / res) + 1
+  off <- expand.grid(dc = -k:k, dr = -k:k)
+  off[sqrt(off$dc^2 + off$dr^2) * res <= reach + res &
+        (off$dc != 0 | off$dr != 0), ]
+}
+
 #' Simulate paths from one model
 #'
 #' Every path starts at `start` with a random heading and takes one step
@@ -331,12 +347,7 @@ xgb_path_check <- function(track, land, models, statics, deer_ids) {
 xgb_simulate_paths <- function(model, land, static, start, times, reach,
                                n_paths, deer_id = NA_integer_) {
   res <- land$res
-  # Offsets to every cell whose centre can lie within reach of a point
-  # anywhere in the deer's own cell; the exact distance is taken per step
-  k <- ceiling(reach / res) + 1
-  off <- expand.grid(dc = -k:k, dr = -k:k)
-  off <- off[sqrt(off$dc^2 + off$dr^2) * res <= reach + res &
-               (off$dc != 0 | off$dr != 0), ]
+  off <- xgb_path_offsets(reach, res)
   n_off <- nrow(off)
   n_steps <- length(times) - 1
   x <- matrix(NA_real_, n_steps + 1, n_paths)
@@ -423,6 +434,103 @@ xgb_simulate_paths <- function(model, land, static, start, times, reach,
   attr(out, "off_window") <- off_window
   attr(out, "stopped") <- which(!alive)
   out
+}
+
+#' One-step log score of a deer-year's real steps under one model
+#'
+#' At every real step the kernel of xgb_simulate_paths() is built at the
+#' real start: every cell whose centre lies within `reach`, except the
+#' start's own cell, weighs exp(score) / distance, the turning angle taken
+#' from the step before. The step's log score is the log of the weight of
+#' the cell where the deer ended, over the summed weight of all of them.
+#'
+#' A step is scored only if it has a turning angle (the first step of a
+#' burst has none, and the fit left it out too). A scored step can still
+#' come out without a value:
+#'   "beyond_reach"  its end cell is not among the candidates: further than
+#'                   `reach`, or off the window
+#'   "own_cell"      it ends in the cell it started in, which gets no weight
+#'   "no_weight"     its end cell has a column missing (open water among
+#'                   them) and so no weight
+#'
+#' @param model Model from xgb_path_model()
+#' @param land Landscape from xgb_path_landscape()
+#' @param static Cell scores from xgb_path_static()
+#' @param stp The deer-year's real steps (x1_, y1_, x2_, y2_, t1_, t2_,
+#'   ta_, burst_, sl_)
+#' @param reach Longest step allowed (m)
+#' @param deer_id The deer's id code, for the deer types
+#' @return tibble(step, t1_, sl_, status, logp): one row per step with a
+#'   turning angle; logp is NA unless status is "ok"
+xgb_onestep_logscore <- function(model, land, static, stp, reach,
+                                 deer_id = NA_integer_) {
+  res <- land$res
+  off <- xgb_path_offsets(reach, res)
+  steps <- which(!is.na(stp$ta_))
+  # The step before ends where this one starts, in the same burst
+  prev <- steps - 1L
+  stopifnot(all(prev >= 1), all(stp$burst_[prev] == stp$burst_[steps]),
+            all(stp$x2_[prev] == stp$x1_[steps]),
+            all(stp$y2_[prev] == stp$y1_[steps]))
+  heading <- atan2(stp$y2_[prev] - stp$y1_[prev],
+                   stp$x2_[prev] - stp$x1_[prev])
+  layer_start <- xgb_path_ndvi_layer(stp$t1_[steps], land$ndvi_times)
+  layer_end <- if (attr(static, "reads_ndvi")) {
+    xgb_path_ndvi_layer(stp$t2_[steps], land$ndvi_times)
+  } else {
+    rep(1L, length(steps))
+  }
+
+  out <- lapply(seq_along(steps), function(j) {
+    s <- steps[j]
+    x0 <- stp$x1_[s]
+    y0 <- stp$y1_[s]
+    here <- xgb_path_cell(land, x0, y0)
+    end <- xgb_path_cell(land, stp$x2_[s], stp$y2_[s])
+    row <- (here - 1) %/% land$ncol + 1
+    col <- (here - 1) %% land$ncol + 1
+    cr <- row + off$dr
+    cc <- col + off$dc
+    cx <- land$ext[["xmin"]] + (cc - 0.5) * res
+    cy <- land$ext[["ymax"]] - (cr - 0.5) * res
+    dx <- cx - x0
+    dy <- cy - y0
+    sl <- sqrt(dx^2 + dy^2)
+    keep <- sl <= reach & cr >= 1 & cr <= land$nrow & cc >= 1 &
+      cc <= land$ncol
+    cell <- (cr[keep] - 1) * land$ncol + cc[keep]
+    status <- if (is.na(end) || !end %in% c(here, cell)) {
+      "beyond_reach"
+    } else if (end == here) {
+      "own_cell"
+    } else {
+      "ok"
+    }
+    logp <- NA_real_
+    if (status == "ok") {
+      d <- cbind(
+        data.frame(sl_ = sl[keep], tod_hour = xgb_path_hour(stp$t1_[s]),
+                   cos_ta = cos(atan2(dy[keep], dx[keep]) - heading[j])),
+        xgb_path_start_columns(land, here, layer_start[j])[
+          rep(1L, sum(keep)), , drop = FALSE
+        ],
+        deer_id = deer_id
+      )
+      score <- static[cbind(cell, layer_end[j])]
+      ok <- !is.na(score)
+      score[ok] <- score[ok] + xgb_path_dynamic(model, d[ok, , drop = FALSE])
+      if (is.na(score[cell == end])) {
+        status <- "no_weight"
+      } else {
+        lw <- score[ok] - log(sl[keep][ok])
+        top <- max(lw)
+        logp <- lw[cell[ok] == end] - (top + log(sum(exp(lw - top))))
+      }
+    }
+    tibble::tibble(step = s, t1_ = stp$t1_[s], sl_ = stp$sl_[s],
+                   status = status, logp = logp)
+  })
+  dplyr::bind_rows(out)
 }
 
 #' The simulation clock for one deer-year

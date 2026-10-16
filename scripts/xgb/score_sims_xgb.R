@@ -22,10 +22,11 @@
 #'     the fixes; in metres, lower is better
 #'   * calc_p_step(): the share of the real steps longer than the energy
 #'     score at the fix they start from (p_step); higher is better
-#' The path filters use HR overlap and svf agreement only. The energy score
-#' and p_step are kept in the table for reference: on paths that run free
-#' from the first fix, they mostly reflect the home range after a day or
-#' two.
+#' Of these, HR overlap and svf agreement are path filters
+#' (filter_paths_xgb.R, with the log score of logscore_xgb.R). The energy
+#' score and p_step are kept in the table for reference: on paths that run
+#' free from the first fix, they mostly reflect the home range after a day
+#' or two.
 #'
 #' Deer-years are scored in parallel, one at a time per worker, the longest
 #' first, and each is saved as it finishes, so an interrupted run resumes
