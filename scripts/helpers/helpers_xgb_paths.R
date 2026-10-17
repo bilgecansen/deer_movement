@@ -624,3 +624,224 @@ xgb_path_reach_gamma <- function(track, p = 0.99) {
   stopifnot(identical(d$name, "gamma"))
   ceiling(stats::qgamma(p, shape = d$params$shape, scale = d$params$scale))
 }
+
+# Per-deer-year GAMs scored against xgb ---------------------------------------
+#
+# The xgb log-score filters set each selected model against GAMs fitted to
+# the deer-year alone: the GAM null (fit_null_gam_xgb.R) and the Gilbertson
+# et al. (2025) habitat model (fit_gilbertson_gam_xgb.R). Both are fitted on
+# the wrangle's amt random points and scored on the cells, reach and
+# statuses of xgb_onestep_logscore().
+
+# Endpoint columns a per-deer-year GAM may read, as xgb_path_end_columns()
+# names them; landcover enters the GAMs as the factor wiscland_end
+XGB_GAM_END_VARS <- c("HR_center_end", "ndvi_end", "forest_edge_end",
+                      "elevation_end", "northness_end", "eastness_end",
+                      "wiscland_end")
+
+#' Endpoint columns a fitted per-deer-year GAM reads
+#'
+#' @param fit Fitted mgcv gam
+#' @return The entries of XGB_GAM_END_VARS in its formula
+xgb_gam_end_vars <- function(fit) {
+  intersect(XGB_GAM_END_VARS, all.vars(stats::formula(fit)))
+}
+
+#' A deer-year's steps for a per-deer-year GAM, in mgcv cox.ph form
+#'
+#' The wrangle's amt random points (stp.var: 25 per step, drawn from the
+#' deer-year's own gamma and von Mises), `n_pts` of them kept per step at
+#' random. The points are picked before any step is dropped, so two models
+#' given the same seed are fitted on the same points. They are drawn with
+#' the L'Ecuyer-CMRG generator whatever the caller's, so a seed gives the
+#' same points in a furrr worker (seed = TRUE) and in a plain session; the
+#' caller's generator and its state are left as they were. A step with any of
+#' sl_, ta_, tod_ or `end_vars` missing on any of its rows is dropped whole,
+#' as the pooled tables drop them; open water has no landcover class, so a
+#' step ending on it drops out when wiscland_end is read.
+#'
+#' @param track One deer-year from data/tracks/
+#' @param n_pts Random points kept per step
+#' @param seed Seed for the draw of the points kept
+#' @param end_vars Endpoint columns the model reads (XGB_GAM_END_VARS)
+#' @return prepare_gam_data() output (times, stratum, obs added), with the
+#'   end coordinates and times kept for xgb_gam_check(); wiscland_end, if
+#'   read, as a factor with levels LANDCOVER_LEVELS
+xgb_gam_data <- function(track, n_pts, seed, end_vars = "HR_center_end") {
+  stopifnot(all(end_vars %in% XGB_GAM_END_VARS))
+  v <- as.data.frame(track$stp.var[[1]])
+  kept <- withr::with_seed(
+    seed,
+    v |>
+      dplyr::filter(!case_) |>
+      dplyr::slice_sample(n = n_pts, by = step_id_),
+    .rng_kind = "L'Ecuyer-CMRG",
+    .rng_normal_kind = "Inversion",
+    .rng_sample_kind = "Rejection"
+  )
+  v <- dplyr::bind_rows(dplyr::filter(v, case_), kept) |>
+    dplyr::select(step_id_, case_, x1_, y1_, x2_, y2_, t1_, t2_, sl_, ta_,
+                  tod_, dplyr::all_of(end_vars))
+  if ("wiscland_end" %in% end_vars) {
+    v$wiscland_end <- factor(v$wiscland_end, levels = LANDCOVER_LEVELS)
+  }
+  v <- v |>
+    dplyr::group_by(step_id_) |>
+    dplyr::filter(
+      !any(dplyr::if_any(dplyr::all_of(c("sl_", "ta_", "tod_", end_vars)),
+                         is.na)),
+      sum(case_) == 1,
+      dplyr::n() >= 2
+    ) |>
+    dplyr::ungroup() |>
+    dplyr::arrange(step_id_, dplyr::desc(case_))
+  prepare_gam_data(as.data.frame(v))
+}
+
+#' Endpoint columns of some cells, as a per-deer-year GAM reads them
+#'
+#' @param land Landscape from xgb_path_landscape()
+#' @param cell Cell numbers
+#' @param layer NDVI layer for each cell
+#' @param end_vars Endpoint columns the model reads
+#' @return Data frame of `end_vars`; wiscland_end a factor with levels
+#'   LANDCOVER_LEVELS, NA on open water
+xgb_gam_end_columns <- function(land, cell, layer, end_vars) {
+  d <- xgb_path_end_columns(land, cell, layer)
+  d$wiscland_end <- factor(LANDCOVER_LEVELS[d$landcover + 1L],
+                           levels = LANDCOVER_LEVELS)
+  d[, end_vars, drop = FALSE]
+}
+
+#' Check a per-deer-year GAM's kernel reads the deer-year as its fit did
+#'
+#' On every endpoint the model was fitted on that lies in the window, each
+#' column the kernel builds must equal the stored one, and none may be on a
+#' cell the kernel gives no weight (open water, or a column missing): the
+#' fit's random points were drawn off water. Stops on any difference.
+#'
+#' @param data The fitted rows, from xgb_gam_data()
+#' @param land Landscape from xgb_path_landscape()
+#' @param end_vars Endpoint columns the model reads
+#' @return Invisibly, the largest difference over the numeric columns
+xgb_gam_check <- function(data, land, end_vars) {
+  cell <- xgb_path_cell(land, data$x2_, data$y2_)
+  inside <- !is.na(cell)
+  layer <- if ("ndvi_end" %in% end_vars) {
+    xgb_path_ndvi_layer(data$t2_[inside], land$ndvi_times)
+  } else {
+    rep(1L, sum(inside))
+  }
+  k <- xgb_gam_end_columns(land, cell[inside], layer, end_vars)
+  wet <- is.na(land$cols$landcover[cell[inside]]) |
+    !stats::complete.cases(k)
+  if (any(wet)) {
+    stop(sprintf("%d fitted endpoints lie on cells with no weight",
+                 sum(wet)))
+  }
+  gaps <- vapply(end_vars, function(v) {
+    if (v == "wiscland_end") {
+      as.numeric(any(as.character(k[[v]]) !=
+                       as.character(data[[v]][inside])))
+    } else {
+      max(abs(k[[v]] - data[[v]][inside]))
+    }
+  }, numeric(1))
+  if (any(!is.finite(gaps) | gaps > 1e-6)) {
+    stop(sprintf("Kernel columns differ from the fitted: %s",
+                 paste(sprintf("%s %.3g", end_vars, gaps), collapse = ", ")))
+  }
+  invisible(max(gaps))
+}
+
+#' One-step log score of a deer-year's real steps under a per-deer-year GAM
+#'
+#' The cells, reach and statuses of xgb_onestep_logscore(): every cell whose
+#' centre lies within `reach` of the real start, except the start's own
+#' cell, the turning angle taken from the step before. The GAM was fitted
+#' on random points drawn from the deer-year's gamma and von Mises, so its
+#' score corrects those: a cell weighs
+#'   exp(eta + log tentative density) / distance,
+#' as in gam_kernel_weights(). eta is the GAM's linear predictor and the
+#' tentative density comes from gam_movement_kernel(). The endpoint columns
+#' are read as xgb_path_end_columns() reads them, NDVI from the layer of the
+#' real step's end time. Open water, where landcover is NA, gets no weight,
+#' nor does a cell with any column the GAM reads missing.
+#'
+#' @param fit The deer-year's fitted GAM (mgcv cox.ph)
+#' @param land Landscape from xgb_path_landscape()
+#' @param stp The deer-year's real steps
+#' @param reach Longest step allowed (m)
+#' @param sl_distr,ta_distr The tentative distributions, attr(stp.var, "sl_")
+#'   and attr(stp.var, "ta_")
+#' @return tibble(step, t1_, sl_, status, logp), as xgb_onestep_logscore()
+xgb_gam_onestep_logscore <- function(fit, land, stp, reach, sl_distr,
+                                     ta_distr) {
+  res <- land$res
+  off <- xgb_path_offsets(reach, res)
+  end_vars <- xgb_gam_end_vars(fit)
+  steps <- which(!is.na(stp$ta_))
+  prev <- steps - 1L
+  stopifnot(all(prev >= 1), all(stp$burst_[prev] == stp$burst_[steps]),
+            all(stp$x2_[prev] == stp$x1_[steps]),
+            all(stp$y2_[prev] == stp$y1_[steps]))
+  heading <- atan2(stp$y2_[prev] - stp$y1_[prev],
+                   stp$x2_[prev] - stp$x1_[prev])
+  layer_end <- if ("ndvi_end" %in% end_vars) {
+    xgb_path_ndvi_layer(stp$t2_[steps], land$ndvi_times)
+  } else {
+    rep(1L, length(steps))
+  }
+
+  out <- lapply(seq_along(steps), function(j) {
+    s <- steps[j]
+    x0 <- stp$x1_[s]
+    y0 <- stp$y1_[s]
+    here <- xgb_path_cell(land, x0, y0)
+    end <- xgb_path_cell(land, stp$x2_[s], stp$y2_[s])
+    row <- (here - 1) %/% land$ncol + 1
+    col <- (here - 1) %% land$ncol + 1
+    cr <- row + off$dr
+    cc <- col + off$dc
+    cx <- land$ext[["xmin"]] + (cc - 0.5) * res
+    cy <- land$ext[["ymax"]] - (cr - 0.5) * res
+    dx <- cx - x0
+    dy <- cy - y0
+    sl <- sqrt(dx^2 + dy^2)
+    keep <- sl <= reach & cr >= 1 & cr <= land$nrow & cc >= 1 &
+      cc <= land$ncol
+    cell <- (cr[keep] - 1) * land$ncol + cc[keep]
+    status <- if (is.na(end) || !end %in% c(here, cell)) {
+      "beyond_reach"
+    } else if (end == here) {
+      "own_cell"
+    } else {
+      "ok"
+    }
+    logp <- NA_real_
+    if (status == "ok") {
+      k <- xgb_gam_end_columns(land, cell, rep(layer_end[j], length(cell)),
+                               end_vars)
+      dry <- !is.na(land$cols$landcover[cell]) & stats::complete.cases(k)
+      if (!dry[cell == end]) {
+        status <- "no_weight"
+      } else {
+        ta <- atan2(dy[keep][dry], dx[keep][dry]) - heading[j]
+        nd <- data.frame(
+          sl_ = sl[keep][dry],
+          ta_ = atan2(sin(ta), cos(ta)),
+          tod_ = xgb_path_hour(stp$t1_[s]),
+          k[dry, , drop = FALSE]
+        )
+        eta <- as.numeric(stats::predict(fit, newdata = nd, type = "link"))
+        lw <- eta + gam_movement_kernel(nd, sl_distr, ta_distr) -
+          log(nd$sl_)
+        top <- max(lw)
+        logp <- lw[cell[dry] == end] - (top + log(sum(exp(lw - top))))
+      }
+    }
+    tibble::tibble(step = s, t1_ = stp$t1_[s], sl_ = stp$sl_[s],
+                   status = status, logp = logp)
+  })
+  dplyr::bind_rows(out)
+}

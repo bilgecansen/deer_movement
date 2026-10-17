@@ -58,10 +58,11 @@ prepare_gam_data <- function(ssf_data) {
 #' @param gam_data Output of prepare_gam_data() for one deer
 #' @param formula  RHS-only model formula string
 #' @param select   Use the double-penalty shrinkage (default TRUE)
+#' @param ...      Further arguments to mgcv::gam(), e.g. paraPen
 #' @return List with gam (fitted model or "Error"), coeff (tidy parametric
 #'   terms), aic (AIC value), and smooth_diag (per-smooth edf / k' audit, or
 #'   NULL if the fit failed)
-fit_gam_mod <- function(gam_data, formula, select = TRUE) {
+fit_gam_mod <- function(gam_data, formula, select = TRUE, ...) {
   full_formula <- stats::as.formula(
     paste("cbind(times, stratum) ~", formula)
   )
@@ -84,7 +85,8 @@ fit_gam_mod <- function(gam_data, formula, select = TRUE) {
       # Model GS "predict unobserved levels" property). Verified to leave the
       # fits for visited classes (coefficients and variance
       # components) unchanged.
-      drop.unused.levels = FALSE
+      drop.unused.levels = FALSE,
+      ...
     ),
     error = function(err) "Error"
   )
