@@ -22,11 +22,17 @@
 #'          deer-year (with a "_gamma99" suffix on the folder for that
 #'          reach), and logs/xgb/sims_<key>.log (sims_<key>_gamma99.log)
 #'
-#' Configuration: edit the block below before running.
+#' Configuration: edit the block below before running. The set can also be
+#' given on the command line: Rscript scripts/xgb/run_sims_xgb.R test
 
 # Configuration ---------------------------------------------------------------
 # The deer-years to simulate: "test" or "train"
 SET <- "train"
+.args <- commandArgs(trailingOnly = TRUE)
+if (length(.args) >= 1) {
+  SET <- .args[1]
+}
+stopifnot(SET %in% c("test", "train"))
 # How far a step can reach: "longest" or "gamma99" (see sim_paths_xgb.R)
 REACH <- "gamma99"
 SKIP_EXISTING <- TRUE
@@ -56,10 +62,10 @@ jobs <- deer |>
   left_join(longest, by = c("id", "season"))
 stopifnot(!anyNA(jobs$reach))
 if (REACH == "gamma99") {
-  gamma99 <- purrr::map_dbl(jobs$key, function(k) {
-    xgb_path_reach_gamma(readRDS(sprintf("data/tracks/data_%s.rds", k)))
+  jobs$reach <- purrr::map_dbl(jobs$key, function(k) {
+    xgb_path_reach_rule(readRDS(sprintf("data/tracks/data_%s.rds", k)),
+                        REACH)
   })
-  jobs$reach <- pmin(gamma99, jobs$reach)
 }
 # Steps times the cells within reach, the kernel's work
 jobs <- arrange(jobs, desc(hours * reach^2))

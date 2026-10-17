@@ -15,9 +15,12 @@
 #'   "longest"  the animal's longest step with a turning angle in its
 #'              training years of the season (xgb_path_reach()), the
 #'              furthest any random point reached for it in the fit
-#'   "gamma99"  amt's rule: the 0.99 quantile of the deer-year's tentative
-#'              gamma (xgb_path_reach_gamma()), but never beyond "longest",
-#'              where the model saw no random points
+#'   "gamma99"  amt's rule: the 0.99 quantile of a tentative gamma
+#'              (xgb_path_reach_gamma()), but never beyond "longest", where
+#'              the model saw no random points. The gamma is the deer-year's
+#'              own in training and, for a test deer-year, that of the
+#'              training year of the same animal and season closest in time
+#'              (xgb_path_reach_rule())
 #' The kernel is xgb_simulate_paths()'s.
 #'
 #' Before any path is drawn, xgb_path_check() confirms the kernel reads the
@@ -88,11 +91,7 @@ first <- times[1]
 n_steps <- length(times) - 1
 stopifnot(REACH %in% c("longest", "gamma99"))
 reach_longest <- xgb_path_reach(id, season)
-reach <- if (REACH == "longest") {
-  reach_longest
-} else {
-  min(xgb_path_reach_gamma(track), reach_longest)
-}
+reach <- xgb_path_reach_rule(track, REACH)
 cat(sprintf("%s: %d steps from %s, reach %.0f m (%s; longest %.0f m), %s\n",
             KEY, n_steps, format(first, "%Y-%m-%d %H:%M"), reach, REACH,
             reach_longest, paste(picks$config, collapse = ", ")))

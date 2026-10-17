@@ -31,11 +31,20 @@
 #'          totals), and filters/xgb/logscore_xgb_<tag>.rds, the totals of
 #'          all of them; <tag> is xgb_scores_tag(SET, REACH)
 #'
-#' Configuration: edit the block below before running.
+#' Configuration: edit the block below before running. The set can also be
+#' given on the command line: Rscript scripts/xgb/logscore_xgb.R test
+#'
+#' A test deer-year's reach comes from training, never from its own steps
+#' (xgb_path_reach_rule()).
 
 # Configuration ---------------------------------------------------------------
 # The deer-years to score: "test" or "train"
 SET <- "train"
+.args <- commandArgs(trailingOnly = TRUE)
+if (length(.args) >= 1) {
+  SET <- .args[1]
+}
+stopifnot(SET %in% c("test", "train"))
 # The reach rule, as the paths were simulated: "longest" or "gamma99"
 REACH <- "gamma99"
 NULL_TYPE <- "null_deer"
@@ -88,12 +97,7 @@ score_one <- function(key) {
     i - 1L
   })
 
-  reach_longest <- xgb_path_reach(track$id, season)
-  reach <- if (REACH == "longest") {
-    reach_longest
-  } else {
-    min(xgb_path_reach_gamma(track), reach_longest)
-  }
+  reach <- xgb_path_reach_rule(track, REACH)
   land <- xgb_path_landscape(track, load_landcover(track$year, season),
                              load_ndvi(track$year), load_topo())
   v <- track$stp.var.nonp[[1]]

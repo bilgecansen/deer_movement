@@ -569,6 +569,25 @@ xgb_path_clock <- function(fixes, step_hours = 4, tolerance_mins = 30) {
   as.POSIXct(out, origin = "1970-01-01", tz = lubridate::tz(fixes))
 }
 
+#' The canonical training deer-years, read once per session
+#'
+#' canonical_deer() of the full deer list, the training set only, with the
+#' columns the path helpers read (id, season, year and the observed steps).
+#' The list is read on the first call and kept for the rest of the R
+#' session.
+#'
+#' @return Data frame, one row per training deer-year
+xgb_train_deer <- local({
+  cache <- NULL
+  function() {
+    if (is.null(cache)) {
+      d <- canonical_deer(readRDS("library/SW_filtered_deer.RData"))
+      cache <<- d[d$set == "train", c("id", "season", "year", "stp")]
+    }
+    cache
+  }
+})
+
 #' Reach of a step for one animal in one season
 #'
 #' The animal's longest step with a turning angle over its training years
@@ -578,9 +597,8 @@ xgb_path_clock <- function(fixes, step_hours = 4, tolerance_mins = 30) {
 #' @param season Season code
 #' @return Reach in metres
 xgb_path_reach <- function(id, season) {
-  train <- canonical_deer(readRDS("library/SW_filtered_deer.RData"))
-  train <- train[train$set == "train" & train$id == id &
-                   train$season == season, ]
+  train <- xgb_train_deer()
+  train <- train[train$id == id & train$season == season, ]
   stopifnot(nrow(train) > 0)
   max(vapply(train$stp, function(s) max(s$sl_[!is.na(s$ta_)]), numeric(1)))
 }
@@ -625,6 +643,50 @@ xgb_path_reach_gamma <- function(track, p = 0.99) {
   ceiling(stats::qgamma(p, shape = d$params$shape, scale = d$params$scale))
 }
 
+#' The training deer-year closest in time, same animal and season
+#'
+#' For a training deer-year, itself. For a test deer-year, the training
+#' year of the same animal and season nearest to it; a tie goes to the later
+#' year.
+#'
+#' @param id Animal id
+#' @param season Season code
+#' @param year Year of the deer-year
+#' @return Key (<id>_<season>_<year>) of that training deer-year
+xgb_closest_train_key <- function(id, season, year) {
+  train <- xgb_train_deer()
+  train <- train[train$id == id & train$season == season, ]
+  stopifnot(nrow(train) > 0)
+  years <- as.integer(train$year)
+  closest <- years[order(abs(years - year), -years)][1]
+  sprintf("%s_%s_%d", id, season, closest)
+}
+
+#' Reach of a deer-year's steps under a reach rule
+#'
+#' "longest" is the animal's longest training step in the season
+#' (xgb_path_reach()). "gamma99" is the smaller of that and the 0.99
+#' quantile of the tentative gamma of the training deer-year closest in time
+#' (xgb_closest_train_key(), xgb_path_reach_gamma()): the deer-year itself in
+#' training, and for a test deer-year a training year of the same animal and
+#' season, as the reach of a year not yet seen has to come from the ones
+#' that were.
+#'
+#' @param track One deer-year from data/tracks/
+#' @param rule "longest" or "gamma99"
+#' @return Reach in metres
+xgb_path_reach_rule <- function(track, rule = c("longest", "gamma99")) {
+  rule <- match.arg(rule)
+  longest <- xgb_path_reach(track$id, track$season)
+  if (rule == "longest") {
+    return(longest)
+  }
+  key <- xgb_closest_train_key(track$id, track$season,
+                               as.integer(track$year))
+  source_track <- readRDS(sprintf("data/tracks/data_%s.rds", key))
+  min(xgb_path_reach_gamma(source_track), longest)
+}
+
 # Per-deer-year GAMs scored against xgb ---------------------------------------
 #
 # The xgb log-score filters set each selected model against GAMs fitted to
@@ -641,10 +703,27 @@ XGB_GAM_END_VARS <- c("HR_center_end", "ndvi_end", "forest_edge_end",
 
 #' Endpoint columns a fitted per-deer-year GAM reads
 #'
+#' A GAM that reads NDVI centred on the deer-year's mean (ndvi_c, with the
+#' centre stored on the fit as `ndvi_centre`) reads ndvi_end.
+#'
 #' @param fit Fitted mgcv gam
-#' @return The entries of XGB_GAM_END_VARS in its formula
+#' @return The entries of XGB_GAM_END_VARS it reads
 xgb_gam_end_vars <- function(fit) {
-  intersect(XGB_GAM_END_VARS, all.vars(stats::formula(fit)))
+  vars <- all.vars(stats::formula(fit))
+  if ("ndvi_c" %in% vars) {
+    stopifnot(is.finite(xgb_gam_ndvi_centre(fit)))
+    vars <- c(vars, "ndvi_end")
+  }
+  intersect(XGB_GAM_END_VARS, vars)
+}
+
+#' The NDVI centre of a per-deer-year GAM
+#'
+#' @param fit Fitted mgcv gam
+#' @return fit$ndvi_centre, the mean NDVI its ndvi_c is centred on; NA for
+#'   a GAM that does not read ndvi_c
+xgb_gam_ndvi_centre <- function(fit) {
+  if (is.null(fit$ndvi_centre)) NA_real_ else fit$ndvi_centre
 }
 
 #' A deer-year's steps for a per-deer-year GAM, in mgcv cox.ph form
@@ -704,13 +783,21 @@ xgb_gam_data <- function(track, n_pts, seed, end_vars = "HR_center_end") {
 #' @param cell Cell numbers
 #' @param layer NDVI layer for each cell
 #' @param end_vars Endpoint columns the model reads
-#' @return Data frame of `end_vars`; wiscland_end a factor with levels
+#' @param ndvi_centre The model's NDVI centre (xgb_gam_ndvi_centre()); NA
+#'   for a model that does not read ndvi_c
+#' @return Data frame of `end_vars`, and ndvi_c (ndvi_end less the centre)
+#'   when the centre is given; wiscland_end a factor with levels
 #'   LANDCOVER_LEVELS, NA on open water
-xgb_gam_end_columns <- function(land, cell, layer, end_vars) {
+xgb_gam_end_columns <- function(land, cell, layer, end_vars,
+                                ndvi_centre = NA_real_) {
   d <- xgb_path_end_columns(land, cell, layer)
   d$wiscland_end <- factor(LANDCOVER_LEVELS[d$landcover + 1L],
                            levels = LANDCOVER_LEVELS)
-  d[, end_vars, drop = FALSE]
+  out <- d[, end_vars, drop = FALSE]
+  if (!is.na(ndvi_centre)) {
+    out$ndvi_c <- d$ndvi_end - ndvi_centre
+  }
+  out
 }
 
 #' Check a per-deer-year GAM's kernel reads the deer-year as its fit did
@@ -821,7 +908,7 @@ xgb_gam_onestep_logscore <- function(fit, land, stp, reach, sl_distr,
     logp <- NA_real_
     if (status == "ok") {
       k <- xgb_gam_end_columns(land, cell, rep(layer_end[j], length(cell)),
-                               end_vars)
+                               end_vars, xgb_gam_ndvi_centre(fit))
       dry <- !is.na(land$cols$landcover[cell]) & stats::complete.cases(k)
       if (!dry[cell == end]) {
         status <- "no_weight"
@@ -844,4 +931,111 @@ xgb_gam_onestep_logscore <- function(fit, land, stp, reach, sl_distr,
                    status = status, logp = logp)
   })
   dplyr::bind_rows(out)
+}
+
+#' Simulate paths from a per-deer-year GAM
+#'
+#' xgb_simulate_paths() with the GAM's kernel. Every path starts at `start`
+#' with a random heading and takes one step per interval of `times`, through
+#' any gaps in the real fixes. At each step every cell whose centre lies
+#' within `reach` of the deer is a candidate, except the deer's own cell,
+#' and weighs exp(eta + log tentative density) / distance, as in
+#' xgb_gam_onestep_logscore(). Cells off the window, on open water, or with
+#' a column the GAM reads missing get no weight; NDVI is read from the layer
+#' of the step's end time. A path whose candidates all have no weight stops
+#' there, its later positions NA.
+#'
+#' @param fit The fitted GAM (mgcv cox.ph)
+#' @param land Landscape from xgb_path_landscape()
+#' @param start x and y of the first fix
+#' @param times Fix times, from the first fix; one step per interval
+#' @param reach Longest step allowed (m)
+#' @param n_paths Paths to draw
+#' @param sl_distr,ta_distr The GAM's tentative distributions
+#' @return tibble(nsim, x_, y_, t_), every path at every time. Attribute
+#'   "stopped": the paths that stopped early.
+xgb_gam_simulate_paths <- function(fit, land, start, times, reach, n_paths,
+                                   sl_distr, ta_distr) {
+  res <- land$res
+  off <- xgb_path_offsets(reach, res)
+  n_off <- nrow(off)
+  end_vars <- xgb_gam_end_vars(fit)
+  n_steps <- length(times) - 1
+  layer_end <- if ("ndvi_end" %in% end_vars) {
+    xgb_path_ndvi_layer(times[-1], land$ndvi_times)
+  } else {
+    rep(1L, n_steps)
+  }
+  x <- matrix(NA_real_, n_steps + 1, n_paths)
+  y <- x
+  x[1, ] <- start[1]
+  y[1, ] <- start[2]
+  heading <- stats::runif(n_paths, -pi, pi)
+  alive <- rep(TRUE, n_paths)
+
+  for (s in seq_len(n_steps)) {
+    live <- which(alive)
+    if (!length(live)) {
+      break
+    }
+    here <- xgb_path_cell(land, x[s, live], y[s, live])
+    stopifnot(!anyNA(here))
+    row <- (here - 1) %/% land$ncol + 1
+    col <- (here - 1) %% land$ncol + 1
+
+    # Candidate cells for every live path
+    p <- rep(live, each = n_off)
+    cr <- rep(row, each = n_off) + off$dr
+    cc <- rep(col, each = n_off) + off$dc
+    cx <- land$ext[["xmin"]] + (cc - 0.5) * res
+    cy <- land$ext[["ymax"]] - (cr - 0.5) * res
+    dx <- cx - x[s, p]
+    dy <- cy - y[s, p]
+    sl <- sqrt(dx^2 + dy^2)
+    keep <- sl <= reach & cr >= 1 & cr <= land$nrow & cc >= 1 &
+      cc <= land$ncol
+    cell <- (cr[keep] - 1) * land$ncol + cc[keep]
+    p <- p[keep]
+    cx <- cx[keep]
+    cy <- cy[keep]
+    dx <- dx[keep]
+    dy <- dy[keep]
+    sl <- sl[keep]
+
+    k <- xgb_gam_end_columns(land, cell, rep(layer_end[s], length(cell)),
+                             end_vars, xgb_gam_ndvi_centre(fit))
+    dry <- !is.na(land$cols$landcover[cell]) & stats::complete.cases(k)
+    lw <- rep(NA_real_, length(cell))
+    if (any(dry)) {
+      ta <- atan2(dy[dry], dx[dry]) - heading[p[dry]]
+      nd <- data.frame(sl_ = sl[dry], ta_ = atan2(sin(ta), cos(ta)),
+                       tod_ = xgb_path_hour(times[s]),
+                       k[dry, , drop = FALSE])
+      eta <- as.numeric(stats::predict(fit, newdata = nd, type = "link"))
+      lw[dry] <- eta + gam_movement_kernel(nd, sl_distr, ta_distr) -
+        log(nd$sl_)
+    }
+
+    for (q in live) {
+      i <- which(p == q & !is.na(lw))
+      if (!length(i)) {
+        alive[q] <- FALSE
+        next
+      }
+      w <- exp(lw[i] - max(lw[i]))
+      pick <- i[sample.int(length(i), 1, prob = w)]
+      x[s + 1, q] <- cx[pick]
+      y[s + 1, q] <- cy[pick]
+      heading[q] <- atan2(dy[pick], dx[pick])
+    }
+  }
+
+  out <- tibble::tibble(
+    nsim = rep(seq_len(n_paths), each = n_steps + 1),
+    x_ = as.vector(x),
+    y_ = as.vector(y),
+    t_ = rep(times, n_paths)
+  )
+  attr(out, "stopped") <- which(!alive)
+  out
 }

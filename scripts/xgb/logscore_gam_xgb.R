@@ -6,13 +6,19 @@
 #'   "gilbertson_gam"  the Gilbertson et al. (2025) habitat model
 #'                     (fit_gilbertson_gam_xgb.R)
 #'
+#' The GAM scoring a deer-year is the one fitted to the training deer-year
+#' closest in time (xgb_closest_train_key()): the deer-year itself in
+#' training, and for a test deer-year a training year of the same animal and
+#' season, with that year's gamma and von Mises. The kernel reads the scored
+#' deer-year's own landscape, home-range centre included.
+#'
 #' The xgb models' scores are the ones logscore_xgb.R saved for each real
 #' step. The GAM is scored here on the same cells, with the same reach and
 #' the same statuses (xgb_gam_onestep_logscore()); only its cell weight
-#' differs, because it was fitted on points drawn from the deer-year's gamma
-#' and von Mises rather than evenly in distance. Before scoring,
-#' xgb_gam_check() confirms the kernel reads every endpoint column the GAM
-#' reads as its fit did.
+#' differs, because it was fitted on points drawn from a gamma and von Mises
+#' rather than evenly in distance. Before scoring, xgb_gam_check() confirms
+#' the kernel reads every endpoint column the GAM reads as the wrangle
+#' stored it for the scored deer-year's own random points.
 #'
 #' A step counts only if the two models and the GAM could all score it. A
 #' model passes for a deer-year when its total beats the GAM's by at least
@@ -30,13 +36,23 @@
 #'          and filters/xgb/logscore_<GAM>_<tag>.rds, the totals of all of
 #'          them; <tag> is xgb_scores_tag(SET, REACH)
 #'
-#' Configuration: edit the block below before running.
+#' Configuration: edit the block below before running. The GAM and the set
+#' can also be given on the command line:
+#'   Rscript scripts/xgb/logscore_gam_xgb.R null_gam test
 
 # Configuration ---------------------------------------------------------------
 # The GAM to score against: "null_gam" or "gilbertson_gam"
 GAM <- "gilbertson_gam"
 # The deer-years to score: "test" or "train"
 SET <- "train"
+.args <- commandArgs(trailingOnly = TRUE)
+if (length(.args) >= 1) {
+  GAM <- .args[1]
+}
+if (length(.args) >= 2) {
+  SET <- .args[2]
+}
+stopifnot(SET %in% c("test", "train"))
 # The reach rule, as the paths were simulated: "longest" or "gamma99"
 REACH <- "gamma99"
 # A model must beat the GAM by this many log units over a deer-year
@@ -65,9 +81,13 @@ if (is.null(KEYS)) {
   KEYS <- sprintf("%s_%s_%d", deer$id, deer$season, as.integer(deer$year))
   # The longest deer-years first
   n_steps <- vapply(deer$stp, nrow, integer(1))
+  gam_keys <- mapply(xgb_closest_train_key, deer$id, deer$season,
+                     as.integer(deer$year))
   KEYS <- KEYS[order(-n_steps)]
+  gam_keys <- gam_keys[order(-n_steps)]
   # A deer-year whose GAM did not fit has nothing to score
-  fitted <- file.exists(sprintf("results/xgb/%s/%s_%s.rds", GAM, GAM, KEYS))
+  fitted <- file.exists(sprintf("results/xgb/%s/%s_%s.rds", GAM, GAM,
+                                gam_keys))
   if (any(!fitted)) {
     cat(sprintf("%d deer-years have no fitted %s and are not scored\n",
                 sum(!fitted), GAM))
@@ -89,17 +109,16 @@ score_one <- function(key) {
   picks <- picks[picks$season == season & picks$deer, ]
   xgb <- readRDS(file.path(xgb_dir, sprintf("logscore_xgb_%s.rds", key)))
 
-  reach_longest <- xgb_path_reach(track$id, season)
-  reach <- if (REACH == "longest") {
-    reach_longest
-  } else {
-    min(xgb_path_reach_gamma(track), reach_longest)
-  }
+  reach <- xgb_path_reach_rule(track, REACH)
   stopifnot(reach == xgb$reach)
   land <- xgb_path_landscape(track, load_landcover(track$year, season),
                              load_ndvi(track$year), load_topo())
-  m <- readRDS(sprintf("results/xgb/%s/%s_%s.rds", GAM, GAM, key))
-  gap <- xgb_gam_check(m$data, land, xgb_gam_end_vars(m$fit))
+  gam_key <- xgb_closest_train_key(track$id, season, as.integer(track$year))
+  m <- readRDS(sprintf("results/xgb/%s/%s_%s.rds", GAM, GAM, gam_key))
+  end_vars <- xgb_gam_end_vars(m$fit)
+  # Every one of the scored deer-year's own random points
+  gap <- xgb_gam_check(xgb_gam_data(track, 25L, 1L, end_vars), land,
+                       end_vars)
 
   gam_steps <- xgb_gam_onestep_logscore(m$fit, land, track$stp[[1]], reach,
                                         m$sl_distr, m$ta_distr) |>
@@ -130,7 +149,7 @@ score_one <- function(key) {
                      by = "config") |>
     dplyr::mutate(
       set = SET, reach_rule = REACH, reach = reach, key = key,
-      season = season, null = GAM,
+      season = season, null = GAM, gam_key = gam_key,
       n_steps = sum(!is.na(track$stp[[1]]$ta_)),
       n_scored = length(common),
       n_beyond_reach = gam_status[["beyond_reach"]],
