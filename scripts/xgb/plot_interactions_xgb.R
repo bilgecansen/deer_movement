@@ -76,14 +76,16 @@ selected <- scores |>
 
 PRETTY <- c(
   ndvi_end = "NDVI", landcover = "Landcover",
-  forest_edge_end = "Forest edge", elevation_end = "Elevation",
+  forest_edge_log_end = "Forest edge (log distance)",
+  elevation_end = "Elevation",
   northness_end = "Northness", eastness_end = "Eastness",
   HR_center_end = "HR center", shadow_gauss = "Noise",
   shadow_famd = "Noise", shadow_start = "Noise at start",
   famd1_end = "FAMD1", famd2_end = "FAMD2", famd3_end = "FAMD3",
   famd4_end = "FAMD4", famd5_end = "FAMD5", ndvi_start = "NDVI at start",
   wiscland_start = "Cover at start",
-  forest_edge_start = "Forest edge at start", sl_ = "Step length",
+  forest_edge_log_start = "Forest edge at start (log distance)",
+  sl_ = "Step length",
   cos_ta = "cos(turn angle)", day_of_season = "Day of season"
 )
 BLOCK <- c(hab = "Habitat", famd = "FAMD", modifier = "Movement modifier")

@@ -29,6 +29,9 @@
 #'   animal        the stable id, from the key prefix; `deer` is only an
 #'                 index within each year's file.
 #'
+#' Forest edge at the start is forest_edge_log_start, the log of the
+#' unsigned distance to the nearest edge (XGB_DERIVED), as at the end.
+#'
 #' A start column that is mostly missing for a season is dropped for that
 #' season. ndvi_start is about 80% missing in nb for the same reason
 #' ndvi_end is absent there: the winter season is named for the year it
@@ -44,7 +47,7 @@
 # Configuration ---------------------------------------------------------------
 SEASONS <- c("br", "fa", "nb", "pf")
 # Numeric start columns to carry across; the cover type is always taken
-NUMERIC_START <- c("ndvi_start", "forest_edge_start")
+NUMERIC_START <- c("ndvi_start", "forest_edge_log_start")
 # A start column is kept for a season only if present on at least this
 # share of that season's rows
 MIN_PRESENT <- 0.95
@@ -70,7 +73,7 @@ start_of_key <- function(k) {
     day_of_season = v$days
   )
   for (nm in NUMERIC_START) {
-    out[[nm]] <- v[[nm]]
+    out[[nm]] <- xgb_stored_column(v, nm)
   }
   out
 }

@@ -1,7 +1,10 @@
 #' @description
 #' Score every deer-year's simulated paths against its real path, for each
-#' final model: HR overlap, svf agreement and energy score. SET picks the
-#' test year or the training years (sim_paths_xgb.R simulates both).
+#' model: HR overlap, svf agreement and energy score. SET picks the test year
+#' or the training years. MODELS picks the paths: "xgb", the final xgb models
+#' (sim_paths_xgb.R), or "gam", the GAM null and the Gilbertson model
+#' (sim_paths_gam_xgb.R), which carry no xgb pick, so their deer, best and
+#' simplest columns are NA.
 #'
 #' The simulated paths step every 4 hours through the gaps in the real
 #' fixes. Before scoring they are cut to the real fix times, so the real and
@@ -31,24 +34,44 @@
 #' Deer-years are scored in parallel, one at a time per worker, the longest
 #' first, and each is saved as it finishes, so an interrupted run resumes
 #' where it stopped. A deer-year that fails is reported and left unscored.
+#' BATCH scores only that many of the deer-years left, the longest first,
+#' then writes the table and stops; run_scores_xgb.sh runs batch after batch
+#' in a fresh R each time, so a ctmm fit that hangs costs one batch.
 #'
 #' Inputs:  xgb_sims_dir(SET, REACH): sims/xgb_paths/ (test) or
 #'          sims/xgb_paths_train/ (training), with a "_gamma99" suffix for
-#'          that reach; sims_xgb_<key>.rds from sim_paths_xgb.R;
-#'          data/tracks/data_<key>.rds
-#' Output:  filters/xgb/scores_<tag>/scores_xgb_<key>.rds, one per
-#'          deer-year, and filters/xgb/scores_xgb_<tag>.rds, all of them in
-#'          one table; <tag> is xgb_scores_tag(SET, REACH), e.g. "train" or
-#'          "train_gamma99"
+#'          that reach; sims_<MODELS>_<key>.rds; data/tracks/data_<key>.rds
+#' Output:  per deer-year, filters/xgb/scores_<tag>/scores_xgb_<key>.rds
+#'          (xgb) or filters/xgb/scores_gam_<tag>/scores_gam_<key>.rds
+#'          (gam); and all of them in one table,
+#'          filters/xgb/scores_<MODELS>_<tag>.rds; <tag> is
+#'          xgb_scores_tag(SET, REACH), e.g. "train" or "train_gamma99"
 #'
-#' Configuration: edit the block below before running.
+#' Configuration: edit the block below before running. The set, the models
+#' and the batch can also be given on the command line:
+#'   Rscript scripts/xgb/score_sims_xgb.R train gam 50
 
 # Configuration ---------------------------------------------------------------
 # The deer-years to score: "test" or "train"
 SET <- "train"
+# The paths to score: "xgb" or "gam"
+MODELS <- "xgb"
+# Deer-years to score in this run, the longest left first: NULL for all
+BATCH <- NULL
+.args <- commandArgs(trailingOnly = TRUE)
+if (length(.args) >= 1) {
+  SET <- .args[1]
+}
+if (length(.args) >= 2) {
+  MODELS <- .args[2]
+}
+if (length(.args) >= 3) {
+  BATCH <- as.integer(.args[3])
+}
+stopifnot(SET %in% c("test", "train"), MODELS %in% c("xgb", "gam"))
 # The reach rule the paths were simulated with: "longest" or "gamma99"
 REACH <- "gamma99"
-# TRUE: score only the deer types
+# TRUE: score only the xgb deer types
 DEER_ONLY <- TRUE
 # Deer-years to score: NULL for every simulated one not yet scored
 KEYS <- NULL
@@ -65,23 +88,39 @@ source("scripts/helper_functions.R")
 
 sims_dir <- xgb_sims_dir(SET, REACH)
 tag <- xgb_scores_tag(SET, REACH)
-out_dir <- sprintf("filters/xgb/scores_%s", tag)
+out_dir <- if (MODELS == "xgb") {
+  sprintf("filters/xgb/scores_%s", tag)
+} else {
+  sprintf("filters/xgb/scores_gam_%s", tag)
+}
 dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
+sims_file <- function(key) {
+  file.path(sims_dir, sprintf("sims_%s_%s.rds", MODELS, key))
+}
+score_file <- function(key) {
+  file.path(out_dir, sprintf("scores_%s_%s.rds", MODELS, key))
+}
 if (is.null(KEYS)) {
-  files <- list.files(sims_dir, pattern = "^sims_xgb_.*[.]rds$",
+  files <- list.files(sims_dir, pattern = sprintf("^sims_%s_.*[.]rds$",
+                                                  MODELS),
                       full.names = TRUE)
   # Largest files first: the longest paths, which take longest to score
   files <- files[order(-file.size(files))]
-  KEYS <- sub("^sims_xgb_(.*)[.]rds$", "\\1", basename(files))
-  KEYS <- KEYS[!file.exists(file.path(out_dir,
-                                      sprintf("scores_xgb_%s.rds", KEYS)))]
+  KEYS <- sub(sprintf("^sims_%s_(.*)[.]rds$", MODELS), "\\1",
+              basename(files))
+  KEYS <- KEYS[!file.exists(score_file(KEYS))]
 }
-cat(sprintf("scoring %d %s deer-years on %d workers (%s)\n", length(KEYS),
-            SET, N_PAR, format(Sys.time(), "%H:%M")))
+n_left <- length(KEYS)
+if (!is.null(BATCH)) {
+  KEYS <- utils::head(KEYS, BATCH)
+}
+cat(sprintf("scoring %d of %d %s %s deer-years left on %d workers (%s)\n",
+            length(KEYS), n_left, SET, MODELS, N_PAR,
+            format(Sys.time(), "%H:%M")))
 
 score_one <- function(key) {
   source("scripts/helper_functions.R")
-  sims <- readRDS(file.path(sims_dir, sprintf("sims_xgb_%s.rds", key)))
+  sims <- readRDS(sims_file(key))
   obs <- readRDS(sprintf("data/tracks/data_%s.rds", key))$stp[[1]]
   # The real fixes: every step's start, and each burst's last end
   last_of_burst <- !duplicated(obs$burst_, fromLast = TRUE)
@@ -90,8 +129,14 @@ score_one <- function(key) {
   )
   obs_es <- obs[lubridate::round_date(obs$t1_, "hour") != min(fix_hours), ]
   configs <- names(sims$paths)
-  if (DEER_ONLY) {
+  if (MODELS == "xgb" && DEER_ONLY) {
     configs <- configs[grepl("_deer$", configs)]
+  }
+  # The GAM paths carry no xgb pick
+  picks <- if (MODELS == "xgb") {
+    sims$picks
+  } else {
+    tibble::tibble(config = configs, deer = NA, best = NA, simplest = NA)
   }
 
   out <- purrr::map_dfr(configs, function(cf) {
@@ -112,7 +157,7 @@ score_one <- function(key) {
       suppressMessages(suppressWarnings(variogram_agreement(obs, sim))),
       error = function(e) structure(NA_real_, error = conditionMessage(e))
     )
-    pick <- sims$picks[sims$picks$config == cf, ]
+    pick <- picks[picks$config == cf, ]
     es <- calc_energy_score(obs = obs_es, sim = sim)
     p_step <- calc_p_step(obs_es, sim)
     tibble::tibble(
@@ -133,7 +178,7 @@ score_one <- function(key) {
       seconds = as.numeric(difftime(Sys.time(), t0, units = "secs"))
     )
   })
-  saveRDS(out, file.path(out_dir, sprintf("scores_xgb_%s.rds", key)))
+  saveRDS(out, score_file(key))
   "ok"
 }
 
@@ -157,10 +202,11 @@ if (length(KEYS)) {
 }
 
 scores <- purrr::map_dfr(
-  list.files(out_dir, pattern = "^scores_xgb_.*[.]rds$", full.names = TRUE),
+  list.files(out_dir, pattern = sprintf("^scores_%s_.*[.]rds$", MODELS),
+             full.names = TRUE),
   readRDS
 )
-out_path <- sprintf("filters/xgb/scores_xgb_%s.rds", tag)
+out_path <- sprintf("filters/xgb/scores_%s_%s.rds", MODELS, tag)
 saveRDS(scores, out_path)
 cat(sprintf("-> %s: %d deer-years, %d rows (%s)\n", out_path,
             dplyr::n_distinct(scores$key), nrow(scores),

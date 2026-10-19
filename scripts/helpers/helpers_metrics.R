@@ -336,3 +336,27 @@ overlap_ud <- function(data, sim, n_sim) {
   )
 }
 
+
+#' Wasserstein-1 distance between two samples of one variable
+#'
+#' The area between the two empirical cumulative distribution functions,
+#' the same as the mean absolute difference between their quantile
+#' functions: how far, in the variable's own units, the values of one sample
+#' have to move on average to become the other. The samples may differ in
+#' size.
+#'
+#' @param a,b Numeric samples; NA values are dropped
+#' @return The distance, in the units of the samples
+wasserstein1 <- function(a, b) {
+  a <- sort(a[!is.na(a)])
+  b <- sort(b[!is.na(b)])
+  stopifnot(length(a) > 0, length(b) > 0)
+  x <- sort(unique(c(a, b)))
+  if (length(x) < 2) {
+    return(0)
+  }
+  # Both CDFs are flat between consecutive values of the pooled sample
+  fa <- findInterval(x[-length(x)], a) / length(a)
+  fb <- findInterval(x[-length(x)], b) / length(b)
+  sum(abs(fa - fb) * diff(x))
+}

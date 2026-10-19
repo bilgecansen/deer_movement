@@ -153,6 +153,28 @@ xgb_scale_label <- function(per = "deer") {
   )
 }
 
+#' Columns the xgb tables derive from the stored ones
+#'
+#' forest_edge_log_end and forest_edge_log_start are the log of the unsigned
+#' distance (m) to the nearest forest edge, from the wrangle's signed
+#' forest_edge_end and forest_edge_start (+ inside forest, - outside).
+#' Which side of the edge a point lies on is the landcover's, so only the
+#' distance is kept. The stored distance is never under 15 m, half a cell,
+#' so the log is always defined.
+XGB_DERIVED <- list(
+  forest_edge_log_end = function(v) log(abs(v$forest_edge_end)),
+  forest_edge_log_start = function(v) log(abs(v$forest_edge_start))
+)
+
+#' One column of a stored step table, derived if XGB_DERIVED names it
+#'
+#' @param v Step table (stp.var.nonp, stp.var)
+#' @param nm Column name
+#' @return The column
+xgb_stored_column <- function(v, nm) {
+  if (nm %in% names(XGB_DERIVED)) XGB_DERIVED[[nm]](v) else v[[nm]]
+}
+
 #' Build the pooled step table from the wrangled tracks
 #'
 #' Reads every deer-year in `keys` from data/tracks/ — its nonp random
@@ -195,7 +217,7 @@ build_xgb_pool <- function(keys, hab_vars, famd_vars,
                                     levels = LANDCOVER_LEVELS)) - 1L
     )
     for (nm in setdiff(c(hab_vars, famd_vars), "landcover")) {
-      out[[nm]] <- v[[nm]]
+      out[[nm]] <- xgb_stored_column(v, nm)
     }
     out
   })

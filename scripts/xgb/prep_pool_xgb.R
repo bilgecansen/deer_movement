@@ -13,6 +13,10 @@
 #' ndvi_end in nb is the case in point: the winter season runs into a year
 #' whose NDVI stack it does not load.
 #'
+#' Forest edge enters as forest_edge_log_end, the log of the unsigned
+#' distance to the nearest edge, derived from the stored signed one
+#' (XGB_DERIVED); which side of the edge a point lies on is the landcover's.
+#'
 #' Columns written: the movement block (sl_, tod_hour, cos_ta), the habitat
 #' variables in HAB_VARS, landcover as integer codes for xgboost's
 #' categorical splits, and the FAMD axes. FAMD stays NA off forest; nothing
@@ -33,7 +37,7 @@ HAB_VARS <- c(
   "HR_center_end",
   "ndvi_end",
   "landcover",
-  "forest_edge_end",
+  "forest_edge_log_end",
   "elevation_end",
   "northness_end",
   "eastness_end"
@@ -76,7 +80,7 @@ for (season in SEASONS) {
     v <- readRDS(sprintf("data/tracks/data_%s.rds", k))$stp.var.nonp[[1]]
     lc <- as.integer(factor(v$wiscland_end, levels = LANDCOVER_LEVELS))
     c(vapply(HAB_VARS, function(h) {
-      x <- if (h == "landcover") lc else v[[h]]
+      x <- if (h == "landcover") lc else xgb_stored_column(v, h)
       sum(!is.na(x))
     }, numeric(1)), rows = nrow(v))
   })

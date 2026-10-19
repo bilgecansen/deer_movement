@@ -158,6 +158,7 @@ xgb_path_end_columns <- function(land, cell, layer) {
     HR_center_end = land$cols$HR_center[cell],
     ndvi_end = land$ndvi[cbind(cell, layer)],
     forest_edge_end = land$cols$forest_edge[cell],
+    forest_edge_log_end = log(abs(land$cols$forest_edge[cell])),
     elevation_end = land$cols$elevation[cell],
     northness_end = land$cols$northness[cell],
     eastness_end = land$cols$eastness[cell]
@@ -174,7 +175,8 @@ xgb_path_start_columns <- function(land, cell, layer) {
   data.frame(
     wiscland_start = land$cols$landcover[cell],
     ndvi_start = land$ndvi[cbind(cell, layer)],
-    forest_edge_start = land$cols$forest_edge[cell]
+    forest_edge_start = land$cols$forest_edge[cell],
+    forest_edge_log_start = log(abs(land$cols$forest_edge[cell]))
   )
 }
 
@@ -261,12 +263,14 @@ xgb_path_check <- function(track, land, models, statics, deer_ids) {
     HR_center_end = v$HR_center_end,
     ndvi_end = v$ndvi_end,
     forest_edge_end = v$forest_edge_end,
+    forest_edge_log_end = xgb_stored_column(v, "forest_edge_log_end"),
     elevation_end = v$elevation_end,
     northness_end = v$northness_end,
     eastness_end = v$eastness_end,
     wiscland_start = code(v$wiscland_start),
     ndvi_start = v$ndvi_start,
     forest_edge_start = v$forest_edge_start,
+    forest_edge_log_start = xgb_stored_column(v, "forest_edge_log_start"),
     sl_ = v$sl_,
     cos_ta = cos(v$ta_),
     tod_hour = v$tod_

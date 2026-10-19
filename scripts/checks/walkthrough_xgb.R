@@ -90,7 +90,7 @@ FOLD <- 1L # the held-out fold walked through
 WALK_ROUNDS <- 50L # rounds for the fold model in section 8
 N_THREAD <- 4L
 # Used to show why a stratum-constant column cannot be a root split
-START_COL <- "forest_edge_start"
+START_COL <- "forest_edge_log_start"
 
 cat(sprintf(
   "production settings: %d rounds per booster, learning rate %g, depth %d,",
@@ -167,9 +167,9 @@ cat(sprintf(
 #   end-point columns  (elevation_end, landcover, ...) are measured where each
 #                      candidate ends, so they differ from candidate to
 #                      candidate.
-#   start columns      (forest_edge_start, ...) are measured where the step
-#                      began. All the candidates of a step begin at the same
-#                      point, so a start column has one value per step,
+#   start columns      (forest_edge_log_start, ...) are measured where the
+#                      step began. All the candidates of a step begin at the
+#                      same point, so a start column has one value per step,
 #                      repeated on every candidate.
 # Each noise column copies the kind it stands in for: shadow_gauss (habitat)
 # gets a new value on every row, like an end-point column; shadow_start
@@ -288,7 +288,8 @@ h0 <- p0 * (1 - p0)
 MOVE_VARS <- c("sl_", "tod_hour", "cos_ta")
 HR_VAR <- "HR_center_end"
 START_VARS <- c(
-  intersect(c("wiscland_start", "ndvi_start", "forest_edge_start"), names(d)),
+  intersect(c("wiscland_start", "ndvi_start", "forest_edge_log_start"),
+            names(d)),
   "shadow_start"
 )
 ID_COLS <- c("key", "deer", "animal", "year", "step_id_", "case_", "stratum")
@@ -310,7 +311,7 @@ stopifnot(setequal(
   HAB_VARS,
   c(
     "landcover",
-    "forest_edge_end",
+    "forest_edge_log_end",
     "elevation_end",
     "northness_end",
     "eastness_end",

@@ -6,12 +6,14 @@
 #' Their final step-selection model's habitat terms, with the GAM null's
 #' movement and its distance to the home-range centre, on our own layers:
 #'   log(sl_) + cos(ta_) + s(tod_, bs = "cc", by = sl_) +
-#'   eastness_end + I(eastness_end^2) + northness_end + forest_edge_end +
-#'   ndvi_c + s(wiscland_end, bs = "re") +
+#'   eastness_end + I(eastness_end^2) + northness_end +
+#'   I(log(abs(forest_edge_end))) + ndvi_c + s(wiscland_end, bs = "re") +
 #'   s(wiscland_end, ndvi_c, bs = "re") + s(HR_center_end)
-#' Landcover is our ten classes and forest_edge_end our signed distance (m;
-#' + inside forest, - outside), both as the xgb models read them. Their
-#' neighbour and snow-depth terms have no counterpart here.
+#' Landcover is our ten classes, and forest edge their log distance (m) to
+#' the nearest edge, unsigned: the log of the absolute value of our signed
+#' forest_edge_end (+ inside forest, - outside), never under 15 m, as the
+#' xgb models read it. Their neighbour and snow-depth terms have no
+#' counterpart here.
 #'
 #' Their landcover by NDVI interaction is fitted hierarchically within the
 #' deer-year: every class has its own effect and its own NDVI slope, drawn
@@ -96,7 +98,8 @@ fit_one <- function(key) {
   formula <- paste(
     sprintf("log(sl_) + cos(ta_) + s(tod_, bs = 'cc', k = %d, by = sl_) +",
             k_tod),
-    "eastness_end + I(eastness_end^2) + northness_end + forest_edge_end +",
+    "eastness_end + I(eastness_end^2) + northness_end +",
+    "I(log(abs(forest_edge_end))) +",
     lc_terms, "+ s(HR_center_end)"
   )
   warns <- character(0)

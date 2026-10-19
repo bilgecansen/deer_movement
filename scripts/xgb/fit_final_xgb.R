@@ -56,7 +56,8 @@ MOVE_VARS <- c("sl_", "tod_hour", "cos_ta")
 HR_VAR <- "HR_center_end"
 NOISE_VARS <- c("shadow_gauss", "shadow_start")
 FAMD_COLS <- grep("^famd[0-9]+_end$", names(d), value = TRUE)
-START_VARS <- intersect(c("wiscland_start", "ndvi_start", "forest_edge_start"),
+START_VARS <- intersect(c("wiscland_start", "ndvi_start",
+                          "forest_edge_log_start"),
                         names(d))
 HAB_VARS <- setdiff(
   names(d),

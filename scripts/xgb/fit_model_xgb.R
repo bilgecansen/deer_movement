@@ -125,7 +125,7 @@ HR_VAR <- "HR_center_end"
 # The FAMD axes, which no block uses
 FAMD_COLS <- grep("^famd[0-9]+_end$", names(d), value = TRUE)
 START_VARS <- c(intersect(c("wiscland_start", "ndvi_start",
-                            "forest_edge_start"), names(d)),
+                            "forest_edge_log_start"), names(d)),
                 "shadow_start")
 # day_of_season is not used. The deer id joins the blocks through
 # make_xgb_specs(), not as a habitat column.

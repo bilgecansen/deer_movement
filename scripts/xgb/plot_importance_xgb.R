@@ -80,7 +80,7 @@ selected <- scores |>
 PRETTY <- c(
   ndvi_end = "NDVI",
   landcover = "Landcover",
-  forest_edge_end = "Forest edge distance",
+  forest_edge_log_end = "Forest edge distance (log)",
   elevation_end = "Elevation",
   northness_end = "Northness",
   eastness_end = "Eastness",
@@ -96,7 +96,7 @@ PRETTY <- c(
   famd5_end = "FAMD5",
   ndvi_start = "NDVI at start",
   wiscland_start = "Cover at start",
-  forest_edge_start = "Forest edge at start",
+  forest_edge_log_start = "Forest edge distance at start (log)",
   day_of_season = "Day of season"
 )
 

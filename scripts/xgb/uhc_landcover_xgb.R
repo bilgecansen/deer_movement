@@ -45,10 +45,16 @@
 #'          plots/uhc_landcover_energy_<tag>.png; <tag> is
 #'          xgb_scores_tag(SET, REACH)
 #'
-#' Configuration: edit the block below before running.
+#' Configuration: edit the block below before running. The set can also be
+#' given on the command line: Rscript scripts/xgb/uhc_landcover_xgb.R train
 
 # Configuration ---------------------------------------------------------------
 SET <- "test"
+.args <- commandArgs(trailingOnly = TRUE)
+if (length(.args) >= 1) {
+  SET <- .args[1]
+}
+stopifnot(SET %in% c("test", "train"))
 REACH <- "gamma99"
 TOLERANCE_MINS <- 30
 # FALSE: reuse the saved class counts if they exist, and only summarise
