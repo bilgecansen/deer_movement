@@ -1,15 +1,13 @@
 #' @description
-#' Plot the variable importance of each season's SELECTED model types: one
-#' figure per season and family (the types without deer, and their deer
-#' twins), one row per variable.
+#' Plot the variable importance of each season's SELECTED deer model type:
+#' one figure per season, one row per variable.
 #'
 #' Which type that is comes from the same rule plot_models_xgb.R applies —
-#' within a family, the simplest one within THRESHOLD log units per deer of
-#' the family's best — so the two scripts always describe the same models.
-#' Keep the two configuration blocks in step. A selected null type (null or
-#' null_deer) has nothing ranked; it is skipped, and saying so is part of
-#' the output. In a deer type a variable's importance includes its
-#' deer-specific part; deer itself is not ranked.
+#' the simplest one within THRESHOLD log units per deer of the season's
+#' best — so the two scripts always describe the same models. Keep the two
+#' configuration blocks in step. A selected null_deer has nothing ranked; it
+#' is skipped, and saying so is part of the output. A variable's importance
+#' includes its deer-specific part; deer itself is not ranked.
 #'
 #' Each ranked block carries a noise column, drawn in grey. A variable
 #' earns its place by beating its block's noise column, not by clearing
@@ -35,8 +33,8 @@
 #' on every variable, which inflates its whole column. Compare ranks
 #' between seasons, not values.
 #'
-#' Input:  results/xgb/compare_<season>_<type>.rds
-#' Output: plots/importance_xgb_<season>_<type>.png
+#' Input:  results/xgb/compare_<season>_<type>_deer.rds
+#' Output: plots/importance_xgb_<season>_<type>_deer.png
 #'
 #' Configuration: edit the block below before running.
 
@@ -57,7 +55,7 @@ library(scales)
 # helper functions (xgb_scale_value / xgb_scale_label)
 source("scripts/helper_functions.R")
 
-files <- list.files("results/xgb", pattern = "^compare_.*[.]rds$",
+files <- list.files("results/xgb", pattern = "^compare_.*_deer[.]rds$",
                     full.names = TRUE)
 if (!length(files)) {
   stop("No model files in results/xgb/; run run_models_xgb.R first")
@@ -67,11 +65,10 @@ scores <- purrr::map_dfr(files, function(f) {
   tibble(season = x$season, config = x$config, held_out = x$ll_cv,
          n_deer = x$n_deer_years)
 })
-# One selected model per season and family: the types without deer, and
-# their deer twins
+# One selected model per season
 selected <- scores |>
-  mutate(deer = grepl("_deer$", config), type = sub("_deer$", "", config)) |>
-  group_by(season, deer) |>
+  mutate(type = sub("_deer$", "", config)) |>
+  group_by(season) |>
   mutate(per_deer = (held_out - max(held_out)) / n_deer) |>
   filter(per_deer > -THRESHOLD) |>
   slice_min(match(type, COMPLEXITY), n = 1) |>

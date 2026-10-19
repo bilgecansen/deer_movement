@@ -34,7 +34,7 @@ files <- list.files(sprintf("filters/xgb/scores_%s", tag),
 if (!length(files)) {
   stop(sprintf("No scores for '%s'; run score_sims_xgb.R first", tag))
 }
-scores <- purrr::map_dfr(files, readRDS) |> filter(deer)
+scores <- purrr::map_dfr(files, readRDS)
 
 SEASON <- c(br = "breeding", fa = "fawning", nb = "non-breeding",
             pf = "post-fawning")

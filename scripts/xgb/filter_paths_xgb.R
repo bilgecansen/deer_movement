@@ -43,8 +43,7 @@ library(tidyverse)
 source("scripts/helper_functions.R")
 
 tag <- xgb_scores_tag(SET, REACH)
-scores <- readRDS(sprintf("filters/xgb/scores_xgb_%s.rds", tag)) |>
-  filter(deer)
+scores <- readRDS(sprintf("filters/xgb/scores_xgb_%s.rds", tag))
 logscore_path <- switch(
   LOGSCORE_NULL,
   null_gam = sprintf("filters/xgb/logscore_null_gam_%s.rds", tag),

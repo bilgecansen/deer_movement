@@ -2,8 +2,7 @@
 #' Pick the model types to simulate paths from and fit each of them with
 #' fit_final_xgb.R, several at a time.
 #'
-#' For every season, within each family (the types without deer, and their
-#' deer twins), two model types:
+#' For every season, two of the seven deer model types:
 #'   * best      the highest held-out score
 #'   * simplest  the simplest type within THRESHOLD log units per deer of
 #'               the best, the type plot_models_xgb.R selects
@@ -15,7 +14,7 @@
 #' The fits are mostly single-threaded R, so they run one thread each, as
 #' many at a time as leaves the machine a core.
 #'
-#' Inputs: results/xgb/compare_<season>_<type>.rds (fit_model_xgb.R)
+#' Inputs: results/xgb/compare_<season>_<type>_deer.rds (fit_model_xgb.R)
 #' Output: results/xgb/final_<season>_<type>.rds, one per pick and null,
 #'         and results/xgb/final_selection.rds, the picks and their roles
 #'
@@ -34,7 +33,7 @@ POLL_SECONDS <- 20
 # Load packages ---------------------------------------------------------------
 library(tidyverse)
 
-files <- list.files("results/xgb", pattern = "^compare_.*[.]rds$",
+files <- list.files("results/xgb", pattern = "^compare_.*_deer[.]rds$",
                     full.names = TRUE)
 scores <- purrr::map_dfr(files, function(f) {
   x <- readRDS(f)
@@ -42,13 +41,13 @@ scores <- purrr::map_dfr(files, function(f) {
          n_deer = x$n_deer_years, n_steps = x$n_steps)
 })
 scores <- scores |>
-  mutate(deer = grepl("_deer$", config), type = sub("_deer$", "", config))
-# Every family must carry every type, or a missing one could change a pick
-stopifnot(all(count(scores, season, deer)$n == length(COMPLEXITY)),
+  mutate(type = sub("_deer$", "", config))
+# Every season must carry every type, or a missing one could change a pick
+stopifnot(all(count(scores, season)$n == length(COMPLEXITY)),
           all(scores$type %in% COMPLEXITY))
 
 picks <- scores |>
-  group_by(season, deer) |>
+  group_by(season) |>
   mutate(per_deer = (held_out - max(held_out)) / n_deer,
          best = held_out == max(held_out),
          simplest = type == COMPLEXITY[min(match(type[per_deer > -THRESHOLD],
@@ -56,15 +55,15 @@ picks <- scores |>
   ungroup() |>
   filter(best | simplest) |>
   # Largest seasons first, so the longest fits do not start last
-  arrange(desc(n_steps), deer, match(type, COMPLEXITY))
-stopifnot(all(count(picks, season, deer, best)$n == 1),
-          all(count(picks, season, deer, simplest)$n == 1))
+  arrange(desc(n_steps), match(type, COMPLEXITY))
+stopifnot(all(count(picks, season, best)$n == 1),
+          all(count(picks, season, simplest)$n == 1))
 
 cat("=== model types to fit ===\n")
 print(as.data.frame(select(picks, season, config, per_deer, best, simplest)),
       row.names = FALSE, digits = 4)
 dir.create("results/xgb", showWarnings = FALSE, recursive = TRUE)
-saveRDS(select(picks, season, config, deer, type, per_deer, best, simplest),
+saveRDS(select(picks, season, config, type, per_deer, best, simplest),
         "results/xgb/final_selection.rds")
 nulls <- scores |>
   filter(config %in% NULL_TYPES) |>

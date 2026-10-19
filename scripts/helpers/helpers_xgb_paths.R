@@ -189,11 +189,11 @@ xgb_path_start_columns <- function(land, cell, layer) {
 #' @param model Model from xgb_path_model()
 #' @param land Landscape from xgb_path_landscape()
 #' @param layers NDVI layers to score
-#' @param deer_id The deer's id code, for the deer types
+#' @param deer_id The deer's id code (its 0-based place in deer_levels)
 #' @return Matrix, one row per cell and one column per NDVI layer, NA in
 #'   the layers not asked for. Attribute "reads_ndvi": FALSE when no block
 #'   reads NDVI, and then every column holds the same scores.
-xgb_path_static <- function(model, land, layers, deer_id = NA_integer_) {
+xgb_path_static <- function(model, land, layers, deer_id) {
   blocks <- intersect(c("hr", "hab"), names(model$specs))
   reads_ndvi <- any(vapply(model$specs[blocks],
                            function(s) "ndvi_end" %in% s$feats, logical(1)))
@@ -234,7 +234,7 @@ xgb_path_dynamic <- function(model, d) {
 #' @param land Landscape from xgb_path_landscape()
 #' @param models Named list of models from xgb_path_model()
 #' @param statics Matching list of xgb_path_static() results
-#' @param deer_ids Matching list of deer id codes (NA for no-deer types)
+#' @param deer_ids Matching list of deer id codes
 #' @return Invisibly, the largest score difference per model
 xgb_path_check <- function(track, land, models, statics, deer_ids) {
   v <- as.data.frame(track$stp.var.nonp[[1]])
@@ -344,12 +344,12 @@ xgb_path_offsets <- function(reach, res) {
 #' @param times Fix times, from the first fix; one step per interval
 #' @param reach Longest step allowed (m)
 #' @param n_paths Paths to draw
-#' @param deer_id The deer's id code, for the deer types
+#' @param deer_id The deer's id code (its 0-based place in deer_levels)
 #' @return tibble(nsim, x_, y_, t_), every path at every time. Attributes:
 #'   "off_window", per step and path the share of the cells within reach
 #'   that lie off the window; "stopped", the paths that stopped early.
 xgb_simulate_paths <- function(model, land, static, start, times, reach,
-                               n_paths, deer_id = NA_integer_) {
+                               n_paths, deer_id) {
   res <- land$res
   off <- xgb_path_offsets(reach, res)
   n_off <- nrow(off)
@@ -463,11 +463,11 @@ xgb_simulate_paths <- function(model, land, static, start, times, reach,
 #' @param stp The deer-year's real steps (x1_, y1_, x2_, y2_, t1_, t2_,
 #'   ta_, burst_, sl_)
 #' @param reach Longest step allowed (m)
-#' @param deer_id The deer's id code, for the deer types
+#' @param deer_id The deer's id code (its 0-based place in deer_levels)
 #' @return tibble(step, t1_, sl_, status, logp): one row per step with a
 #'   turning angle; logp is NA unless status is "ok"
 xgb_onestep_logscore <- function(model, land, static, stp, reach,
-                                 deer_id = NA_integer_) {
+                                 deer_id) {
   res <- land$res
   off <- xgb_path_offsets(reach, res)
   steps <- which(!is.na(stp$ta_))

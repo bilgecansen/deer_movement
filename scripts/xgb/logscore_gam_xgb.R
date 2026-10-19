@@ -106,7 +106,7 @@ score_one <- function(key) {
   stopifnot(track$set == SET)
   season <- track$season
   picks <- readRDS("results/xgb/final_selection.rds")
-  picks <- picks[picks$season == season & picks$deer, ]
+  picks <- picks[picks$season == season, ]
   xgb <- readRDS(file.path(xgb_dir, sprintf("logscore_xgb_%s.rds", key)))
 
   reach <- xgb_path_reach_rule(track, REACH)

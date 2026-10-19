@@ -86,7 +86,7 @@ score_one <- function(key) {
   season <- track$season
   stp <- track$stp[[1]]
   picks <- readRDS("results/xgb/final_selection.rds")
-  picks <- picks[picks$season == season & picks$deer, ]
+  picks <- picks[picks$season == season, ]
   configs <- c(picks$config, NULL_TYPE)
   models <- lapply(sprintf("results/xgb/final_%s_%s.rds", season, configs),
                    xgb_path_model, nthread = 1L)

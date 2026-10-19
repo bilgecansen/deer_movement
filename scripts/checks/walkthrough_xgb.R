@@ -1021,21 +1021,21 @@ print(as.data.frame(utils::head(fold_pairs, 3)), row.names = FALSE, digits = 3)
 
 
 # 11 ---- From numbers to decisions, and an audit of results/xgb/ -------------
-# Three decisions read off the same scale, held-out log score per deer-year,
+# Two decisions read off the same scale, held-out log score per deer-year,
 # against the same threshold:
-#   model type   the simplest type within THRESHOLD of the best, chosen
-#                separately among the types without deer and among their
-#                deer twins
+#   model type   the simplest of the seven deer types within THRESHOLD of
+#                the best
 #   variable     its importance must clear THRESHOLD
-#   pair         its interaction log score must clear THRESHOLD (types
-#                without deer only: pair scores are read at depth 2)
+# The workflow fits deer types only. Pair scores (section 10) are read at
+# depth 2, so a deer type (depth 3) has none; the simulation test
+# (scripts/xgb_sim/) still reads them for the types without deer.
 # DESIGN: the threshold and the complexity order are the same in every
-# script that applies them, and the runner fits every type they rank, with
-# and without deer.
+# script that applies them, and the runner fits the deer twin of every type
+# they rank, and nothing else.
 plot_scripts <- c(
   "scripts/xgb/plot_models_xgb.R",
   "scripts/xgb/plot_importance_xgb.R",
-  "scripts/xgb/plot_interactions_xgb.R"
+  "scripts/xgb/run_final_xgb.R"
 )
 thresholds <- vapply(plot_scripts, config_value, numeric(1), name = "THRESHOLD")
 orders <- lapply(plot_scripts, config_value, name = "COMPLEXITY")
@@ -1046,10 +1046,10 @@ CONFIGS <- config_value("scripts/xgb/run_models_xgb.R", "CONFIGS")
 stopifnot(
   all(thresholds == THRESHOLD),
   all(vapply(orders, identical, logical(1), COMPLEXITY)),
-  setequal(CONFIGS, c(COMPLEXITY, paste0(COMPLEXITY, "_deer")))
+  setequal(CONFIGS, paste0(COMPLEXITY, "_deer"))
 )
 cat(sprintf(
-  "threshold %g per deer; simplest first, in each family: %s\n",
+  "threshold %g per deer; simplest first: %s\n",
   THRESHOLD,
   paste(COMPLEXITY, collapse = " < ")
 ))
@@ -1078,11 +1078,7 @@ if (!length(files)) {
         learning_rate = r$specs[[1]]$params$learning_rate,
         has_split_gain = !is.null(r$split_gain),
         # A deer twin saves which animal each id stands for
-        deer_levels_ok = if (grepl("_deer$", r$config)) {
-          length(r$deer_levels) == r$n_animals
-        } else {
-          is.null(r$deer_levels)
-        }
+        deer_levels_ok = length(r$deer_levels) == r$n_animals
       ),
       blocks_of(r$specs)
     )
@@ -1099,7 +1095,7 @@ if (!length(files)) {
     suffix = c("", "_fit")
   )
   stopifnot(
-    # every season x type was fit, once
+    # every season x deer type was fit, once, and nothing else
     nrow(audit) == nrow(expected),
     !anyNA(joined$held_out),
     # with the agreed blocks
@@ -1113,8 +1109,8 @@ if (!length(files)) {
     all(audit$rounds == N_ROUNDS),
     all(audit$learning_rate == LEARNING_RATE),
     all(joined$depth == joined$depth_fit),
-    # by the code that scores splits on held-out steps, where it applies
-    all(joined$has_split_gain == !joined$deer)
+    # a deer type's splits are not scored on held-out steps
+    !any(joined$has_split_gain)
   )
   # Every type of a season was fit to the same table, and for the walked
   # season that table is the current one, yearlings dropped.
@@ -1128,28 +1124,28 @@ if (!length(files)) {
     all(walked$n_steps == n_strata)
   )
 
-  # The selection, coded the two ways the plotting scripts code it: one
-  # model per season and family
+  # The selection, coded the two ways the scripts code it: one model per
+  # season
   audit$type <- sub("_deer$", "", audit$config)
   sel_a <- audit |>
-    dplyr::group_by(season, deer) |>
+    dplyr::group_by(season) |>
     dplyr::mutate(per_deer = (held_out - max(held_out)) / n_deer) |>
     dplyr::filter(per_deer > -THRESHOLD) |>
     dplyr::slice_min(match(type, COMPLEXITY), n = 1) |>
     dplyr::ungroup() |>
-    dplyr::arrange(season, deer)
+    dplyr::arrange(season)
   sel_b <- audit |>
-    dplyr::group_by(season, deer) |>
+    dplyr::group_by(season) |>
     dplyr::mutate(
       within = (held_out - max(held_out)) / n_deer > -THRESHOLD,
       selected = type == COMPLEXITY[min(match(type[within], COMPLEXITY))]
     ) |>
     dplyr::filter(selected) |>
     dplyr::ungroup() |>
-    dplyr::arrange(season, deer)
+    dplyr::arrange(season)
   stopifnot(
     identical(sel_a$config, sel_b$config),
-    nrow(sel_a) == 2 * length(SEASONS)
+    nrow(sel_a) == length(SEASONS)
   )
 
   # What clears the threshold in each season's selected model
@@ -1162,43 +1158,19 @@ if (!length(files)) {
       dplyr::filter(!(booster == "modifier" & scheme == "within")) |>
       dplyr::mutate(per_deer = cv / r$n_deer_years) |>
       dplyr::filter(per_deer >= THRESHOLD, !grepl("^shadow", variable))
-    # A deer type stores no pair scores
-    pairs <- if (!is.null(r$split_gain)) {
-      r$split_gain$pairs |>
-        dplyr::filter(parent != child) |>
-        dplyr::mutate(a = pmin(parent, child), b = pmax(parent, child)) |>
-        dplyr::group_by(a, b) |>
-        dplyr::summarise(
-          per_deer = sum(heldout) / r$n_deer_years,
-          .groups = "drop"
-        )
-    } else {
-      tibble::tibble(per_deer = numeric(0))
-    }
     tibble::tibble(
       season = r$season,
       model = r$config,
-      variables = paste(vars$variable, collapse = ", "),
-      best_pair = if (is.null(r$split_gain)) {
-        "(not scored)"
-      } else if (nrow(pairs)) {
-        sprintf("%.2f", max(pairs$per_deer))
-      } else {
-        "(no pairs)"
-      },
-      pairs_cleared = sum(pairs$per_deer >= THRESHOLD)
+      variables = paste(vars$variable, collapse = ", ")
     )
   })
   cat(
     sprintf(
-      "\n%s (%s)\n  variables over %g: %s\n  best pair %s, pairs over %g: %d\n",
+      "\n%s (%s)\n  variables over %g: %s\n",
       cleared$season,
       cleared$model,
       THRESHOLD,
-      cleared$variables,
-      cleared$best_pair,
-      THRESHOLD,
-      cleared$pairs_cleared
+      cleared$variables
     ),
     sep = ""
   )

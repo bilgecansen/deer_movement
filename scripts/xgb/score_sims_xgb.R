@@ -1,10 +1,10 @@
 #' @description
 #' Score every deer-year's simulated paths against its real path, for each
 #' model: HR overlap, svf agreement and energy score. SET picks the test year
-#' or the training years. MODELS picks the paths: "xgb", the final xgb models
-#' (sim_paths_xgb.R), or "gam", the GAM null and the Gilbertson model
-#' (sim_paths_gam_xgb.R), which carry no xgb pick, so their deer, best and
-#' simplest columns are NA.
+#' or the training years. MODELS picks the paths: "xgb", the season's two
+#' final xgb deer models (sim_paths_xgb.R), or "gam", the GAM null and the
+#' Gilbertson model (sim_paths_gam_xgb.R), which carry no xgb pick, so their
+#' best and simplest columns are NA.
 #'
 #' The simulated paths step every 4 hours through the gaps in the real
 #' fixes. Before scoring they are cut to the real fix times, so the real and
@@ -71,8 +71,6 @@ if (length(.args) >= 3) {
 stopifnot(SET %in% c("test", "train"), MODELS %in% c("xgb", "gam"))
 # The reach rule the paths were simulated with: "longest" or "gamma99"
 REACH <- "gamma99"
-# TRUE: score only the xgb deer types
-DEER_ONLY <- TRUE
 # Deer-years to score: NULL for every simulated one not yet scored
 KEYS <- NULL
 N_PAR <- parallel::detectCores() - 1L
@@ -129,14 +127,11 @@ score_one <- function(key) {
   )
   obs_es <- obs[lubridate::round_date(obs$t1_, "hour") != min(fix_hours), ]
   configs <- names(sims$paths)
-  if (MODELS == "xgb" && DEER_ONLY) {
-    configs <- configs[grepl("_deer$", configs)]
-  }
   # The GAM paths carry no xgb pick
   picks <- if (MODELS == "xgb") {
     sims$picks
   } else {
-    tibble::tibble(config = configs, deer = NA, best = NA, simplest = NA)
+    tibble::tibble(config = configs, best = NA, simplest = NA)
   }
 
   out <- purrr::map_dfr(configs, function(cf) {
@@ -163,7 +158,7 @@ score_one <- function(key) {
     tibble::tibble(
       set = SET, reach_rule = REACH, reach = sims$reach,
       key = key, season = sims$season, config = cf,
-      deer = pick$deer, best = pick$best, simplest = pick$simplest,
+      best = pick$best, simplest = pick$simplest,
       hr_overlap = ud$bat_uds, svf_agree = as.numeric(svf),
       svf_agree_ctmm = ud$svf_agree,
       energy_score = es,

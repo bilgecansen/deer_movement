@@ -37,8 +37,7 @@ suppressPackageStartupMessages({
 source("scripts/helper_functions.R")
 
 tag <- xgb_scores_tag(SET, REACH)
-xgb <- readRDS(sprintf("filters/xgb/scores_xgb_%s.rds", tag)) |>
-  dplyr::filter(deer)
+xgb <- readRDS(sprintf("filters/xgb/scores_xgb_%s.rds", tag))
 gam <- readRDS(sprintf("filters/xgb/scores_gam_%s.rds", tag))
 models <- c("xgb best", "xgb simplest", "GAM null", "Gilbertson")
 # A type that is both a season's best and its simplest pick counts as both

@@ -1,10 +1,9 @@
 #' @description
 #' Simulate one deer-year's path from each of its season's final models
-#' (results/xgb/final_selection.rds: the best and the simplest type,
-#' without and with deer), N_PATHS paths per model. DEER_ONLY keeps to the
-#' two deer types. The deer-year may be a test year or a training year;
-#' either is simulated the same way, from its own HR centre, rasters and
-#' dates.
+#' (results/xgb/final_selection.rds: the best and the simplest deer type),
+#' N_PATHS paths per model. The deer-year may be a test year or a training
+#' year; either is simulated the same way, from its own HR centre, rasters
+#' and dates.
 #'
 #' A path starts at the deer's first fix with a random heading and steps
 #' every STEP_HOURS to its last fix, through the gaps in the fixes, so it is
@@ -43,8 +42,6 @@
 # Configuration ---------------------------------------------------------------
 KEY <- "5227_nb_2021"
 N_PATHS <- 10L
-# TRUE: simulate only the deer types
-DEER_ONLY <- TRUE
 STEP_HOURS <- 4
 # How far a step can reach: "longest" or "gamma99" (see above)
 REACH <- "gamma99"
@@ -69,14 +66,11 @@ season <- track$season
 stp <- track$stp[[1]]
 
 picks <- readRDS("results/xgb/final_selection.rds")
-picks <- picks[picks$season == season & (picks$deer | !DEER_ONLY), ]
+picks <- picks[picks$season == season, ]
 models <- lapply(sprintf("results/xgb/final_%s_%s.rds", season, picks$config),
                  xgb_path_model, nthread = N_THREAD)
 names(models) <- picks$config
 deer_ids <- lapply(models, function(m) {
-  if (is.null(m$deer_levels)) {
-    return(NA_integer_)
-  }
   i <- match(id, m$deer_levels)
   stopifnot(!is.na(i))
   i - 1L

@@ -1,6 +1,6 @@
 #' @description
-#' Fit one model type on a season's whole training table, without the noise
-#' columns, and save its trees for simulating paths.
+#' Fit one deer model type on a season's whole training table, without the
+#' noise columns, and save its trees for simulating paths.
 #'
 #' The two noise columns calibrate importance in model selection
 #' (fit_model_xgb.R); a model used to simulate paths has no use for them,
@@ -22,7 +22,7 @@
 
 # Configuration ---------------------------------------------------------------
 SEASON <- "fa"
-CONFIG <- "main"
+CONFIG <- "main_deer"
 # The same settings as fit_model_xgb.R
 N_ROUNDS <- 500L
 LEARNING_RATE <- 0.05
@@ -42,13 +42,13 @@ source("scripts/helper_functions.R")
 out_path <- sprintf("results/xgb/final_%s_%s.rds", SEASON, CONFIG)
 d <- readRDS(sprintf("data/xgb/pooled_start_%s.rds", SEASON))
 
-# The deer types' animal id, coded 0..k-1 for xgboost's categorical splits
-with_deer <- grepl("_deer$", CONFIG)
-deer_levels <- NULL
-if (with_deer) {
-  deer_levels <- sort(unique(d$animal))
-  d$deer_id <- match(d$animal, deer_levels) - 1L
+if (!grepl("_deer$", CONFIG)) {
+  stop("CONFIG must be a deer model type (\"<type>_deer\"), not '", CONFIG,
+       "'")
 }
+# The animal id, coded 0..k-1 for xgboost's categorical splits
+deer_levels <- sort(unique(d$animal))
+d$deer_id <- match(d$animal, deer_levels) - 1L
 
 # Which columns go where ------------------------------------------------------
 # As in fit_model_xgb.R, less the two noise columns
