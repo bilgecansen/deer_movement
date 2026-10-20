@@ -336,15 +336,20 @@ deer_track_age <- function(tracks) {
 #'     the start of the track (deer_track_age); deer collared at over two
 #'     years are always kept
 #'   * TRAIN_YEARS as training and calibration, TEST_YEAR as test
-#'   * only deer-seasons with both a training and a test track
 #'   * none of EXCLUDED_DEER_SEASONS
+#'   * range-resident deer-years only: initial tau at most TAU_MAX_DAYS in
+#'     data/residency_tau.rds (residency_tau.R)
+#'   * only deer-seasons with both a training and a test track left after
+#'     the rules above
 #' keep, excursion, unstable_hr_center, dump and weird are not used.
 #'
 #' @param tracks The source track table (library/SW_filtered_deer.RData),
 #'   whole: ages are counted from each deer's first fix in it
+#' @param residency Apply the range-residency screen. residency_tau.R
+#'   passes FALSE, to compute tau for the list without it.
 #' @return The rows of `tracks` on the list, with a `set` column, "train" or
 #'   "test"
-canonical_deer <- function(tracks) {
+canonical_deer <- function(tracks, residency = TRUE) {
   age <- deer_track_age(tracks)
   year <- as.integer(tracks$year)
   deer_season <- paste(tracks$id, tracks$season, sep = "_")
@@ -354,8 +359,25 @@ canonical_deer <- function(tracks) {
     !deer_season %in% EXCLUDED_DEER_SEASONS
   out <- tracks[on_list, ]
   out$set <- ifelse(as.integer(out$year) %in% TRAIN_YEARS, "train", "test")
-  out_ds <- paste(out$id, out$season, sep = "_")
-  both <- intersect(out_ds[out$set == "train"], out_ds[out$set == "test"])
-  out[out_ds %in% both, ]
+  both_sets <- function(d) {
+    ds <- paste(d$id, d$season, sep = "_")
+    both <- intersect(ds[d$set == "train"], ds[d$set == "test"])
+    d[ds %in% both, ]
+  }
+  # The screen only removes deer-years, so a deer-season the both-sets rule
+  # drops before it is dropped after it too: residency_tau.R screens the
+  # list as it stands before the screen, and the rule runs again after
+  out <- both_sets(out)
+  if (residency) {
+    tau_file <- "data/residency_tau.rds"
+    if (!file.exists(tau_file)) {
+      stop(tau_file, " is missing: run scripts/residency_tau.R")
+    }
+    tau <- readRDS(tau_file)
+    key <- sprintf("%s_%s_%d", out$id, out$season, as.integer(out$year))
+    stopifnot(all(key %in% tau$key))
+    out <- both_sets(out[!key %in% tau$key[tau$tau_days > TAU_MAX_DAYS], ])
+  }
+  out
 }
 

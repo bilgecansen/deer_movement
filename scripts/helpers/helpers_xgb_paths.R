@@ -537,6 +537,98 @@ xgb_onestep_logscore <- function(model, land, static, stp, reach,
   dplyr::bind_rows(out)
 }
 
+#' One-step draws from one model at a deer-year's real steps
+#'
+#' At every real step with a turning angle, the kernel of
+#' xgb_onestep_logscore() is built at the real start, with the real step's
+#' heading, hour and NDVI layers, and `n_draws` cells are drawn from it with
+#' replacement, each at its weight: where the model would have sent the deer
+#' from where it really stood. A step whose candidates all have no weight
+#' has no draws.
+#'
+#' @inheritParams xgb_onestep_logscore
+#' @param n_draws Cells to draw per step
+#' @return tibble(nsim, step, x_, y_, t_): draw `nsim` at every step, in
+#'   step order, t_ the real step's end time, x_ and y_ NA where the step
+#'   has no draws. Attribute "logp_end": per step, the log probability of
+#'   the cell where the deer ended, NA unless xgb_onestep_logscore() scores
+#'   the step "ok"
+xgb_onestep_draw <- function(model, land, static, stp, reach, deer_id,
+                             n_draws) {
+  res <- land$res
+  off <- xgb_path_offsets(reach, res)
+  steps <- which(!is.na(stp$ta_))
+  # The step before ends where this one starts, in the same burst
+  prev <- steps - 1L
+  stopifnot(all(prev >= 1), all(stp$burst_[prev] == stp$burst_[steps]),
+            all(stp$x2_[prev] == stp$x1_[steps]),
+            all(stp$y2_[prev] == stp$y1_[steps]))
+  heading <- atan2(stp$y2_[prev] - stp$y1_[prev],
+                   stp$x2_[prev] - stp$x1_[prev])
+  layer_start <- xgb_path_ndvi_layer(stp$t1_[steps], land$ndvi_times)
+  layer_end <- if (attr(static, "reads_ndvi")) {
+    xgb_path_ndvi_layer(stp$t2_[steps], land$ndvi_times)
+  } else {
+    rep(1L, length(steps))
+  }
+  x <- matrix(NA_real_, length(steps), n_draws)
+  y <- x
+  logp_end <- rep(NA_real_, length(steps))
+
+  for (j in seq_along(steps)) {
+    s <- steps[j]
+    x0 <- stp$x1_[s]
+    y0 <- stp$y1_[s]
+    here <- xgb_path_cell(land, x0, y0)
+    end <- xgb_path_cell(land, stp$x2_[s], stp$y2_[s])
+    row <- (here - 1) %/% land$ncol + 1
+    col <- (here - 1) %% land$ncol + 1
+    cr <- row + off$dr
+    cc <- col + off$dc
+    cx <- land$ext[["xmin"]] + (cc - 0.5) * res
+    cy <- land$ext[["ymax"]] - (cr - 0.5) * res
+    dx <- cx - x0
+    dy <- cy - y0
+    sl <- sqrt(dx^2 + dy^2)
+    keep <- sl <= reach & cr >= 1 & cr <= land$nrow & cc >= 1 &
+      cc <= land$ncol
+    cell <- (cr[keep] - 1) * land$ncol + cc[keep]
+    score <- static[cbind(cell, layer_end[j])]
+    ok <- !is.na(score)
+    if (!any(ok)) {
+      next
+    }
+    d <- cbind(
+      data.frame(sl_ = sl[keep], tod_hour = xgb_path_hour(stp$t1_[s]),
+                 cos_ta = cos(atan2(dy[keep], dx[keep]) - heading[j])),
+      xgb_path_start_columns(land, here, layer_start[j])[
+        rep(1L, sum(keep)), , drop = FALSE
+      ],
+      deer_id = deer_id
+    )
+    score[ok] <- score[ok] + xgb_path_dynamic(model, d[ok, , drop = FALSE])
+    lw <- score[ok] - log(sl[keep][ok])
+    w <- exp(lw - max(lw))
+    pick <- sample.int(length(lw), n_draws, replace = TRUE, prob = w)
+    x[j, ] <- cx[keep][ok][pick]
+    y[j, ] <- cy[keep][ok][pick]
+    at_end <- which(cell[ok] == end)
+    if (length(at_end)) {
+      logp_end[j] <- lw[at_end] - (max(lw) + log(sum(w)))
+    }
+  }
+
+  out <- tibble::tibble(
+    nsim = rep(seq_len(n_draws), each = length(steps)),
+    step = rep(steps, n_draws),
+    x_ = as.vector(x),
+    y_ = as.vector(y),
+    t_ = rep(stp$t2_[steps], n_draws)
+  )
+  attr(out, "logp_end") <- logp_end
+  out
+}
+
 #' The simulation clock for one deer-year
 #'
 #' A step every `step_hours` from the first real fix, through the gaps in
@@ -617,6 +709,15 @@ xgb_sims_dir <- function(set, reach = "longest") {
             reach %in% c("longest", "gamma99"))
   base <- if (set == "test") "sims/xgb_paths" else "sims/xgb_paths_train"
   if (reach == "longest") base else paste0(base, "_", reach)
+}
+
+#' Folder of the one-step draws for a set and reach rule
+#'
+#' @inheritParams xgb_sims_dir
+#' @return Folder path: sims/xgb_onestep/ (test) or sims/xgb_onestep_train/
+#'   (training), with a "_<reach>" suffix unless the reach is "longest"
+xgb_onestep_dir <- function(set, reach = "longest") {
+  sub("xgb_paths", "xgb_onestep", xgb_sims_dir(set, reach), fixed = TRUE)
 }
 
 #' Tag of the scores for a set and reach rule: the set, plus the rule
@@ -935,6 +1036,94 @@ xgb_gam_onestep_logscore <- function(fit, land, stp, reach, sl_distr,
                    status = status, logp = logp)
   })
   dplyr::bind_rows(out)
+}
+
+#' One-step draws from a per-deer-year GAM at a deer-year's real steps
+#'
+#' xgb_onestep_draw() with the GAM's kernel, as xgb_gam_onestep_logscore()
+#' builds it at the real start: every cell within `reach` except the
+#' start's own, weighing exp(eta + log tentative density) / distance, with
+#' no weight on open water or where a column the GAM reads is missing.
+#' `n_draws` cells are drawn per step with replacement, each at its weight.
+#'
+#' @inheritParams xgb_gam_onestep_logscore
+#' @param n_draws Cells to draw per step
+#' @return tibble(nsim, step, x_, y_, t_) and attribute "logp_end", as
+#'   xgb_onestep_draw() returns them, "logp_end" matching
+#'   xgb_gam_onestep_logscore() on the steps it scores "ok"
+xgb_gam_onestep_draw <- function(fit, land, stp, reach, sl_distr, ta_distr,
+                                 n_draws) {
+  res <- land$res
+  off <- xgb_path_offsets(reach, res)
+  end_vars <- xgb_gam_end_vars(fit)
+  steps <- which(!is.na(stp$ta_))
+  prev <- steps - 1L
+  stopifnot(all(prev >= 1), all(stp$burst_[prev] == stp$burst_[steps]),
+            all(stp$x2_[prev] == stp$x1_[steps]),
+            all(stp$y2_[prev] == stp$y1_[steps]))
+  heading <- atan2(stp$y2_[prev] - stp$y1_[prev],
+                   stp$x2_[prev] - stp$x1_[prev])
+  layer_end <- if ("ndvi_end" %in% end_vars) {
+    xgb_path_ndvi_layer(stp$t2_[steps], land$ndvi_times)
+  } else {
+    rep(1L, length(steps))
+  }
+  x <- matrix(NA_real_, length(steps), n_draws)
+  y <- x
+  logp_end <- rep(NA_real_, length(steps))
+
+  for (j in seq_along(steps)) {
+    s <- steps[j]
+    x0 <- stp$x1_[s]
+    y0 <- stp$y1_[s]
+    here <- xgb_path_cell(land, x0, y0)
+    end <- xgb_path_cell(land, stp$x2_[s], stp$y2_[s])
+    row <- (here - 1) %/% land$ncol + 1
+    col <- (here - 1) %% land$ncol + 1
+    cr <- row + off$dr
+    cc <- col + off$dc
+    cx <- land$ext[["xmin"]] + (cc - 0.5) * res
+    cy <- land$ext[["ymax"]] - (cr - 0.5) * res
+    dx <- cx - x0
+    dy <- cy - y0
+    sl <- sqrt(dx^2 + dy^2)
+    keep <- sl <= reach & cr >= 1 & cr <= land$nrow & cc >= 1 &
+      cc <= land$ncol
+    cell <- (cr[keep] - 1) * land$ncol + cc[keep]
+    k <- xgb_gam_end_columns(land, cell, rep(layer_end[j], length(cell)),
+                             end_vars, xgb_gam_ndvi_centre(fit))
+    dry <- !is.na(land$cols$landcover[cell]) & stats::complete.cases(k)
+    if (!any(dry)) {
+      next
+    }
+    ta <- atan2(dy[keep][dry], dx[keep][dry]) - heading[j]
+    nd <- data.frame(
+      sl_ = sl[keep][dry],
+      ta_ = atan2(sin(ta), cos(ta)),
+      tod_ = xgb_path_hour(stp$t1_[s]),
+      k[dry, , drop = FALSE]
+    )
+    eta <- as.numeric(stats::predict(fit, newdata = nd, type = "link"))
+    lw <- eta + gam_movement_kernel(nd, sl_distr, ta_distr) - log(nd$sl_)
+    w <- exp(lw - max(lw))
+    pick <- sample.int(length(lw), n_draws, replace = TRUE, prob = w)
+    x[j, ] <- cx[keep][dry][pick]
+    y[j, ] <- cy[keep][dry][pick]
+    at_end <- which(cell[dry] == end)
+    if (length(at_end)) {
+      logp_end[j] <- lw[at_end] - (max(lw) + log(sum(w)))
+    }
+  }
+
+  out <- tibble::tibble(
+    nsim = rep(seq_len(n_draws), each = length(steps)),
+    step = rep(steps, n_draws),
+    x_ = as.vector(x),
+    y_ = as.vector(y),
+    t_ = rep(stp$t2_[steps], n_draws)
+  )
+  attr(out, "logp_end") <- logp_end
+  out
 }
 
 #' Simulate paths from a per-deer-year GAM

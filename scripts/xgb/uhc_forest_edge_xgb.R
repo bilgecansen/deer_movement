@@ -21,16 +21,24 @@
 #' ones on average (0.1 is about 10% nearer or farther). Each model is set
 #' against the GAM null deer-year by deer-year.
 #'
+#' MODE "onestep" runs the same summary on the one-step draws of
+#' sim_onestep_xgb.R instead of the paths: at every real step with a turning
+#' angle, 10 endpoints from each model's kernel at the real start, draw r of
+#' every step standing in for path r, against the real ends of those steps
+#' in place of the real fixes.
+#'
 #' Inputs:  data/tracks/data_<key>.rds, sims_xgb_<key>.rds and
-#'          sims_gam_<key>.rds in xgb_sims_dir(SET, REACH), the landcover
-#'          rasters
+#'          sims_gam_<key>.rds in xgb_sims_dir(SET, REACH) (paths), or
+#'          onestep_<key>.rds in xgb_onestep_dir(SET, REACH) (onestep), the
+#'          landcover rasters
 #' Output:  filters/xgb/uhc_forest_edge_<tag>.rds — the log distances per
 #'          deer-year, source (real or model) and path; and
 #'          plots/uhc_forest_edge_w1_<tag>.png; <tag> is
-#'          xgb_scores_tag(SET, REACH)
+#'          xgb_scores_tag(SET, REACH), with "_onestep" appended in that mode
 #'
-#' Configuration: edit the block below before running. The set can also be
-#' given on the command line: Rscript scripts/xgb/uhc_forest_edge_xgb.R train
+#' Configuration: edit the block below before running. The set and the mode
+#' can also be given on the command line:
+#'   Rscript scripts/xgb/uhc_forest_edge_xgb.R train onestep
 
 # Configuration ---------------------------------------------------------------
 SET <- "test"
@@ -39,6 +47,12 @@ if (length(.args) >= 1) {
   SET <- .args[1]
 }
 stopifnot(SET %in% c("test", "train"))
+# "paths": the free-running paths; "onestep": the one-step draws
+MODE <- "paths"
+if (length(.args) >= 2) {
+  MODE <- .args[2]
+}
+stopifnot(MODE %in% c("paths", "onestep"))
 REACH <- "gamma99"
 TOLERANCE_MINS <- 30
 # FALSE: reuse the saved values if they exist, and only summarise
@@ -55,12 +69,21 @@ suppressPackageStartupMessages({
 source("scripts/helper_functions.R")
 
 tag <- xgb_scores_tag(SET, REACH)
-sims_dir <- xgb_sims_dir(SET, REACH)
+if (MODE == "onestep") {
+  tag <- paste0(tag, "_onestep")
+  sims_dir <- xgb_onestep_dir(SET, REACH)
+} else {
+  sims_dir <- xgb_sims_dir(SET, REACH)
+}
 deer <- canonical_deer(readRDS("library/SW_filtered_deer.RData"))
 deer <- deer[deer$set == SET, ]
 keys <- sprintf("%s_%s_%d", deer$id, deer$season, as.integer(deer$year))
-have <- file.exists(file.path(sims_dir, sprintf("sims_xgb_%s.rds", keys))) &
-  file.exists(file.path(sims_dir, sprintf("sims_gam_%s.rds", keys)))
+have <- if (MODE == "onestep") {
+  file.exists(file.path(sims_dir, sprintf("onestep_%s.rds", keys)))
+} else {
+  file.exists(file.path(sims_dir, sprintf("sims_xgb_%s.rds", keys))) &
+    file.exists(file.path(sims_dir, sprintf("sims_gam_%s.rds", keys)))
+}
 if (any(!have)) {
   cat(sprintf("%d deer-years lack xgb or GAM paths and are left out\n",
               sum(!have)))
@@ -71,38 +94,56 @@ values_one <- function(key) {
   source("scripts/helper_functions.R")
   track <- readRDS(sprintf("data/tracks/data_%s.rds", key))
   stp <- track$stp[[1]]
-  xs <- readRDS(file.path(sims_dir, sprintf("sims_xgb_%s.rds", key)))
-  gs <- readRDS(file.path(sims_dir, sprintf("sims_gam_%s.rds", key)))
-  stopifnot(identical(xs$times, gs$times))
-  times <- xs$times
+  if (MODE == "onestep") {
+    os <- readRDS(file.path(sims_dir, sprintf("onestep_%s.rds", key)))
+    times <- os$times
+    # The ends of the real steps drawn from, each with its own draws
+    real <- os$real
+    tick <- seq_along(times)
+    picks <- os$picks
+    pick_label <- ifelse(picks$best, "xgb best", "xgb simplest")
+    names(pick_label) <- picks$config
+    model_paths <- c(
+      stats::setNames(os$paths[picks$config], pick_label[picks$config]),
+      list(`GAM null` = os$paths$null_gam,
+           `Gilbertson` = os$paths$gilbertson_gam)
+    )
+  } else {
+    xs <- readRDS(file.path(sims_dir, sprintf("sims_xgb_%s.rds", key)))
+    gs <- readRDS(file.path(sims_dir, sprintf("sims_gam_%s.rds", key)))
+    stopifnot(identical(xs$times, gs$times))
+    times <- xs$times
 
-  # The real fixes after the first, and the clock tick of each
-  last_of_burst <- !duplicated(stp$burst_, fromLast = TRUE)
-  real <- dplyr::bind_rows(
-    tibble::tibble(t_ = stp$t1_, x_ = stp$x1_, y_ = stp$y1_),
-    tibble::tibble(t_ = stp$t2_[last_of_burst], x_ = stp$x2_[last_of_burst],
-                   y_ = stp$y2_[last_of_burst])
-  ) |>
-    dplyr::distinct(t_, .keep_all = TRUE) |>
-    dplyr::arrange(t_)
-  real <- real[-1, ]
-  gap <- abs(outer(as.numeric(real$t_), as.numeric(times), "-"))
-  tick <- max.col(-gap, ties.method = "first")
-  stopifnot(gap[cbind(seq_along(tick), tick)] <= TOLERANCE_MINS * 60)
+    # The real fixes after the first, and the clock tick of each
+    last_of_burst <- !duplicated(stp$burst_, fromLast = TRUE)
+    real <- dplyr::bind_rows(
+      tibble::tibble(t_ = stp$t1_, x_ = stp$x1_, y_ = stp$y1_),
+      tibble::tibble(t_ = stp$t2_[last_of_burst],
+                     x_ = stp$x2_[last_of_burst],
+                     y_ = stp$y2_[last_of_burst])
+    ) |>
+      dplyr::distinct(t_, .keep_all = TRUE) |>
+      dplyr::arrange(t_)
+    real <- real[-1, ]
+    gap <- abs(outer(as.numeric(real$t_), as.numeric(times), "-"))
+    tick <- max.col(-gap, ties.method = "first")
+    stopifnot(gap[cbind(seq_along(tick), tick)] <= TOLERANCE_MINS * 60)
+
+    picks <- xs$picks
+    pick_label <- ifelse(picks$best, "xgb best", "xgb simplest")
+    names(pick_label) <- picks$config
+    model_paths <- c(
+      stats::setNames(xs$paths, pick_label[names(xs$paths)]),
+      list(`GAM null` = gs$paths$null_gam,
+           `Gilbertson` = gs$paths$gilbertson_gam)
+    )
+  }
 
   edge <- load_landcover(track$year, track$season)[["forest_edge"]]
   edge_at <- function(x, y) {
     log(abs(terra::extract(edge, cbind(x, y))[[1]]))
   }
 
-  picks <- xs$picks
-  pick_label <- ifelse(picks$best, "xgb best", "xgb simplest")
-  names(pick_label) <- picks$config
-  model_paths <- c(
-    stats::setNames(xs$paths, pick_label[names(xs$paths)]),
-    list(`GAM null` = gs$paths$null_gam,
-         `Gilbertson` = gs$paths$gilbertson_gam)
-  )
   sim <- purrr::imap_dfr(model_paths, function(p, model) {
     purrr::map_dfr(sort(unique(p$nsim)), function(r) {
       pr <- p[p$nsim == r, ]
@@ -170,6 +211,18 @@ for (m in c("xgb best", "xgb simplest", "Gilbertson")) {
 }
 
 # Plot -----------------------------------------------------------------------
+# Words for the figure: the models' positions, and the real deer's
+if (MODE == "onestep") {
+  set_lab <- paste(SET, "(one step)")
+  sims_word <- "draws"
+  real_word <- "real step ends"
+  draw_note <- " Draw r of every real step makes up set r."
+} else {
+  set_lab <- SET
+  sims_word <- "paths"
+  real_word <- "real fixes"
+  draw_note <- ""
+}
 cols <- c("xgb best" = "#1B9E77", "xgb simplest" = "#66A61E",
           "Gilbertson" = "#D95F02")
 season_lab <- c(br = "Breeding", fa = "Fawning", nb = "Non-breeding",
@@ -197,15 +250,17 @@ g <- ggplot(d_w1, aes(model, diff, fill = model)) +
        y = "Wasserstein distance minus the GAM null's, per deer-year",
        title = sprintf(paste("Distance to the forest edge per deer-year:",
                              "distance from the real deer against the GAM",
-                             "null, %s"), SET),
-       subtitle = paste("Below 0: the model's paths keep a distance from",
-                        "the forest edge closer to the real deer's than the",
-                        "null's do. Numbers: deer-years below 0."),
-       caption = paste("Wasserstein-1 distance (log metres, inside and",
-                       "outside the forest alike) between the distance to",
-                       "the edge at the real fixes and at the model's 10",
-                       "paths pooled; the 1% most extreme differences fall",
-                       "outside the axis.")) +
+                             "null, %s"), set_lab),
+       subtitle = paste("Below 0: the model's", sims_word, "keep a distance",
+                        "from the forest edge closer to the real deer's than",
+                        "the null's do. Numbers: deer-years below 0."),
+       caption = paste0(paste("Wasserstein-1 distance (log metres, inside and",
+                              "outside the forest alike) between the",
+                              "distance to the edge at the", real_word,
+                              "and at the model's 10", sims_word, "pooled;",
+                              "the 1% most extreme differences fall outside",
+                              "the axis."),
+                        draw_note)) +
   theme_bw(base_size = 11)
 ggsave(sprintf("plots/uhc_forest_edge_w1_%s.png", tag), g, width = 14,
        height = 6, dpi = 140)

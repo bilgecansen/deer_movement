@@ -53,3 +53,9 @@ MIN_AGE_MONTHS <- 24
 # Both the training and the test years go.
 EXCLUDED_DEER_SEASONS <- c("7938_nb")
 
+# Range-residency screen (Gilbertson et al. 2025; residency_tau.R): a
+# deer-year whose initial ctmm estimate of tau, roughly the time the deer
+# takes to cross its range, is over this many days is not range resident
+# and leaves the list.
+TAU_MAX_DAYS <- 2
+

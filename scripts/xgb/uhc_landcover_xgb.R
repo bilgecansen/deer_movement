@@ -15,38 +15,31 @@
 #' Landcover is read from the deer-year's own annual raster, the one the
 #' models read, open water included.
 #'
-#' Four summaries, printed and plotted:
-#'   * per season, the share of each class over all the season's real fixes
-#'     against the same share over the simulated positions, path by path
-#'     (path r of every deer-year pooled), so the 10 paths give 10 pooled
-#'     shares and their range is the envelope;
-#'   * per deer-year, the total variation distance between the real class
-#'     shares and each model's mean share over its paths (half the sum of
-#'     the absolute differences: 0 the same mix, 1 no class in common), and
-#'     which models come closer than the GAM null;
-#'   * per deer-year and class, the model's mean share over its paths minus
-#'     the real share, its spread over the deer-years showing how far
-#'     individual deer are missed;
-#'   * per deer-year, the energy score of the real class mix under the
-#'     model's paths (scoringRules::es_sample(): the vectors of class shares,
-#'     the real one against the 10 simulated ones). It is the mean distance
-#'     from the paths to the real mix less half the mean distance between
-#'     the paths, so it rewards paths close to the real deer and a spread no
-#'     wider than needed; lower is better, 0 every path exactly the real
-#'     mix. Each model is set against the GAM null deer-year by deer-year.
+#' The summary, printed and plotted: per deer-year and coarse class
+#' (COARSE: forest, agricultural, grass, other, as Gilbertson et al. 2025
+#' coarsen theirs), the CRPS of the real share of the class under the
+#' model's 10 path shares (scoringRules::crps_sample()), each class on its
+#' own; lower is better. A class neither the deer nor any model used in a
+#' deer-year is left out. Each model is set against the GAM null.
+#'
+#' MODE "onestep" runs the same summary on the one-step draws of
+#' sim_onestep_xgb.R instead of the paths: at every real step with a turning
+#' angle, 10 endpoints from each model's kernel at the real start, draw r of
+#' every step standing in for path r, against the real ends of those steps
+#' in place of the real fixes.
 #'
 #' Inputs:  data/tracks/data_<key>.rds, sims_xgb_<key>.rds and
-#'          sims_gam_<key>.rds in xgb_sims_dir(SET, REACH), the landcover
-#'          rasters
+#'          sims_gam_<key>.rds in xgb_sims_dir(SET, REACH) (paths), or
+#'          onestep_<key>.rds in xgb_onestep_dir(SET, REACH) (onestep), the
+#'          landcover rasters
 #' Output:  filters/xgb/uhc_landcover_<tag>.rds — class counts per
 #'          deer-year, source (real or model) and path; and
-#'          plots/uhc_landcover_<tag>.png, plots/uhc_landcover_tvd_<tag>.png,
-#'          plots/uhc_landcover_deer_error_<tag>.png and
-#'          plots/uhc_landcover_energy_<tag>.png; <tag> is
-#'          xgb_scores_tag(SET, REACH)
+#'          plots/uhc_landcover_crps_<tag>.png; <tag> is
+#'          xgb_scores_tag(SET, REACH), with "_onestep" appended in that mode
 #'
-#' Configuration: edit the block below before running. The set can also be
-#' given on the command line: Rscript scripts/xgb/uhc_landcover_xgb.R train
+#' Configuration: edit the block below before running. The set and the mode
+#' can also be given on the command line:
+#'   Rscript scripts/xgb/uhc_landcover_xgb.R train onestep
 
 # Configuration ---------------------------------------------------------------
 SET <- "test"
@@ -55,8 +48,22 @@ if (length(.args) >= 1) {
   SET <- .args[1]
 }
 stopifnot(SET %in% c("test", "train"))
+# "paths": the free-running paths; "onestep": the one-step draws
+MODE <- "paths"
+if (length(.args) >= 2) {
+  MODE <- .args[2]
+}
+stopifnot(MODE %in% c("paths", "onestep"))
 REACH <- "gamma99"
 TOLERANCE_MINS <- 30
+# The coarse classes of the CRPS summary, as Gilbertson et al. (2025)
+# coarsen theirs; open water, where no model steps, goes with other
+COARSE <- c(forest = "forest", wetland_forested = "forest",
+            corn = "agricultural", soybeans = "agricultural",
+            alfalfa_hay = "agricultural", small_grains = "agricultural",
+            other_ag = "agricultural", grassland = "grass",
+            developed = "other", wetland_open = "other",
+            open_water = "other")
 # FALSE: reuse the saved class counts if they exist, and only summarise
 RECOUNT <- FALSE
 N_PAR <- parallel::detectCores() - 1L
@@ -71,12 +78,21 @@ suppressPackageStartupMessages({
 source("scripts/helper_functions.R")
 
 tag <- xgb_scores_tag(SET, REACH)
-sims_dir <- xgb_sims_dir(SET, REACH)
+if (MODE == "onestep") {
+  tag <- paste0(tag, "_onestep")
+  sims_dir <- xgb_onestep_dir(SET, REACH)
+} else {
+  sims_dir <- xgb_sims_dir(SET, REACH)
+}
 deer <- canonical_deer(readRDS("library/SW_filtered_deer.RData"))
 deer <- deer[deer$set == SET, ]
 keys <- sprintf("%s_%s_%d", deer$id, deer$season, as.integer(deer$year))
-have <- file.exists(file.path(sims_dir, sprintf("sims_xgb_%s.rds", keys))) &
-  file.exists(file.path(sims_dir, sprintf("sims_gam_%s.rds", keys)))
+have <- if (MODE == "onestep") {
+  file.exists(file.path(sims_dir, sprintf("onestep_%s.rds", keys)))
+} else {
+  file.exists(file.path(sims_dir, sprintf("sims_xgb_%s.rds", keys))) &
+    file.exists(file.path(sims_dir, sprintf("sims_gam_%s.rds", keys)))
+}
 if (any(!have)) {
   cat(sprintf("%d deer-years lack xgb or GAM paths and are left out\n",
               sum(!have)))
@@ -87,25 +103,51 @@ count_one <- function(key) {
   source("scripts/helper_functions.R")
   track <- readRDS(sprintf("data/tracks/data_%s.rds", key))
   stp <- track$stp[[1]]
-  xs <- readRDS(file.path(sims_dir, sprintf("sims_xgb_%s.rds", key)))
-  gs <- readRDS(file.path(sims_dir, sprintf("sims_gam_%s.rds", key)))
-  stopifnot(identical(xs$times, gs$times))
-  times <- xs$times
+  if (MODE == "onestep") {
+    os <- readRDS(file.path(sims_dir, sprintf("onestep_%s.rds", key)))
+    times <- os$times
+    # The ends of the real steps drawn from, each with its own draws
+    real <- os$real
+    tick <- seq_along(times)
+    picks <- os$picks
+    pick_label <- ifelse(picks$best, "xgb best", "xgb simplest")
+    names(pick_label) <- picks$config
+    model_paths <- c(
+      stats::setNames(os$paths[picks$config], pick_label[picks$config]),
+      list(`GAM null` = os$paths$null_gam,
+           `Gilbertson` = os$paths$gilbertson_gam)
+    )
+  } else {
+    xs <- readRDS(file.path(sims_dir, sprintf("sims_xgb_%s.rds", key)))
+    gs <- readRDS(file.path(sims_dir, sprintf("sims_gam_%s.rds", key)))
+    stopifnot(identical(xs$times, gs$times))
+    times <- xs$times
 
-  # The real fixes after the first
-  last_of_burst <- !duplicated(stp$burst_, fromLast = TRUE)
-  real <- dplyr::bind_rows(
-    tibble::tibble(t_ = stp$t1_, x_ = stp$x1_, y_ = stp$y1_),
-    tibble::tibble(t_ = stp$t2_[last_of_burst], x_ = stp$x2_[last_of_burst],
-                   y_ = stp$y2_[last_of_burst])
-  ) |>
-    dplyr::distinct(t_, .keep_all = TRUE) |>
-    dplyr::arrange(t_)
-  real <- real[-1, ]
-  # The clock tick of each real fix
-  gap <- abs(outer(as.numeric(real$t_), as.numeric(times), "-"))
-  tick <- max.col(-gap, ties.method = "first")
-  stopifnot(gap[cbind(seq_along(tick), tick)] <= TOLERANCE_MINS * 60)
+    # The real fixes after the first
+    last_of_burst <- !duplicated(stp$burst_, fromLast = TRUE)
+    real <- dplyr::bind_rows(
+      tibble::tibble(t_ = stp$t1_, x_ = stp$x1_, y_ = stp$y1_),
+      tibble::tibble(t_ = stp$t2_[last_of_burst],
+                     x_ = stp$x2_[last_of_burst],
+                     y_ = stp$y2_[last_of_burst])
+    ) |>
+      dplyr::distinct(t_, .keep_all = TRUE) |>
+      dplyr::arrange(t_)
+    real <- real[-1, ]
+    # The clock tick of each real fix
+    gap <- abs(outer(as.numeric(real$t_), as.numeric(times), "-"))
+    tick <- max.col(-gap, ties.method = "first")
+    stopifnot(gap[cbind(seq_along(tick), tick)] <= TOLERANCE_MINS * 60)
+
+    picks <- xs$picks
+    pick_label <- ifelse(picks$best, "xgb best", "xgb simplest")
+    names(pick_label) <- picks$config
+    model_paths <- c(
+      stats::setNames(xs$paths, pick_label[names(xs$paths)]),
+      list(`GAM null` = gs$paths$null_gam,
+           `Gilbertson` = gs$paths$gilbertson_gam)
+    )
+  }
 
   lc <- load_landcover(track$year, track$season)[["wiscland"]]
   class_at <- function(x, y) {
@@ -118,14 +160,6 @@ count_one <- function(key) {
 
   real_n <- counts(class_at(real$x_, real$y_)) |>
     dplyr::mutate(source = "real", path = NA_integer_)
-  picks <- xs$picks
-  pick_label <- ifelse(picks$best, "xgb best", "xgb simplest")
-  names(pick_label) <- picks$config
-  model_paths <- c(
-    stats::setNames(xs$paths, pick_label[names(xs$paths)]),
-    list(`GAM null` = gs$paths$null_gam,
-         `Gilbertson` = gs$paths$gilbertson_gam)
-  )
   sim_n <- purrr::imap_dfr(model_paths, function(p, model) {
     purrr::map_dfr(sort(unique(p$nsim)), function(r) {
       pr <- p[p$nsim == r, ]
@@ -159,7 +193,7 @@ if (RECOUNT || !file.exists(out_path)) {
   cat(sprintf("reusing %s\n", out_path))
 }
 
-# Summaries ------------------------------------------------------------------
+# Class shares ---------------------------------------------------------------
 models <- c("xgb best", "xgb simplest", "GAM null", "Gilbertson")
 classes <- sort(unique(tab$class))
 full <- tab |>
@@ -169,242 +203,119 @@ full <- tab |>
   dplyr::mutate(share = n / sum(n)) |>
   dplyr::ungroup()
 
-# Per season: real pooled over deer-years, each path r pooled over them
-season_share <- full |>
-  dplyr::group_by(season, source, path, class) |>
-  dplyr::summarise(n = sum(n), .groups = "drop") |>
-  dplyr::group_by(season, source, path) |>
-  dplyr::mutate(share = n / sum(n)) |>
-  dplyr::ungroup()
-env <- season_share |>
-  dplyr::filter(source != "real") |>
-  dplyr::group_by(season, source, class) |>
-  dplyr::summarise(lo = min(share), hi = max(share), mean = mean(share),
-                   .groups = "drop") |>
-  dplyr::left_join(season_share |>
-                     dplyr::filter(source == "real") |>
-                     dplyr::select(season, class, real = share),
-                   by = c("season", "class")) |>
-  dplyr::mutate(inside = real >= lo & real <= hi,
-                source = factor(source, models))
-cat("\n=== real share inside the 10-path range, per season and model",
-    "(classes with >= 1% of real fixes) ===\n")
-print(as.data.frame(env |>
-                      dplyr::filter(real >= 0.01) |>
-                      dplyr::group_by(season, source) |>
-                      dplyr::summarise(classes = n(), inside = sum(inside),
-                                       .groups = "drop") |>
-                      tidyr::pivot_wider(names_from = source,
-                                         values_from = inside)),
-      row.names = FALSE)
-
-# Per deer-year: total variation distance to the real mix
-tvd <- full |>
-  dplyr::filter(source != "real") |>
-  dplyr::group_by(key, season, source, class) |>
-  dplyr::summarise(share = mean(share), .groups = "drop") |>
-  dplyr::left_join(full |>
-                     dplyr::filter(source == "real") |>
-                     dplyr::select(key, class, real = share),
-                   by = c("key", "class")) |>
-  dplyr::group_by(key, season, source) |>
-  dplyr::summarise(tvd = sum(abs(share - real)) / 2, .groups = "drop") |>
-  dplyr::mutate(source = factor(source, models))
-cat("\n=== total variation distance to the real landcover mix, median over",
-    "deer-years ===\n")
-print(as.data.frame(tvd |>
-                      dplyr::group_by(season, source) |>
-                      dplyr::summarise(tvd = median(tvd), .groups = "drop") |>
-                      tidyr::pivot_wider(names_from = source,
-                                         values_from = tvd)),
-      digits = 3, row.names = FALSE)
-wide <- tvd |> tidyr::pivot_wider(names_from = source, values_from = tvd)
-cat("\n=== deer-years where a model comes closer than the GAM null ===\n")
-for (m in c("xgb best", "xgb simplest", "Gilbertson")) {
-  d <- wide[[m]] - wide[["GAM null"]]
-  cat(sprintf("%-13s closer in %d of %d (median difference %.3f)\n", m,
-              sum(d < 0), length(d), median(d)))
+# Words for the figure: the models' positions
+if (MODE == "onestep") {
+  set_lab <- paste(SET, "(one step)")
+  sims_long <- "one-step draws"
+  sims_word <- "draws"
+  draw_note <- " Draw r of every real step makes up set r."
+} else {
+  set_lab <- SET
+  sims_long <- "simulated paths"
+  sims_word <- "paths"
+  draw_note <- ""
 }
-d <- wide[["xgb best"]] - wide[["Gilbertson"]]
-cat(sprintf("%-13s closer than Gilbertson in %d of %d\n", "xgb best",
-            sum(d < 0), length(d)))
-
-# Plots ----------------------------------------------------------------------
 cols <- c("xgb best" = "#1B9E77", "xgb simplest" = "#66A61E",
           "GAM null" = "#7570B3", "Gilbertson" = "#D95F02")
-lab_class <- function(x) gsub("_", " ", x)
-keep_cls <- env |>
-  dplyr::group_by(class) |>
-  dplyr::summarise(m = max(real, mean), .groups = "drop") |>
-  dplyr::filter(m >= 0.005) |>
-  dplyr::pull(class)
-g1 <- ggplot(dplyr::filter(env, class %in% keep_cls),
-             aes(x = lab_class(class))) +
-  geom_linerange(aes(ymin = lo, ymax = hi, colour = source),
-                 position = position_dodge(width = 0.7), linewidth = 2.2) +
-  geom_point(aes(y = real), shape = 21, fill = "black", colour = "white",
-             size = 2.4) +
-  scale_colour_manual("Simulated paths\n(range over 10 paths)",
-                      values = cols) +
-  facet_wrap(~season, ncol = 2,
-             labeller = labeller(season = c(br = "Breeding",
-                                            fa = "Fawning",
-                                            nb = "Non-breeding",
-                                            pf = "Post-fawning"))) +
-  labs(x = NULL, y = "Share of fixes in the class",
-       title = sprintf("Landcover at real fixes (black) vs simulated paths, %s",
-                       SET),
-       caption = paste("Each bar: the range over the 10 simulated paths of",
-                       "the share of positions in the class, every deer-year",
-                       "of the season pooled.")) +
-  theme_bw(base_size = 11) +
-  theme(axis.text.x = element_text(angle = 30, hjust = 1))
-ggsave(sprintf("plots/uhc_landcover_%s.png", tag), g1, width = 13,
-       height = 8, dpi = 140)
-
-lims <- range(c(wide[["GAM null"]], wide[["xgb best"]], wide[["Gilbertson"]]))
-pd <- dplyr::bind_rows(
-  tibble::tibble(season = wide$season, null = wide[["GAM null"]],
-                 other = wide[["xgb best"]], model = "xgb best"),
-  tibble::tibble(season = wide$season, null = wide[["GAM null"]],
-                 other = wide[["Gilbertson"]], model = "Gilbertson")
-)
-g2 <- ggplot(pd, aes(null, other)) +
-  geom_abline(slope = 1, intercept = 0, linetype = 2, colour = "grey40") +
-  geom_point(aes(colour = model), alpha = 0.6, size = 1.6) +
-  scale_colour_manual(NULL, values = cols) +
-  facet_grid(model ~ season) +
-  coord_equal(xlim = lims, ylim = lims) +
-  labs(x = "GAM null: distance to the real landcover mix",
-       y = "Model: distance to the real landcover mix",
-       title = sprintf(paste("Per deer-year landcover mismatch, %s (below the",
-                             "line: closer to the real deer than the null)"),
-                       SET)) +
-  theme_bw(base_size = 11) +
-  theme(legend.position = "none")
-ggsave(sprintf("plots/uhc_landcover_tvd_%s.png", tag), g2, width = 13,
-       height = 7, dpi = 140)
-cat(sprintf("-> plots/uhc_landcover_%s.png, plots/uhc_landcover_tvd_%s.png\n",
-            tag, tag))
-
-# Per deer-year, by class ----------------------------------------------------
-# Each model's mean share over its paths, against the real share
-per_deer <- full |>
-  dplyr::filter(source != "real") |>
-  dplyr::group_by(key, season, source, class) |>
-  dplyr::summarise(mean = mean(share), hi = max(share), .groups = "drop") |>
-  dplyr::left_join(full |>
-                     dplyr::filter(source == "real") |>
-                     dplyr::select(key, class, real = share),
-                   by = c("key", "class")) |>
-  # A class neither the deer nor any path of the model used says nothing
-  dplyr::filter(real > 0 | hi > 0) |>
-  dplyr::mutate(error = mean - real, source = factor(source, models))
-cat("\n=== per deer-year and class: median absolute error ===\n")
-print(as.data.frame(per_deer |>
-                      dplyr::group_by(source) |>
-                      dplyr::summarise(abs_error = median(abs(error)),
-                                       .groups = "drop")),
-      digits = 3, row.names = FALSE)
-
 season_lab <- c(br = "Breeding", fa = "Fawning", nb = "Non-breeding",
                 pf = "Post-fawning")
-pd_deer <- dplyr::filter(per_deer, class %in% keep_cls) |>
-  dplyr::mutate(class = factor(lab_class(class),
-                               lab_class(keep_cls[order(-tapply(
-                                 env$real, env$class, mean
-                               )[keep_cls])])))
-ylim_err <- c(-0.4, 0.4)
-n_out <- pd_deer |>
-  dplyr::filter(error < ylim_err[1] | error > ylim_err[2]) |>
-  dplyr::count(source)
-g3 <- ggplot(pd_deer, aes(class, error, fill = source)) +
-  geom_hline(yintercept = 0, linetype = 2, colour = "grey30") +
-  geom_boxplot(position = position_dodge(width = 0.8), width = 0.7,
-               linewidth = 0.3, outlier.size = 0.6, outlier.alpha = 0.5) +
-  scale_fill_manual("Simulated paths", values = cols) +
-  facet_wrap(~season, ncol = 2, labeller = labeller(season = season_lab)) +
-  coord_cartesian(ylim = ylim_err) +
-  labs(x = NULL,
-       y = "Simulated share minus real share, per deer-year",
-       title = sprintf(paste("Landcover per deer-year: how far each model's",
-                             "paths are from the real deer, %s"), SET),
-       caption = paste0(
-         "One value per deer-year and class: the model's mean share over ",
-         "its 10 paths minus the real deer's share. 0 = the same share. ",
-         "Values beyond ±0.4 not drawn: ",
-         paste(sprintf("%s %d", n_out$source, n_out$n), collapse = ", "),
-         "."
-       )) +
-  theme_bw(base_size = 11) +
-  theme(axis.text.x = element_text(angle = 30, hjust = 1))
-ggsave(sprintf("plots/uhc_landcover_deer_error_%s.png", tag), g3,
-       width = 14, height = 8.5, dpi = 140)
 
-# Energy score per deer-year -------------------------------------------------
-# The real class mix against the model's 10 path mixes; lower is better
-real_mix <- full |>
+# CRPS per coarse class ------------------------------------------------------
+# The real share of each coarse class against the model's 10 path shares,
+# each class on its own; lower is better
+stopifnot(all(classes %in% names(COARSE)))
+coarse_lab <- c(forest = "Forest", agricultural = "Agricultural",
+                grass = "Grass", other = "Other")
+coarse <- full |>
+  dplyr::mutate(coarse = factor(COARSE[class], names(coarse_lab))) |>
+  dplyr::group_by(key, season, source, path, coarse) |>
+  dplyr::summarise(share = sum(share), .groups = "drop")
+real_coarse <- coarse |>
   dplyr::filter(source == "real") |>
-  dplyr::select(key, class, real = share)
-es <- full |>
+  dplyr::select(key, coarse, real = share)
+crps <- coarse |>
   dplyr::filter(source != "real") |>
-  dplyr::left_join(real_mix, by = c("key", "class")) |>
-  dplyr::group_by(key, season, source) |>
-  dplyr::group_modify(function(d, g) {
-    # Classes in rows, paths in columns
-    m <- tapply(d$share, list(d$class, d$path), sum)
-    y <- as.numeric(tapply(d$real, d$class, `[`, 1)[rownames(m)])
-    stopifnot(!anyNA(m), !anyNA(y))
-    tibble::tibble(es = scoringRules::es_sample(y, dat = m))
-  }) |>
+  dplyr::left_join(real_coarse, by = c("key", "coarse")) |>
+  dplyr::group_by(key, season, source, coarse) |>
+  dplyr::summarise(crps = scoringRules::crps_sample(real[1], dat = share),
+                   any_use = real[1] > 0 | any(share > 0),
+                   .groups = "drop") |>
+  # A class neither the deer nor any model used in the deer-year says
+  # nothing
+  dplyr::group_by(key, coarse) |>
+  dplyr::filter(any(any_use)) |>
   dplyr::ungroup() |>
   dplyr::mutate(source = factor(source, models))
-es_wide <- es |> tidyr::pivot_wider(names_from = source, values_from = es)
-cat("\n=== energy score of the real landcover mix, median over deer-years",
+crps_wide <- crps |>
+  dplyr::select(key, season, coarse, source, crps) |>
+  tidyr::pivot_wider(names_from = source, values_from = crps)
+cat("\n=== CRPS of the real share per coarse class, median over deer-years",
     "(lower is better) ===\n")
-print(as.data.frame(es |>
-                      dplyr::group_by(season, source) |>
-                      dplyr::summarise(es = median(es), .groups = "drop") |>
+print(as.data.frame(crps |>
+                      dplyr::group_by(coarse, season, source) |>
+                      dplyr::summarise(crps = median(crps), .groups = "drop") |>
                       tidyr::pivot_wider(names_from = source,
-                                         values_from = es)),
+                                         values_from = crps)),
       digits = 3, row.names = FALSE)
-cat("\n=== deer-years where a model scores better than the GAM null ===\n")
-for (m in c("xgb best", "xgb simplest", "Gilbertson")) {
-  d <- es_wide[[m]] - es_wide[["GAM null"]]
-  cat(sprintf("%-13s better in %d of %d (median difference %.4f)\n", m,
-              sum(d < 0), length(d), median(d)))
+cat("\n=== deer-years where a model scores better than the GAM null, per",
+    "coarse class ===\n")
+for (cl in names(coarse_lab)) {
+  w <- crps_wide[crps_wide$coarse == cl, ]
+  for (m in c("xgb best", "xgb simplest", "Gilbertson")) {
+    d <- w[[m]] - w[["GAM null"]]
+    cat(sprintf(paste("%-12s %-13s better in %d of %d, tied %d (median",
+                      "difference %.4f)\n"),
+                cl, m, sum(d < 0), length(d), sum(d == 0), median(d)))
+  }
 }
-d_es <- es_wide |>
+d_crps <- crps_wide |>
   tidyr::pivot_longer(c("xgb best", "xgb simplest", "Gilbertson"),
-                      names_to = "model", values_to = "es") |>
-  dplyr::mutate(diff = es - .data[["GAM null"]],
+                      names_to = "model", values_to = "crps") |>
+  dplyr::mutate(diff = crps - .data[["GAM null"]],
                 model = factor(model, models))
-n_better <- d_es |>
-  dplyr::group_by(season, model) |>
+n_better_crps <- d_crps |>
+  dplyr::group_by(coarse, season, model) |>
   dplyr::summarise(label = sprintf("%d of %d", sum(diff < 0), dplyr::n()),
                    .groups = "drop")
-ylim_es <- stats::quantile(d_es$diff, c(0.01, 0.99))
-g4 <- ggplot(d_es, aes(model, diff, fill = model)) +
+# The 1% most extreme differences of each class are not drawn as points
+d_pts <- d_crps |>
+  dplyr::group_by(coarse) |>
+  dplyr::filter(diff >= stats::quantile(diff, 0.01),
+                diff <= stats::quantile(diff, 0.99)) |>
+  dplyr::ungroup()
+g5 <- ggplot(d_crps, aes(model, diff, fill = model)) +
   geom_hline(yintercept = 0, linetype = 2, colour = "grey30") +
-  geom_boxplot(width = 0.6, linewidth = 0.3, outlier.shape = NA) +
-  geom_jitter(width = 0.15, height = 0, size = 0.8, alpha = 0.45) +
-  geom_text(data = n_better, aes(model, ylim_es[1], label = label),
-            inherit.aes = FALSE, vjust = 0, size = 3.3) +
+  geom_boxplot(width = 0.6, linewidth = 0.3, outliers = FALSE) +
+  geom_jitter(data = d_pts, width = 0.15, height = 0, size = 0.6,
+              alpha = 0.4) +
+  geom_text(data = n_better_crps, aes(model, -Inf, label = label),
+            inherit.aes = FALSE, vjust = -0.6, size = 3) +
   scale_fill_manual(NULL, values = cols, guide = "none") +
-  facet_wrap(~season, ncol = 4, labeller = labeller(season = season_lab)) +
-  coord_cartesian(ylim = ylim_es) +
+  scale_y_continuous(expand = expansion(mult = c(0.15, 0.05))) +
+  facet_grid(coarse ~ season, scales = "free_y",
+             labeller = labeller(coarse = coarse_lab,
+                                 season = season_lab)) +
   labs(x = NULL,
-       y = "Energy score minus the GAM null's, per deer-year",
-       title = sprintf(paste("Landcover mix per deer-year: energy score",
-                             "against the GAM null, %s"), SET),
-       subtitle = paste("Below 0: the model's paths match the real deer's",
-                        "landcover mix better than the null's. Numbers:",
-                        "deer-years below 0."),
-       caption = paste("Energy score of the real deer's class shares under",
-                       "the model's 10 simulated paths; the 1% most extreme",
-                       "differences fall outside the axis.")) +
-  theme_bw(base_size = 11)
-ggsave(sprintf("plots/uhc_landcover_energy_%s.png", tag), g4,
-       width = 14, height = 6, dpi = 140)
-cat(sprintf(paste0("-> plots/uhc_landcover_deer_error_%s.png, ",
-                   "plots/uhc_landcover_energy_%s.png\n"), tag, tag))
+       y = "CRPS minus the GAM null's, per deer-year",
+       title = sprintf(paste("Share of each coarse landcover class per",
+                             "deer-year: CRPS against the GAM null, %s"),
+                       set_lab),
+       subtitle = paste("Below 0: the model's", sims_word, "put the real",
+                        "deer's share of the class closer than the null's.",
+                        "Numbers: deer-years below 0, of those where the",
+                        "deer or a model used the class."),
+       caption = paste0(
+         paste("CRPS of the real deer's share of each class under the",
+               "model's 10", paste0(sims_long, "."),
+               "Points beyond each class's 1% most extreme differences",
+               "not drawn."),
+         draw_note, "\n",
+         paste("Forest: forest, forested wetland. Agricultural: corn,",
+               "soybeans, alfalfa and hay, small grains, other crops.",
+               "Grass: grassland. Other: developed, open wetland.")
+       )) +
+  theme_bw(base_size = 11) +
+  theme(axis.text.x = element_text(angle = 25, hjust = 1))
+ggsave(sprintf("plots/uhc_landcover_crps_%s.png", tag), g5,
+       width = 14, height = 10, dpi = 140)
+cat(sprintf("-> plots/uhc_landcover_crps_%s.png\n", tag))
