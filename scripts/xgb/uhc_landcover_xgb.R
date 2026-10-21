@@ -20,7 +20,8 @@
 #' coarsen theirs), the CRPS of the real share of the class under the
 #' model's 10 path shares (scoringRules::crps_sample()), each class on its
 #' own; lower is better. A class neither the deer nor any model used in a
-#' deer-year is left out. Each model is set against the GAM null.
+#' deer-year is left out. Each model is set against the GAM null: the
+#' null's CRPS minus the model's, above 0 where the model does better.
 #'
 #' MODE "onestep" runs the same summary on the one-step draws of
 #' sim_onestep_xgb.R instead of the paths: at every real step with a turning
@@ -206,17 +207,13 @@ full <- tab |>
 # Words for the figure: the models' positions
 if (MODE == "onestep") {
   set_lab <- paste(SET, "(one step)")
-  sims_long <- "one-step draws"
   sims_word <- "draws"
-  draw_note <- " Draw r of every real step makes up set r."
 } else {
   set_lab <- SET
-  sims_long <- "simulated paths"
   sims_word <- "paths"
-  draw_note <- ""
 }
 cols <- c("xgb best" = "#1B9E77", "xgb simplest" = "#66A61E",
-          "GAM null" = "#7570B3", "Gilbertson" = "#D95F02")
+          "gam_hab" = "#D95F02")
 season_lab <- c(br = "Breeding", fa = "Fawning", nb = "Non-breeding",
                 pf = "Post-fawning")
 
@@ -258,24 +255,25 @@ print(as.data.frame(crps |>
                                          values_from = crps)),
       digits = 3, row.names = FALSE)
 cat("\n=== deer-years where a model scores better than the GAM null, per",
-    "coarse class ===\n")
+    "coarse class (difference: the null's CRPS minus the model's) ===\n")
 for (cl in names(coarse_lab)) {
   w <- crps_wide[crps_wide$coarse == cl, ]
   for (m in c("xgb best", "xgb simplest", "Gilbertson")) {
-    d <- w[[m]] - w[["GAM null"]]
+    d <- w[["GAM null"]] - w[[m]]
     cat(sprintf(paste("%-12s %-13s better in %d of %d, tied %d (median",
                       "difference %.4f)\n"),
-                cl, m, sum(d < 0), length(d), sum(d == 0), median(d)))
+                cl, m, sum(d > 0), length(d), sum(d == 0), median(d)))
   }
 }
 d_crps <- crps_wide |>
   tidyr::pivot_longer(c("xgb best", "xgb simplest", "Gilbertson"),
                       names_to = "model", values_to = "crps") |>
-  dplyr::mutate(diff = crps - .data[["GAM null"]],
-                model = factor(model, models))
+  dplyr::mutate(diff = .data[["GAM null"]] - crps,
+                model = factor(dplyr::recode(model, Gilbertson = "gam_hab"),
+                               names(cols)))
 n_better_crps <- d_crps |>
   dplyr::group_by(coarse, season, model) |>
-  dplyr::summarise(label = sprintf("%d of %d", sum(diff < 0), dplyr::n()),
+  dplyr::summarise(label = sprintf("%d of %d", sum(diff > 0), dplyr::n()),
                    .groups = "drop")
 # The 1% most extreme differences of each class are not drawn as points
 d_pts <- d_crps |>
@@ -291,29 +289,20 @@ g5 <- ggplot(d_crps, aes(model, diff, fill = model)) +
   geom_text(data = n_better_crps, aes(model, -Inf, label = label),
             inherit.aes = FALSE, vjust = -0.6, size = 3) +
   scale_fill_manual(NULL, values = cols, guide = "none") +
-  scale_y_continuous(expand = expansion(mult = c(0.15, 0.05))) +
-  facet_grid(coarse ~ season, scales = "free_y",
+  scale_y_continuous(breaks = scales::breaks_width(0.05),
+                     expand = expansion(mult = c(0.15, 0.05))) +
+  facet_grid(coarse ~ season,
              labeller = labeller(coarse = coarse_lab,
                                  season = season_lab)) +
   labs(x = NULL,
-       y = "CRPS minus the GAM null's, per deer-year",
+       y = "gam_hrc's CRPS minus the model's, per deer-year",
        title = sprintf(paste("Share of each coarse landcover class per",
-                             "deer-year: CRPS against the GAM null, %s"),
+                             "deer-year: CRPS against gam_hrc, %s"),
                        set_lab),
-       subtitle = paste("Below 0: the model's", sims_word, "put the real",
-                        "deer's share of the class closer than the null's.",
-                        "Numbers: deer-years below 0, of those where the",
-                        "deer or a model used the class."),
-       caption = paste0(
-         paste("CRPS of the real deer's share of each class under the",
-               "model's 10", paste0(sims_long, "."),
-               "Points beyond each class's 1% most extreme differences",
-               "not drawn."),
-         draw_note, "\n",
-         paste("Forest: forest, forested wetland. Agricultural: corn,",
-               "soybeans, alfalfa and hay, small grains, other crops.",
-               "Grass: grassland. Other: developed, open wetland.")
-       )) +
+       subtitle = paste("Above 0: the model's", sims_word, "put the real",
+                        "deer's share of the class closer than gam_hrc's.",
+                        "Numbers: deer-years above 0, of those where the",
+                        "deer or a model used the class.")) +
   theme_bw(base_size = 11) +
   theme(axis.text.x = element_text(angle = 25, hjust = 1))
 ggsave(sprintf("plots/uhc_landcover_crps_%s.png", tag), g5,

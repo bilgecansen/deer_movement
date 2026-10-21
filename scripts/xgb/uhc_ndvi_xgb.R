@@ -18,7 +18,8 @@
 #' between the NDVI at the real fixes and the NDVI over the model's 10 paths
 #' pooled: how far, in NDVI units, the simulated values sit from the real
 #' ones on average. Each model is set against the GAM null deer-year by
-#' deer-year.
+#' deer-year: the null's distance minus the model's, above 0 where the
+#' model comes closer.
 #'
 #' MODE "onestep" runs the same summary on the one-step draws of
 #' sim_onestep_xgb.R instead of the paths: at every real step with a turning
@@ -204,37 +205,35 @@ print(as.data.frame(w1 |>
                                          values_from = w1)),
       digits = 3, row.names = FALSE)
 w1_wide <- w1 |> tidyr::pivot_wider(names_from = source, values_from = w1)
-cat("\n=== deer-years where a model comes closer than the GAM null ===\n")
+cat("\n=== deer-years where a model comes closer than the GAM null",
+    "(difference: the null's distance minus the model's) ===\n")
 for (m in c("xgb best", "xgb simplest", "Gilbertson")) {
-  d <- w1_wide[[m]] - w1_wide[["GAM null"]]
+  d <- w1_wide[["GAM null"]] - w1_wide[[m]]
   cat(sprintf("%-13s closer in %d of %d (median difference %.4f)\n", m,
-              sum(d < 0), length(d), median(d)))
+              sum(d > 0), length(d), median(d)))
 }
 
 # Plot -----------------------------------------------------------------------
-# Words for the figure: the models' positions, and the real deer's
+# Words for the figure: the models' positions
 if (MODE == "onestep") {
   set_lab <- paste(SET, "(one step)")
   sims_word <- "draws"
-  real_word <- "real step ends"
-  draw_note <- " Draw r of every real step makes up set r."
 } else {
   set_lab <- SET
   sims_word <- "paths"
-  real_word <- "real fixes"
-  draw_note <- ""
 }
 cols <- c("xgb best" = "#1B9E77", "xgb simplest" = "#66A61E",
-          "Gilbertson" = "#D95F02")
+          "gam_hab" = "#D95F02")
 season_lab <- c(br = "Breeding", fa = "Fawning", pf = "Post-fawning")
 d_w1 <- w1_wide |>
   tidyr::pivot_longer(c("xgb best", "xgb simplest", "Gilbertson"),
                       names_to = "model", values_to = "w1") |>
-  dplyr::mutate(diff = w1 - .data[["GAM null"]],
-                model = factor(model, names(cols)))
+  dplyr::mutate(diff = .data[["GAM null"]] - w1,
+                model = factor(dplyr::recode(model, Gilbertson = "gam_hab"),
+                               names(cols)))
 n_closer <- d_w1 |>
   dplyr::group_by(season, model) |>
-  dplyr::summarise(label = sprintf("%d of %d", sum(diff < 0), dplyr::n()),
+  dplyr::summarise(label = sprintf("%d of %d", sum(diff > 0), dplyr::n()),
                    .groups = "drop")
 ylim_w1 <- stats::quantile(d_w1$diff, c(0.01, 0.99))
 g <- ggplot(d_w1, aes(model, diff, fill = model)) +
@@ -247,17 +246,12 @@ g <- ggplot(d_w1, aes(model, diff, fill = model)) +
   facet_wrap(~season, ncol = 3, labeller = labeller(season = season_lab)) +
   coord_cartesian(ylim = ylim_w1) +
   labs(x = NULL,
-       y = "Wasserstein distance minus the GAM null's, per deer-year",
+       y = "gam_hrc's Wasserstein distance minus the model's, per deer-year",
        title = sprintf(paste("NDVI per deer-year: distance from the real",
-                             "deer against the GAM null, %s"), set_lab),
-       subtitle = paste("Below 0: the model's", sims_word, "sit at NDVI",
-                        "closer to the real deer's than the null's do.",
-                        "Numbers: deer-years below 0."),
-       caption = paste0(paste("Wasserstein-1 distance (NDVI units) between",
-                              "NDVI at the", real_word, "and at the model's",
-                              "10", sims_word, "pooled; the 1% most extreme",
-                              "differences fall outside the axis."),
-                        draw_note)) +
+                             "deer against gam_hrc, %s"), set_lab),
+       subtitle = paste("Above 0: the model's", sims_word, "sit at NDVI",
+                        "closer to the real deer's than gam_hrc's do.",
+                        "Numbers: deer-years above 0.")) +
   theme_bw(base_size = 11)
 ggsave(sprintf("plots/uhc_ndvi_w1_%s.png", tag), g, width = 12, height = 6,
        dpi = 140)
